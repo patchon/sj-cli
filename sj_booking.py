@@ -6,7 +6,14 @@ from datetime import datetime, timedelta
 
 from sj_auth import ensure_valid_token
 from sj_client import SJClient
-from sj_output import format_class_name, format_duration, format_table, pinfo, print_bookings_table, spinner
+from sj_output import (
+    format_class_name,
+    format_duration,
+    format_table,
+    pinfo,
+    print_bookings_table,
+    spinner,
+)
 from sj_token import TokenManager
 
 logger = logging.getLogger(__name__)
@@ -266,6 +273,15 @@ def _try_alternative_departure(
     Try one alternative departure when the closest one has no 0-price offer.
 
     Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        search_id: Search ID from the original search.
+        target_time: Target time as HH:MM.
+        requested_class: Requested comfort class.
+        flexibility: Requested flexibility type.
+        allow_fallback: If True, fall back through class chain.
+        passenger_token: Passenger token for offers.
+        skip_departure_id: Departure ID to skip (the one that failed).
         prefer_earlier: If True, pick the closest departure BEFORE the target
             time (outbound — arrive on time). If False, pick the closest
             departure AFTER the target time (inbound — don't leave early).
@@ -582,7 +598,8 @@ def handle_booking_process(
                         prefer_earlier=True,
                     )
                     if alt:
-                        with spinner(f"creating booking with alternative outbound at {alt['time_str']}"):
+                        alt_time = alt["time_str"]
+                        with spinner(f"creating booking with alternative outbound at {alt_time}"):
                             b_resp = client.create_provisional_booking(
                                 access_token, alt["offer_id"], passenger_token
                             )
@@ -698,7 +715,8 @@ def handle_booking_process(
                                     access_token, booking_id, alt["offer_id"], passenger_token
                                 )
                         elif not do_out or book_partial:
-                            with spinner(f"creating booking with alternative inbound at {alt['time_str']}"):
+                            alt_time = alt["time_str"]
+                            with spinner(f"creating alternative inbound booking at {alt_time}"):
                                 b_resp = client.create_provisional_booking(
                                     access_token, alt["offer_id"], passenger_token
                                 )
@@ -998,6 +1016,10 @@ def handle_cancel_booking(
     displays its details, and asks for confirmation before cancelling.
 
     Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        travel_pass: Travel pass dict (used for date range), or None.
+        booking_number: The booking number to cancel.
         prefetched_bookings: If provided, skip fetching and use these instead.
 
     """
@@ -1173,10 +1195,10 @@ def handle_cancel_booking(
         else:
             # Parse comma-separated selection
             indices = []
-            for part in choice.split(","):
-                part = part.strip()
-                if part in valid_nums:
-                    indices.append(int(part) - 1)
+            for raw_part in choice.split(","):
+                stripped = raw_part.strip()
+                if stripped in valid_nums:
+                    indices.append(int(stripped) - 1)
             if not indices:
                 pinfo("invalid selection, aborting")
                 return
@@ -1198,7 +1220,8 @@ def handle_cancel_booking(
             [r["date"], r["direction"], r["departure"], r["arrival"], r["route"]]
             for r in confirm_rows
         ]
-        print(f"\n{format_table(confirm_headers, confirm_table_rows, title='Selected for cancellation')}")
+        table = format_table(confirm_headers, confirm_table_rows, title="Selected for cancellation")
+        print(f"\n{table}")
         confirm = input("cancel selected journey(s)? [y/n]: ").strip().lower()
         if confirm != "y":
             pinfo("cancellation aborted")

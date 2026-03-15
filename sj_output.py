@@ -4,7 +4,6 @@ import logging
 import re
 import sys
 import threading
-import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
@@ -38,7 +37,7 @@ def spinner(msg: str, interval: float = 0.08):
             i += 1
             stop.wait(interval)
         # Erase the spinner line
-        sys.stdout.write(f"\r\033[2K")
+        sys.stdout.write("\r\033[2K")
         sys.stdout.flush()
 
     t = threading.Thread(target=_spin, daemon=True)
@@ -198,7 +197,8 @@ def print_bookings_table(bookings: list[dict], pass_name: str) -> None:
 
 
 def _format_tp_date(iso_str: str | None, exclusive: bool = False) -> str:
-    """Format an ISO datetime string to YYYY-MM-DD in local time.
+    """
+    Format an ISO datetime string to YYYY-MM-DD in local time.
 
     Args:
         iso_str: ISO datetime string from the API.
@@ -280,7 +280,7 @@ def print_travelpasses_table(
     pinfo(f"{len(travel_passes)} travel pass(es) shown")
 
 
-def _format_amount(raw_amount: str | int | float, currency: str = "SEK") -> str:
+def _format_amount(raw_amount: str | float, currency: str = "SEK") -> str:
     """Format a raw amount value into a readable price string."""
     try:
         num = float(raw_amount)

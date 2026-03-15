@@ -157,8 +157,9 @@ class TokenManager:
 
     def refresh_token_needs_renewal(self, threshold_seconds: int = 3600) -> bool:
         """
-        Check if the refresh token is approaching expiry and should be
-        proactively renewed.
+        Check if the refresh token is approaching expiry.
+
+        Determines whether the refresh token should be proactively renewed.
 
         Args:
             threshold_seconds: Renew if fewer than this many seconds remain.

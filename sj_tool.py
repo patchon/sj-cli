@@ -157,7 +157,7 @@ def validate_dates_against_pass(cfg: dict, travel_pass: dict) -> None:
 
 
 def handle_list_travelpasses(
-    client: SJClient, access_token: str, travel_passes: list
+    client: SJClient, _access_token: str, travel_passes: list
 ) -> None:
     """Display travel passes with validity and receipt details."""
     receipt_info: dict[str, dict] = {}

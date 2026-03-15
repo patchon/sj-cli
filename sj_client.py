@@ -216,14 +216,15 @@ class SJClient:
 
     def export_cookies(self) -> list[dict[str, str]]:
         """Export the client's cookies as a serializable list."""
-        cookies = []
-        for cookie in self.client.cookies.jar:
-            cookies.append({
+        cookies = [
+            {
                 "name": cookie.name,
                 "value": cookie.value,
                 "domain": cookie.domain,
                 "path": cookie.path,
-            })
+            }
+            for cookie in self.client.cookies.jar
+        ]
         logger.debug(f"exported {len(cookies)} cookies")
         return cookies
 
@@ -289,8 +290,10 @@ class SJClient:
 
     def finalize_login(self) -> str | None:
         """
-        Finalizes the login flow by completing the device registration and
-        extracting the authorization code from the final redirect.
+        Finalize the login flow and extract the authorization code.
+
+        Completes device registration and extracts the authorization code
+        from the final redirect.
 
         Returns:
             The authorization code string if successful, None otherwise.
@@ -640,7 +643,7 @@ class SJClient:
                 params = urllib.parse.parse_qs(parsed.query)
                 code = params.get("code", [None])[0]
                 if code:
-                    logger.debug(f"extracted auth code from redirect location")
+                    logger.debug("extracted auth code from redirect location")
                     return code
 
         # Case 2: Redirect was followed, check history
@@ -652,7 +655,7 @@ class SJClient:
                     params = urllib.parse.parse_qs(parsed.query)
                     code = params.get("code", [None])[0]
                     if code:
-                        logger.debug(f"extracted auth code from redirect history")
+                        logger.debug("extracted auth code from redirect history")
                         return code
 
         # Case 3: Check the final URL itself
@@ -662,7 +665,7 @@ class SJClient:
             params = urllib.parse.parse_qs(parsed.query)
             code = params.get("code", [None])[0]
             if code:
-                logger.debug(f"extracted auth code from final url")
+                logger.debug("extracted auth code from final url")
                 return code
 
         logger.error(
