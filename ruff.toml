@@ -1,0 +1,74 @@
+line-length = 100
+
+[lint]
+select = ["ALL"]
+ignore = [
+    # --- Style preferences inappropriate for this project ---
+    "ANN",      # Missing type annotations — partial annotations are fine
+    "D100",     # Undocumented public module
+    "D102",     # Undocumented public method
+    "D107",     # Undocumented public __init__
+    "D200",     # Unnecessary multiline docstring
+    "D401",     # Non-imperative mood in docstring
+    "D404",     # Docstring starts with "this"
+
+    # --- CLI tool: printing is expected ---
+    "T201",     # print() usage
+
+    # --- Exception message style (too pedantic) ---
+    "TRY003",   # Long messages outside exception class
+    "TRY002",   # Raise vanilla class
+    "TRY301",   # Abstract raise to inner function
+    "EM101",    # String literal in exception
+    "EM102",    # f-string literal in exception
+
+    # --- Boolean arguments: would require major API refactor ---
+    "FBT001",   # Boolean type hint positional argument
+    "FBT002",   # Boolean default value positional argument
+    "FBT003",   # Boolean positional value in call
+
+    # --- Complexity limits: inherent in booking/auth flows ---
+    "C901",     # Too complex
+    "PLR0911",  # Too many return statements
+    "PLR0912",  # Too many branches
+    "PLR0913",  # Too many arguments
+    "PLR0915",  # Too many statements
+
+    # --- Datetime timezone: intentionally naive (local Swedish times) ---
+    "DTZ005",   # call-datetime-now-without-tzinfo
+    "DTZ006",   # call-datetime-fromtimestamp
+    "DTZ007",   # call-datetime-strptime-without-zone
+    "DTZ011",   # call-date-today
+
+    # --- Broad exception catching is intentional for API resilience ---
+    "BLE001",   # Blind except
+
+    # --- Commented-out code detection has false positives ---
+    "ERA001",   # Commented-out code
+
+    # --- Magic values: HTTP status codes, timeouts, etc. are clear in context ---
+    "PLR2004",  # Magic value comparison
+
+    # --- Logging f-strings: acceptable for this project's scale ---
+    "G004",     # Logging uses f-string
+
+    # --- Style micro-rules not worth enforcing ---
+    "COM812",   # Trailing comma missing
+    "TRY300",   # Consider moving to else block
+    "TRY400",   # error() instead of exception() in logging
+    "S110",     # try-except-pass
+    "ARG002",   # Unused method argument (interface compliance)
+    "RUF001",   # Ambiguous unicode (Swedish characters)
+    "RUF012",   # Mutable class default
+    "S101",     # Use of assert (fine for type narrowing in CLI tool)
+    "SIM116",   # if-else instead of dict lookup
+    "PLC0415",  # Import outside top level
+    "LOG015",   # Root logger call
+    "EXE002",   # Shebang missing executable
+    "D212",     # Multi-line summary first line (conflicts with D213)
+]
+
+[lint.per-file-ignores]
+"sj_client.py" = [
+    "N806",     # Non-lowercase variable (STATION_MAP used locally)
+]
