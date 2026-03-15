@@ -5,10 +5,11 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sj_auth import ensure_authenticated
 from sj_booking import (
+    booking_date_range,
     cleanup_stale_provisionals,
     fetch_all_bookings,
     handle_cancel_booking,
@@ -292,18 +293,7 @@ def main():
 
             # Fetch existing bookings for duplicate check
             params = cfg["search_parameters"]
-            now_date = datetime.now()
-            start_dt = now_date + timedelta(days=1)
-            b_start = start_dt.strftime("%Y-%m-%d")
-
-            valid_end = active_pass.get("endTravelValidityDateTime")
-            if valid_end:
-                vp_end = datetime.fromisoformat(
-                    valid_end.replace("Z", "+00:00")
-                ).replace(tzinfo=None)
-                b_end = (vp_end + timedelta(days=1)).strftime("%Y-%m-%d")
-            else:
-                b_end = params["date_end"]
+            b_start, b_end = booking_date_range(active_pass, start_offset_days=1)
 
             with spinner("fetching existing bookings"):
                 bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)

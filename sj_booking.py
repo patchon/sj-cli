@@ -19,6 +19,94 @@ from sj_token import TokenManager
 logger = logging.getLogger(__name__)
 
 
+def booking_date_range(
+    travel_pass: dict | None,
+    start_offset_days: int = 0,
+    fallback_days: int = 90,
+) -> tuple[str, str]:
+    """
+    Calculate booking date range from travel pass validity.
+
+    Args:
+        travel_pass: Travel pass dict with endTravelValidityDateTime, or None.
+        start_offset_days: Days from today for the start date (0=today, 1=tomorrow).
+        fallback_days: Days from now to use as end date if no travel pass.
+
+    Returns:
+        Tuple of (start_date, end_date) as YYYY-MM-DD strings.
+
+    """
+    now_date = datetime.now()
+    b_start = (now_date + timedelta(days=start_offset_days)).strftime("%Y-%m-%d")
+
+    valid_end = travel_pass.get("endTravelValidityDateTime") if travel_pass else None
+    if valid_end:
+        vp_end = datetime.fromisoformat(
+            valid_end.replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+        b_end = (vp_end + timedelta(days=1)).strftime("%Y-%m-%d")
+    else:
+        b_end = (now_date + timedelta(days=fallback_days)).strftime("%Y-%m-%d")
+
+    return b_start, b_end
+
+
+def _segment_to_display_row(
+    segment: dict, booking_number: str, now: datetime
+) -> dict:
+    """
+    Transform a raw booking segment into a display row dict.
+
+    Args:
+        segment: Segment dict from the API.
+        booking_number: The parent booking number.
+        now: Current datetime for past-detection.
+
+    Returns:
+        Display row dict with keys: date, direction, departure, arrival,
+        duration, comfort_class, route, booking_number, past.
+
+    """
+    direction = segment.get("direction", "OUTBOUND").capitalize()
+    dep_dt = segment.get("departureDateTime", "")
+    arr_dt = segment.get("arrivalDateTime", "")
+    duration = segment.get("duration", "")
+    prod_name = segment.get("productFamily", {}).get("name", "—")
+    dep_station = segment.get("departureStation", {}).get("name", "—")
+    arr_station = segment.get("arrivalStation", {}).get("name", "—")
+
+    in_past = "N"
+    try:
+        dep_parsed = datetime.fromisoformat(
+            dep_dt.replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+        if dep_parsed < now:
+            in_past = "Y"
+    except (ValueError, AttributeError):
+        pass
+
+    try:
+        date_str = dep_dt.split("T")[0]
+        dep_time = dep_dt.split("T")[1][:5]
+        arr_time = arr_dt.split("T")[1][:5]
+    except (IndexError, AttributeError):
+        date_str = dep_dt
+        dep_time = dep_dt
+        arr_time = arr_dt
+
+    return {
+        "date": date_str,
+        "direction": direction,
+        "departure": dep_time,
+        "arrival": arr_time,
+        "duration": format_duration(duration),
+        "comfort_class": format_class_name(prod_name),
+        "route": f"{dep_station} → {arr_station}",
+        "booking_number": booking_number,
+        "past": in_past,
+    }
+
+
 def time_str_to_minutes(hhmm: str) -> int:
     """Convert HH:MM string to minutes since midnight."""
     try:
@@ -1026,18 +1114,7 @@ def handle_cancel_booking(
     if prefetched_bookings is not None:
         all_bookings = prefetched_bookings
     else:
-        valid_end = travel_pass.get("endTravelValidityDateTime") if travel_pass else None
-        now_date = datetime.now()
-        b_start = now_date.strftime("%Y-%m-%d")
-
-        if valid_end:
-            vp_end = datetime.fromisoformat(valid_end.replace("Z", "+00:00")).replace(
-                tzinfo=None
-            )
-            b_end = (vp_end + timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            b_end = (now_date + timedelta(days=90)).strftime("%Y-%m-%d")
-
+        b_start, b_end = booking_date_range(travel_pass)
         with spinner(f"searching for booking {booking_number}"):
             all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
 
@@ -1100,68 +1177,38 @@ def handle_cancel_booking(
 
     for journey in booking.get("journeys", []):
         for seg in journey.get("segments", []):
-            direction = seg.get("direction", "OUTBOUND").capitalize()
-            dep_dt = seg.get("departureDateTime", "")
-            arr_dt = seg.get("arrivalDateTime", "")
-            duration = seg.get("duration", "")
-            prod_name = seg.get("productFamily", {}).get("name", "—")
-            dep_station = seg.get("departureStation", {}).get("name", "—")
-            arr_station = seg.get("arrivalStation", {}).get("name", "—")
+            row = _segment_to_display_row(seg, booking_number, now)
+            display_rows.append(row)
+
+            if row["past"] == "Y":
+                has_past_segment = True
+
+            # Collect cancellation metadata for future segments
             service_id = seg.get("serviceIdentifier", "")
+            if row["past"] == "N" and service_id:
+                passenger_ids = [
+                    p.get("id", p.get("passengerId", ""))
+                    for p in seg.get("passengers", journey.get("passengers", []))
+                    if p.get("id") or p.get("passengerId")
+                ]
+                if not passenger_ids:
+                    passenger_ids = ["passenger_1"]
 
-            # Determine if segment is in the past
-            in_past = "N"
-            try:
-                dep_parsed = datetime.fromisoformat(
-                    dep_dt.replace("Z", "+00:00")
-                ).replace(tzinfo=None)
-                if dep_parsed < now:
-                    in_past = "Y"
-                    has_past_segment = True
-            except (ValueError, AttributeError):
-                pass
-
-            try:
-                date_str = dep_dt.split("T")[0]
-                dep_time = dep_dt.split("T")[1][:5]
-                arr_time = arr_dt.split("T")[1][:5]
-            except (IndexError, AttributeError):
-                date_str = dep_dt
-                dep_time = dep_dt
-                arr_time = arr_dt
-
-            # Collect passenger IDs from the segment
-            passenger_ids = [
-                p.get("id", p.get("passengerId", ""))
-                for p in seg.get("passengers", journey.get("passengers", []))
-                if p.get("id") or p.get("passengerId")
-            ]
-            if not passenger_ids:
-                passenger_ids = ["passenger_1"]
-
-            display_rows.append({
-                "date": date_str,
-                "direction": direction,
-                "departure": dep_time,
-                "arrival": arr_time,
-                "duration": format_duration(duration),
-                "comfort_class": format_class_name(prod_name),
-                "route": f"{dep_station} → {arr_station}",
-                "booking_number": booking_number,
-                "past": in_past,
-            })
-
-            if in_past == "N" and service_id and passenger_ids:
+                dep_station = seg.get("departureStation", {}).get("name", "—")
+                arr_station = seg.get("arrivalStation", {}).get("name", "—")
                 segments_to_cancel.append({
                     "serviceIdentifier": service_id,
                     "passengerIds": passenger_ids,
-                    "_label": f"{direction}  {date_str}  {dep_time} → {arr_time}  "
-                              f"{dep_station} → {arr_station}",
-                    "_date": date_str,
-                    "_direction": direction,
-                    "_dep_time": dep_time,
-                    "_arr_time": arr_time,
-                    "_route": f"{dep_station} → {arr_station}",
+                    "_label": (
+                        f"{row['direction']}  {row['date']}  "
+                        f"{row['departure']} → {row['arrival']}  "
+                        f"{dep_station} → {arr_station}"
+                    ),
+                    "_date": row["date"],
+                    "_direction": row["direction"],
+                    "_dep_time": row["departure"],
+                    "_arr_time": row["arrival"],
+                    "_route": row["route"],
                 })
 
     print_bookings_table(display_rows, f"Booking {booking_number}")
@@ -1262,20 +1309,7 @@ def handle_list_bookings(
     """Fetch and display all active bookings per SPEC §5.4."""
     pass_name = travel_pass.get("name", "Travel Pass")
 
-    # Determine date range from travel pass validity
-    valid_end = travel_pass.get("endTravelValidityDateTime")
-
-    now_date = datetime.now()
-    b_start = now_date.strftime("%Y-%m-%d")
-
-    if valid_end:
-        vp_end = datetime.fromisoformat(valid_end.replace("Z", "+00:00")).astimezone()
-        display_end = (vp_end - timedelta(days=1)).strftime("%Y-%m-%d")
-        b_end = vp_end.strftime("%Y-%m-%d")
-    else:
-        # Fallback: 3 months from now
-        display_end = (now_date + timedelta(days=90)).strftime("%Y-%m-%d")
-        b_end = display_end
+    b_start, b_end = booking_date_range(travel_pass)
 
     with spinner("fetching bookings"):
         all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
@@ -1291,52 +1325,16 @@ def handle_list_bookings(
         booking_number = booking.get("bookingNumber", "—")
         for journey in booking.get("journeys", []):
             for segment in journey.get("segments", []):
-                direction = segment.get("direction", "OUTBOUND").capitalize()
-                dep_dt = segment.get("departureDateTime", "")
-                arr_dt = segment.get("arrivalDateTime", "")
-                duration = segment.get("duration", "")
-                prod_name = segment.get("productFamily", {}).get("name", "—")
-                dep_station = segment.get("departureStation", {}).get("name", "—")
-                arr_station = segment.get("arrivalStation", {}).get("name", "—")
-
-                in_past = "N"
-                try:
-                    dep_parsed = datetime.fromisoformat(
-                        dep_dt.replace("Z", "+00:00")
-                    ).replace(tzinfo=None)
-                    if dep_parsed < now:
-                        in_past = "Y"
-                except (ValueError, AttributeError):
-                    pass
-
-                try:
-                    date_str = dep_dt.split("T")[0]
-                    dep_time = dep_dt.split("T")[1][:5]
-                    arr_time = arr_dt.split("T")[1][:5]
-                except (IndexError, AttributeError):
-                    date_str = dep_dt
-                    dep_time = dep_dt
-                    arr_time = arr_dt
-
-                display_rows.append({
-                    "date": date_str,
-                    "direction": direction,
-                    "departure": dep_time,
-                    "arrival": arr_time,
-                    "duration": format_duration(duration),
-                    "comfort_class": format_class_name(prod_name),
-                    "route": f"{dep_station} → {arr_station}",
-                    "booking_number": booking_number,
-                    "past": in_past,
-                    "_sort_key": dep_dt,
-                })
+                row = _segment_to_display_row(segment, booking_number, now)
+                row["_sort_key"] = segment.get("departureDateTime", "")
+                display_rows.append(row)
 
     if not display_rows:
-        pinfo(f"no bookings found between {b_start} and {display_end}")
+        pinfo(f"no bookings found between {b_start} and {b_end}")
         return
 
     # Sort by date, then departure time
-    display_rows.sort(key=lambda r: r.get("_sort_key", ""))
+    display_rows.sort(key=lambda r: r.pop("_sort_key", ""))
 
     print_bookings_table(display_rows, pass_name)
 

@@ -214,6 +214,10 @@ class SJClient:
         self.csrf_token = ""
         self.trans_id = ""
 
+    def reset(self) -> None:
+        """Reset client state for a fresh login attempt."""
+        self.__init__()
+
     def export_cookies(self) -> list[dict[str, str | None]]:
         """Export the client's cookies as a serializable list."""
         cookies = [
@@ -431,17 +435,8 @@ class SJClient:
 
         logger.info("attempting to refresh token ...")
 
-        # try:
         resp = self.client.post(url_token, data=data)
         logger.info(f"refresh response http code: {resp.status_code}")
-
-        #   return None
-
-        # if resp.status_code == 200:
-        #    logger.info("Token refresh successful.")
-        #  else:
-        #      logger.warning(f"Token refresh failed: {resp.status_code} {resp.text}")
-        #      return None
 
         # Try to parse json response
         try:
@@ -929,13 +924,12 @@ class SJClient:
             logger.debug("no csrf token found in cookie")
             return
 
-        if csrf_cookie and csrf_cookie == self.csrf_token:
+        if csrf_cookie == self.csrf_token:
             logger.debug("csrf token from cookie matches current token")
             return
 
-        if csrf_cookie and csrf_cookie != self.csrf_token:
-            logger.debug(f"updating csrf token from cookie: {csrf_cookie[:10]} ...")
-            self.csrf_token = csrf_cookie
+        logger.debug(f"updating csrf token from cookie: {csrf_cookie[:10]} ...")
+        self.csrf_token = csrf_cookie
 
     def _get_csrf_token_from_headers(self, headers: httpx.Headers) -> None:
         """
@@ -1014,9 +1008,6 @@ class SJClient:
             email: The user's email address.
             password: The user's password.
 
-        Returns:
-            The parsed JSON response from the server.
-
         Raises:
             Exception: If the server returns a 400 status or error code, or if
                 parsing the JSON response fails.
@@ -1069,11 +1060,7 @@ class SJClient:
             logger.debug("TransID already starts with StateProperties=")
             return self.trans_id
 
-        logger.debug(
-            f" !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-            f"     should not get here {self.trans_id}                "
-            f" !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        )
+        logger.warning(f"transId missing StateProperties= prefix: {self.trans_id}")
         return self.trans_id
 
     def _verify_attributes(self, attributes: list[str]) -> None:
@@ -1298,45 +1285,6 @@ class SJClient:
             return data["data"] if isinstance(data["data"], list) else [data["data"]]
         return data if isinstance(data, list) else [data]
 
-    def get_receipt_detail(self, receipt_id: str) -> dict[str, Any] | None:
-        """
-        Fetches full details for a specific receipt.
-
-        Args:
-            receipt_id: The receipt UUID.
-
-        Returns:
-            The receipt detail dict, or None on failure.
-
-        """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/receipts/{receipt_id}"
-
-        headers = {
-            "Accept": "text/html, application/json",
-            "Content-Type": self.H_ACCEPT_JSON,
-            "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
-            "ocp-apim-trace": "true",
-            "subscription-id": "sales-web",
-            "x-client-name": "sjse-edit-booking-client",
-            "Referer": f"{self.URL_SJ}/",
-        }
-        headers.update(self.generate_trace_headers())
-
-        logger.info(f"Fetching receipt detail {receipt_id}...")
-        resp = self.client.get(url_api, headers=headers)
-
-        if resp.status_code != 200:
-            logger.warning(f"Receipt detail failed: {resp.status_code}")
-            logger.debug(resp.text)
-            return None
-
-        content_type = resp.headers.get("content-type", "")
-        if "application/json" not in content_type:
-            logger.debug(f"Receipt detail returned non-JSON content-type: {content_type}")
-            return None
-
-        return resp.json()
-
     def search_journey(
         self,
         access_token: str,
@@ -1536,8 +1484,6 @@ class SJClient:
         }
 
         headers = {
-            # "Accept": self.H_ACCEPT_JSON,
-            # "Accept-Language": "en-GB",
             "Authorization": f"Bearer {access_token}",
             "Content-Type": self.H_ACCEPT_JSON,
             "Ocp-Apim-Subscription-Key": self.H_OCP_APIM_SUB_KEY,
@@ -1604,8 +1550,6 @@ class SJClient:
             "ocp-apim-trace": "true",
             "Referer": f"{self.URL_SJ}/",
             "User-Agent": self.H_USER_AGENT,
-            "X-Client-Name": "sjse-booking-client",
-            "X-Client-Version": "20251217.0004-prod",
         }
 
         # Add required trace headers (W3C standard)
@@ -1628,7 +1572,6 @@ class SJClient:
         booking_id: str,
         email: str,
         phone: str,
-        personal_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Updates customer details for the booking.
@@ -1638,7 +1581,6 @@ class SJClient:
             booking_id: The ID of the booking.
             email: The customer's email.
             phone: The customer's phone number.
-            personal_id: Optional personal ID.
 
         Returns:
             The API response dictionary.
@@ -1703,40 +1645,6 @@ class SJClient:
             resp.raise_for_status()
 
         return resp.json()
-
-    def cancel_booking(self, access_token: str, booking_id: str) -> bool:
-        """
-        Cancels a confirmed booking.
-
-        Args:
-            access_token: The OAuth2 access token.
-            booking_id: The ID of the booking to cancel.
-
-        Returns:
-            True if cancellation was successful, False otherwise.
-
-        """
-        url_api = (
-            f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/{booking_id}"
-        )
-
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": self.H_ACCEPT_JSON,
-            "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
-            "x-client-name": "sjse-booking-client",
-            "Referer": f"{self.URL_SJ}/",
-        }
-
-        logger.info(f"Cancelling booking {booking_id}...")
-        resp = self.client.delete(url_api, headers=headers)
-
-        if resp.status_code not in [200, 204]:
-            logger.error(f"Cancel Booking Failed: {resp.status_code}")
-            logger.debug(resp.text)
-            return False
-
-        return True
 
     def cancel_provisional_booking(self, access_token: str, booking_id: str) -> bool:
         """

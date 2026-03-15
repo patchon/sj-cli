@@ -115,7 +115,7 @@ def perform_full_login(
                 except Exception as e:
                     logger.warning(f"cookie-based login failed: {e}")
                     # Reset client state for fresh attempt
-                    client.__init__()
+                    client.reset()
 
         # Full login flow (no cookies or cookie attempt failed)
         with spinner("performing login"):
