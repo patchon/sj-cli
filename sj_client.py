@@ -1459,14 +1459,17 @@ class SJClient:
         return {"traceparent": traceparent, "request-id": request_id}
 
     def create_provisional_booking(
-        self, access_token: str, outbound_offer_id: str, passenger_token: str
+        self, access_token: str, offer_id: str, passenger_token: str
     ) -> dict[str, Any]:
         """
         Creates a provisional booking with the selected outbound offer.
 
+        The API requires an outbound offer to create a booking. Inbound legs
+        can only be added to an existing booking via add_offer_to_booking.
+
         Args:
             access_token: The OAuth2 access token.
-            outbound_offer_id: The offer ID for the outbound journey.
+            offer_id: The offer ID for the outbound journey.
             passenger_token: The passenger list token.
 
         Returns:
@@ -1478,7 +1481,7 @@ class SJClient:
         )
 
         payload = {
-            "outboundOfferId": outbound_offer_id,
+            "outboundOfferId": offer_id,
             "passengerToken": passenger_token,
             "usePoints": False,
         }
@@ -1501,7 +1504,7 @@ class SJClient:
         # Browser sends BOTH ocp-apim-trace AND traceparent.
         headers.update(self.generate_trace_headers())
 
-        logger.info(f"Creating provisional booking for offer {outbound_offer_id}...")
+        logger.info(f"Creating provisional booking for offer {offer_id}...")
         logger.debug(f"Creation Payload:\n{json.dumps(payload, indent=2)}")
         logger.debug(f"Creation Headers:\n{json.dumps(headers, indent=2)}")
         resp = self.client.post(url_api, json=payload, headers=headers)
