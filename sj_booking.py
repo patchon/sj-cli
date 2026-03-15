@@ -271,7 +271,7 @@ def select_best_departure(
 
 def find_offer_id(
     offer_response: dict, requested_class: str, requested_flexibility: str
-) -> str | None:
+) -> tuple[str, str] | None:
     """
     Parse the get_offers response and find the offerId for a 0-price offer.
 
@@ -281,7 +281,8 @@ def find_offer_id(
         requested_flexibility: Requested flexibility (FULLFLEX, SEMIFLEX, NOFLEX).
 
     Returns:
-        Offer ID string if a matching 0-price offer is found, None otherwise.
+        Tuple of (offer_id, matched_class) if a 0-price offer is found,
+        None otherwise. matched_class is the display name (e.g. "2 class calm").
 
     """
     seat_offers = offer_response.get("seatOffers", {})
@@ -293,6 +294,12 @@ def find_offer_id(
         "2 class": ["SECOND"],
         "2 class calm": ["SECOND_CALM", "SECOND"],
         "1 class": ["FIRST"],
+    }
+
+    api_to_display = {
+        "SECOND": "2 class",
+        "SECOND_CALM": "2 class calm",
+        "FIRST": "1 class",
     }
 
     target_classes = class_map.get(requested_class, [])
@@ -319,10 +326,11 @@ def find_offer_id(
                     amount_val = -1
 
                 if amount_val == 0:
+                    matched_class = api_to_display.get(comf_key, requested_class)
                     logger.info(f"found offer: {comf_key} - {flex_type}")
                     specific_offer_id = flex_data.get("offerId")
                     if specific_offer_id:
-                        return specific_offer_id
+                        return (specific_offer_id, matched_class)
                     logger.warning("found match but no offerId in flex object")
                     return None
                 logger.warning(
@@ -405,14 +413,17 @@ def _try_alternative_departure(
 
     with spinner(f"checking alternative departure at {time_str}"):
         offers = client.get_offers(access_token, dep_id, passenger_token)
-    offer_id = find_offer_id(offers, valid_class, flexibility)
-    if offer_id:
+    result = find_offer_id(offers, valid_class, flexibility)
+    if result:
+        offer_id, matched_class = result
         pinfo(f"found offer at alternative departure {time_str}")
+        if matched_class != valid_class:
+            pinfo(f"  class fallback: {valid_class} → {matched_class}")
         return {
             "offer_id": offer_id,
             "time_str": time_str,
             "arrival": _get_arrival_time(dep),
-            "class": valid_class,
+            "class": matched_class,
             "departure": dep,
         }
 
@@ -608,8 +619,8 @@ def handle_booking_process(
                 # Collect dry-run info: check offer availability
                 with spinner(f"checking offers for outbound at {best_out['time_str']}"):
                     offers = client.get_offers(access_token, best_out["id"], passenger_token)
-                offer_id = find_offer_id(offers, best_out["class"], flexibility)
-                if not offer_id:
+                offer_result = find_offer_id(offers, best_out["class"], flexibility)
+                if not offer_result:
                     # Try alternative (earlier departure for outbound)
                     pinfo(
                         f"no valid offer found for outbound at {best_out['time_str']},"
@@ -644,10 +655,13 @@ def handle_booking_process(
                             "has_offer": False,
                         }
                 else:
+                    _, matched_class = offer_result
+                    if matched_class != best_out["class"]:
+                        pinfo(f"outbound class fallback: {best_out['class']} → {matched_class}")
                     dry_run_result["outbound"] = {
                         "departure": best_out["time_str"],
                         "arrival": _get_arrival_time(best_out["departure"]),
-                        "class": best_out["class"],
+                        "class": matched_class,
                         "flexibility": flexibility,
                         "has_offer": True,
                     }
@@ -655,8 +669,11 @@ def handle_booking_process(
                 logger.info(f"selected outbound: {best_out['time_str']}")
                 with spinner(f"checking offers for outbound at {best_out['time_str']}"):
                     offers = client.get_offers(access_token, best_out["id"], passenger_token)
-                offer_id = find_offer_id(offers, best_out["class"], flexibility)
-                if offer_id:
+                offer_result = find_offer_id(offers, best_out["class"], flexibility)
+                if offer_result:
+                    offer_id, matched_class = offer_result
+                    if matched_class != best_out["class"]:
+                        pinfo(f"outbound class fallback: {best_out['class']} → {matched_class}")
                     with spinner(f"creating booking with outbound at {best_out['time_str']}"):
                         b_resp = client.create_provisional_booking(
                             access_token, offer_id, passenger_token
@@ -723,8 +740,8 @@ def handle_booking_process(
             if dry_run:
                 with spinner(f"checking offers for inbound at {best_in['time_str']}"):
                     offers = client.get_offers(access_token, best_in["id"], passenger_token)
-                offer_id = find_offer_id(offers, best_in["class"], flexibility)
-                if not offer_id:
+                offer_result = find_offer_id(offers, best_in["class"], flexibility)
+                if not offer_result:
                     pinfo(
                         f"no valid offer found for inbound at {best_in['time_str']},"
                         f"looking for closest alternative"
@@ -758,10 +775,13 @@ def handle_booking_process(
                             "has_offer": False,
                         }
                 else:
+                    _, matched_class = offer_result
+                    if matched_class != best_in["class"]:
+                        pinfo(f"inbound class fallback: {best_in['class']} → {matched_class}")
                     dry_run_result["inbound"] = {
                         "departure": best_in["time_str"],
                         "arrival": _get_arrival_time(best_in["departure"]),
-                        "class": best_in["class"],
+                        "class": matched_class,
                         "flexibility": flexibility,
                         "has_offer": True,
                     }
@@ -769,9 +789,12 @@ def handle_booking_process(
                 logger.info(f"selected inbound: {best_in['time_str']}")
                 with spinner(f"checking offers for inbound at {best_in['time_str']}"):
                     offers = client.get_offers(access_token, best_in["id"], passenger_token)
-                offer_id = find_offer_id(offers, best_in["class"], flexibility)
+                offer_result = find_offer_id(offers, best_in["class"], flexibility)
 
-                if offer_id:
+                if offer_result:
+                    offer_id, matched_class = offer_result
+                    if matched_class != best_in["class"]:
+                        pinfo(f"inbound class fallback: {best_in['class']} → {matched_class}")
                     if booking_id:
                         # Add return leg to existing booking
                         with spinner(f"adding return leg at {best_in['time_str']}"):
