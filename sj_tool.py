@@ -45,9 +45,9 @@ def parse_args() -> argparse.Namespace:
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
-        "--dry-run",
+        "--book",
         action="store_true",
-        help="Search and display what would be booked, without booking.",
+        help="Book tickets for real (default is dry-run).",
     )
     group.add_argument(
         "--cancel-date",
@@ -287,7 +287,7 @@ def main():
                 handle_cancel_booking(client, access_token, active_pass, bn)
 
         else:
-            # Default booking mode or dry-run
+            # Default: dry-run. With --book: book for real.
             validate_dates_against_pass(cfg, active_pass)
 
             # Fetch existing bookings for duplicate check
@@ -308,8 +308,8 @@ def main():
             with spinner("fetching existing bookings"):
                 bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)
 
-            # Cleanup stale provisionals (unless dry-run)
-            if not args.dry_run:
+            # Cleanup stale provisionals (only when booking)
+            if args.book:
                 bookings_list = cleanup_stale_provisionals(
                     client, access_token, bookings_list
                 )
@@ -334,13 +334,14 @@ def main():
                 pinfo(f"filter: {filter_str}")
 
             # Process date range
+            dry_run = not args.book
             results = process_date_range(
                 client, access_token, tm, cfg,
                 tp_product_id, tp_token_id, bookings_list,
-                dry_run=args.dry_run,
+                dry_run=dry_run,
             )
 
-            if args.dry_run and results:
+            if dry_run and results:
                 print_dry_run_table(results)
 
             pinfo("done")
