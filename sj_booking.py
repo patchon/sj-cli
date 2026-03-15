@@ -85,9 +85,6 @@ def _find_departure_by_time(
     if select_closest:
         timed.sort(key=lambda x: abs(x[1]))
         best_dep, diff = timed[0]
-        time_str = best_dep.get("departureDateTime", "").split("T")[1][:5]
-        if diff != 0:
-            pinfo(f"no exact match for {target_time_str}, closest is {time_str} ({diff:+d}m)")
         return best_dep
 
     # Exact match only
@@ -250,6 +247,84 @@ def find_offer_id(
                     f"(expected 0), skipping"
                 )
 
+    return None
+
+
+def _try_alternative_departure(
+    client: SJClient,
+    access_token: str,
+    search_id: str,
+    target_time: str,
+    requested_class: str,
+    flexibility: str,
+    allow_fallback: bool,
+    passenger_token: str,
+    skip_departure_id: str,
+    prefer_earlier: bool = True,
+) -> dict | None:
+    """
+    Try one alternative departure when the closest one has no 0-price offer.
+
+    Args:
+        prefer_earlier: If True, pick the closest departure BEFORE the target
+            time (outbound — arrive on time). If False, pick the closest
+            departure AFTER the target time (inbound — don't leave early).
+
+    Returns:
+        Dict with offer_id, time_str, arrival, class, and departure data
+        if found, None otherwise.
+
+    """
+    results = client.get_search_results(access_token, search_id)
+    travels = results.get("travels", [])
+    if not travels:
+        return None
+    departures = travels[0].get("departures", [])
+
+    target_minutes = time_str_to_minutes(target_time)
+    candidates = []
+    for dep in departures:
+        dep_id = dep.get("departureId")
+        if dep_id == skip_departure_id:
+            continue
+        dep_minutes = get_departure_time_minutes(dep)
+        if dep_minutes == -1:
+            continue
+        diff = dep_minutes - target_minutes
+        # Filter: only earlier (diff < 0) or only later (diff > 0)
+        if prefer_earlier and diff >= 0:
+            continue
+        if not prefer_earlier and diff <= 0:
+            continue
+        valid_class = _resolve_class_for_departure(dep, requested_class, allow_fallback)
+        if not valid_class:
+            continue
+        candidates.append((dep, valid_class, abs(diff)))
+
+    if not candidates:
+        pinfo("no alternative departures found")
+        return None
+
+    # Sort by proximity and try only the closest one
+    candidates.sort(key=lambda x: x[2])
+    dep, valid_class, _ = candidates[0]
+    time_str = dep.get("departureDateTime", "").split("T")[1][:5]
+    dep_id = dep.get("departureId")
+
+    with spinner(f"checking alternative departure at {time_str}"):
+        offers = client.get_offers(access_token, dep_id, passenger_token)
+    offer_id = find_offer_id(offers, valid_class, flexibility)
+    if offer_id:
+        pinfo(f"found 0-price offer at alternative departure {time_str}")
+        return {
+            "offer_id": offer_id,
+            "time_str": time_str,
+            "arrival": _get_arrival_time(dep),
+            "class": valid_class,
+            "departure": dep,
+        }
+
+    pinfo(f"alternative departure {time_str} also unavailable, skipping")
     return None
 
 
@@ -421,30 +496,13 @@ def handle_booking_process(
     origin = params["station_from"]
     dest = params["station_to"]
 
-    service_type_names = {
-        "SJ_HIGH": "SJ High-speed train",
-        "SJ_IC": "SJ InterCity",
-        "SJ_REG": "SJ Regional",
-        "SJ_NT": "SJ Night train",
-        "X_TRAINOPS": "Other train operators",
-        "X_PTA": "Public transport",
-        "X_EXPBUS": "Express buses",
-    }
-    raw_types = params.get("service_types")
-    if raw_types and raw_types != ["ALL"]:
-        filter_label = " (filter: " + ", ".join(
-            service_type_names.get(t, t) for t in raw_types
-        ) + ")"
-    else:
-        filter_label = ""
-
     booking_id = None
     dry_run_result = {}
 
     # 1. Outbound
     if do_out and out_search_id:
         target_time = params.get("time_leave")
-        with spinner(f"searching {date_str}: {origin} → {dest} at {target_time}{filter_label}"):
+        with spinner(f"searching {date_str}: {origin} → {dest} at {target_time}"):
             best_out = poll_and_select(
                 client,
                 access_token,
@@ -454,21 +512,57 @@ def handle_booking_process(
                 params.get("select_closest_ticket_available", False),
                 allow_fallback,
             )
+        if best_out and best_out["diff"] != 0:
+            pinfo(
+                f"no exact match for {target_time}, "
+                f"closest is {best_out['time_str']} ({best_out['diff']:+d}m)"
+            )
         if best_out:
             if dry_run:
                 # Collect dry-run info: check offer availability
-                offers = client.get_offers(access_token, best_out["id"], passenger_token)
+                with spinner(f"checking offers for outbound at {best_out['time_str']}"):
+                    offers = client.get_offers(access_token, best_out["id"], passenger_token)
                 offer_id = find_offer_id(offers, best_out["class"], flexibility)
-                dry_run_result["outbound"] = {
-                    "departure": best_out["time_str"],
-                    "arrival": _get_arrival_time(best_out["departure"]),
-                    "class": best_out["class"],
-                    "flexibility": flexibility if offer_id else None,
-                    "has_offer": offer_id is not None,
-                }
+                if not offer_id:
+                    # Try alternative (earlier departure for outbound)
+                    pinfo(
+                        f"no valid 0-price offer for outbound at {best_out['time_str']}, "
+                        f"looking for closest alternative"
+                    )
+                    alt = _try_alternative_departure(
+                        client, access_token, out_search_id, target_time,
+                        params["comfort_class"], flexibility, allow_fallback,
+                        passenger_token, best_out["id"],
+                        prefer_earlier=True,
+                    )
+                    if alt:
+                        dry_run_result["outbound"] = {
+                            "departure": alt["time_str"],
+                            "arrival": alt["arrival"],
+                            "class": alt["class"],
+                            "flexibility": flexibility,
+                            "has_offer": True,
+                        }
+                    else:
+                        dry_run_result["outbound"] = {
+                            "departure": best_out["time_str"],
+                            "arrival": _get_arrival_time(best_out["departure"]),
+                            "class": best_out["class"],
+                            "flexibility": None,
+                            "has_offer": False,
+                        }
+                else:
+                    dry_run_result["outbound"] = {
+                        "departure": best_out["time_str"],
+                        "arrival": _get_arrival_time(best_out["departure"]),
+                        "class": best_out["class"],
+                        "flexibility": flexibility,
+                        "has_offer": True,
+                    }
             else:
                 logger.info(f"selected outbound: {best_out['time_str']}")
-                offers = client.get_offers(access_token, best_out["id"], passenger_token)
+                with spinner(f"checking offers for outbound at {best_out['time_str']}"):
+                    offers = client.get_offers(access_token, best_out["id"], passenger_token)
                 offer_id = find_offer_id(offers, best_out["class"], flexibility)
                 if offer_id:
                     with spinner(f"creating booking with outbound at {best_out['time_str']}"):
@@ -477,8 +571,23 @@ def handle_booking_process(
                         )
                     booking_id = b_resp.get("bookingId") or b_resp.get("id")
                 else:
-                    pinfo("no valid 0-price offer found for outbound, skipping date")
-                    if not book_partial:
+                    pinfo(
+                        f"no valid 0-price offer for outbound {origin} → {dest} "
+                        f"at {best_out['time_str']}, looking for closest alternative"
+                    )
+                    alt = _try_alternative_departure(
+                        client, access_token, out_search_id, target_time,
+                        params["comfort_class"], flexibility, allow_fallback,
+                        passenger_token, best_out["id"],
+                        prefer_earlier=True,
+                    )
+                    if alt:
+                        with spinner(f"creating booking with alternative outbound at {alt['time_str']}"):
+                            b_resp = client.create_provisional_booking(
+                                access_token, alt["offer_id"], passenger_token
+                            )
+                        booking_id = b_resp.get("bookingId") or b_resp.get("id")
+                    elif not book_partial:
                         return None
         elif dry_run:
             dry_run_result["outbound"] = {
@@ -496,7 +605,7 @@ def handle_booking_process(
     # 2. Inbound
     if do_in and in_search_id:
         target_time = params.get("time_return", "17:00")
-        with spinner(f"searching {date_str}: {dest} → {origin} at {target_time}{filter_label}"):
+        with spinner(f"searching {date_str}: {dest} → {origin} at {target_time}"):
             best_in = poll_and_select(
                 client,
                 access_token,
@@ -506,20 +615,55 @@ def handle_booking_process(
                 params.get("select_closest_ticket_available", False),
                 allow_fallback,
             )
+        if best_in and best_in["diff"] != 0:
+            pinfo(
+                f"no exact match for {target_time}, "
+                f"closest is {best_in['time_str']} ({best_in['diff']:+d}m)"
+            )
         if best_in:
             if dry_run:
-                offers = client.get_offers(access_token, best_in["id"], passenger_token)
+                with spinner(f"checking offers for inbound at {best_in['time_str']}"):
+                    offers = client.get_offers(access_token, best_in["id"], passenger_token)
                 offer_id = find_offer_id(offers, best_in["class"], flexibility)
-                dry_run_result["inbound"] = {
-                    "departure": best_in["time_str"],
-                    "arrival": _get_arrival_time(best_in["departure"]),
-                    "class": best_in["class"],
-                    "flexibility": flexibility if offer_id else None,
-                    "has_offer": offer_id is not None,
-                }
+                if not offer_id:
+                    pinfo(
+                        f"no valid 0-price offer for inbound at {best_in['time_str']}, "
+                        f"looking for closest alternative"
+                    )
+                    alt = _try_alternative_departure(
+                        client, access_token, in_search_id, target_time,
+                        params["comfort_class"], flexibility, allow_fallback,
+                        passenger_token, best_in["id"],
+                        prefer_earlier=False,
+                    )
+                    if alt:
+                        dry_run_result["inbound"] = {
+                            "departure": alt["time_str"],
+                            "arrival": alt["arrival"],
+                            "class": alt["class"],
+                            "flexibility": flexibility,
+                            "has_offer": True,
+                        }
+                    else:
+                        dry_run_result["inbound"] = {
+                            "departure": best_in["time_str"],
+                            "arrival": _get_arrival_time(best_in["departure"]),
+                            "class": best_in["class"],
+                            "flexibility": None,
+                            "has_offer": False,
+                        }
+                else:
+                    dry_run_result["inbound"] = {
+                        "departure": best_in["time_str"],
+                        "arrival": _get_arrival_time(best_in["departure"]),
+                        "class": best_in["class"],
+                        "flexibility": flexibility,
+                        "has_offer": True,
+                    }
             else:
                 logger.info(f"selected inbound: {best_in['time_str']}")
-                offers = client.get_offers(access_token, best_in["id"], passenger_token)
+                with spinner(f"checking offers for inbound at {best_in['time_str']}"):
+                    offers = client.get_offers(access_token, best_in["id"], passenger_token)
                 offer_id = find_offer_id(offers, best_in["class"], flexibility)
 
                 if offer_id:
@@ -536,11 +680,33 @@ def handle_booking_process(
                                 access_token, offer_id, passenger_token
                             )
                         booking_id = b_resp.get("bookingId") or b_resp.get("id")
-                elif booking_id:
-                    pinfo("no valid 0-price offer for return leg, booking outbound only")
                 else:
-                    pinfo("no valid 0-price offer found for inbound, skipping")
-                    return None
+                    pinfo(
+                        f"no valid 0-price offer for inbound {dest} → {origin} "
+                        f"at {best_in['time_str']}, looking for closest alternative"
+                    )
+                    alt = _try_alternative_departure(
+                        client, access_token, in_search_id, target_time,
+                        params["comfort_class"], flexibility, allow_fallback,
+                        passenger_token, best_in["id"],
+                        prefer_earlier=False,
+                    )
+                    if alt:
+                        if booking_id:
+                            with spinner(f"adding alternative return leg at {alt['time_str']}"):
+                                client.add_offer_to_booking(
+                                    access_token, booking_id, alt["offer_id"], passenger_token
+                                )
+                        elif not do_out or book_partial:
+                            with spinner(f"creating booking with alternative inbound at {alt['time_str']}"):
+                                b_resp = client.create_provisional_booking(
+                                    access_token, alt["offer_id"], passenger_token
+                                )
+                            booking_id = b_resp.get("bookingId") or b_resp.get("id")
+                    elif booking_id:
+                        pinfo("no alternative found, booking outbound only")
+                    else:
+                        return None
         elif dry_run:
             dry_run_result["inbound"] = {
                 "departure": "—",
@@ -754,7 +920,9 @@ def process_date_range(
 
         curr += timedelta(days=1)
         if curr <= end_date:
-            time.sleep(2)
+            next_date = curr.strftime("%Y-%m-%d")
+            with spinner(f"waiting before processing {next_date}"):
+                time.sleep(2)
 
     return results
 
@@ -768,8 +936,8 @@ def handle_cancel_mode(
     """
     Interactive cancellation for a specific date.
 
-    Per SPEC §5.3: find bookings for the date, ask which direction(s) to cancel,
-    confirm with y/N.
+    Finds all bookings matching the configured route on the given date,
+    then delegates to handle_cancel_booking for each matching booking.
     """
     params = cfg["search_parameters"]
     origin_name = params["station_from"]
@@ -777,13 +945,11 @@ def handle_cancel_mode(
     origin_id = client.resolve_station(origin_name)
     dest_id = client.resolve_station(dest_name)
 
-    # Fetch bookings for that date
-    bookings = fetch_all_bookings(client, access_token, cancel_date, cancel_date)
+    with spinner(f"fetching bookings for {cancel_date}"):
+        bookings = fetch_all_bookings(client, access_token, cancel_date, cancel_date)
 
-    # Find matching bookings for the route
-    outbound_booking = None
-    inbound_booking = None
-
+    # Find booking numbers that match the route and date
+    matched_numbers = set()
     for item in bookings:
         booking = item.get("booking", {})
         if booking.get("bookingStatus") == "CANCELLED":
@@ -797,112 +963,61 @@ def handle_cancel_mode(
                 if not dt_str:
                     continue
                 l_date = dt_str.split("T")[0]
-                dep_time = dt_str.split("T")[1][:5] if "T" in dt_str else ""
-                arr_dt = seg.get("arrivalDateTime", "")
-                arr_time = arr_dt.split("T")[1][:5] if "T" in arr_dt else ""
 
                 if l_date != cancel_date:
                     continue
 
-                if l_origin == origin_id and l_dest == dest_id:
-                    outbound_booking = {
-                        "item": item,
-                        "dep_time": dep_time,
-                        "arr_time": arr_time,
-                    }
-                elif l_origin == dest_id and l_dest == origin_id:
-                    inbound_booking = {
-                        "item": item,
-                        "dep_time": dep_time,
-                        "arr_time": arr_time,
-                    }
+                if (l_origin == origin_id and l_dest == dest_id) or \
+                   (l_origin == dest_id and l_dest == origin_id):
+                    b_num = booking.get("bookingNumber")
+                    if b_num:
+                        matched_numbers.add(b_num)
 
-    if not outbound_booking and not inbound_booking:
+    if not matched_numbers:
         pinfo(f"no bookings found for {cancel_date} on route {origin_name} → {dest_name}")
         return
 
-    # Determine what to cancel
-    to_cancel = []
-
-    if outbound_booking and inbound_booking:
-        pinfo(f"found bookings for {cancel_date} ({origin_name} → {dest_name}):")
-        pinfo(f"  1. outbound  {outbound_booking['dep_time']} → {outbound_booking['arr_time']}")
-        pinfo(f"  2. return    {inbound_booking['dep_time']} → {inbound_booking['arr_time']}")
-        pinfo(f"  3. both")
-        choice = input("cancel which? [1/2/3]: ").strip()
-
-        if choice == "1":
-            to_cancel = [("outbound", outbound_booking)]
-        elif choice == "2":
-            to_cancel = [("return", inbound_booking)]
-        elif choice == "3":
-            to_cancel = [("outbound", outbound_booking), ("return", inbound_booking)]
-        else:
-            pinfo("invalid selection, aborting")
-            return
-    elif outbound_booking:
-        to_cancel = [("outbound", outbound_booking)]
-    else:
-        # Guaranteed non-None: early return on line 740 handles both-None case
-        assert inbound_booking is not None
-        to_cancel = [("return", inbound_booking)]
-
-    # Confirm and cancel
-    for direction, bk in to_cancel:
-        src = origin_name if direction == "outbound" else dest_name
-        dst = dest_name if direction == "outbound" else origin_name
-        confirm = input(
-            f"cancel {direction} {cancel_date} {bk['dep_time']} {src} → {dst}? [y/n]: "
-        ).strip().lower()
-
-        if confirm != "y":
-            pinfo(f"skipping {direction} cancellation")
-            continue
-
-        item = bk["item"]
-        assert isinstance(item, dict)
-        booking_data = item.get("booking", {})
-        b_id = (
-            booking_data.get("bookingId")
-            or booking_data.get("id")
-            or item.get("bookingId")
-        )
-
-        try:
-            client.cancel_provisional_booking(access_token, b_id)
-            pinfo(f"{direction} booking {b_id} cancelled")
-        except Exception as e:
-            logger.error(f"failed to cancel {direction} booking {b_id}: {e}")
-            pinfo(f"failed to cancel {direction}: {e}")
+    # Build a minimal travel_pass dict for handle_cancel_booking
+    # (it only needs endTravelValidityDateTime for date range, but we already
+    # fetched bookings so we pass dates that cover our cancel_date)
+    for b_num in sorted(matched_numbers):
+        handle_cancel_booking(client, access_token, None, b_num, prefetched_bookings=bookings)
 
 
 def handle_cancel_booking(
     client: SJClient,
     access_token: str,
-    travel_pass: dict,
+    travel_pass: dict | None,
     booking_number: str,
+    prefetched_bookings: list | None = None,
 ) -> None:
     """
     Cancel a booking by its booking number.
 
     Fetches all bookings, finds the one matching the given booking number,
     displays its details, and asks for confirmation before cancelling.
+
+    Args:
+        prefetched_bookings: If provided, skip fetching and use these instead.
+
     """
-    # Fetch all bookings within the travel pass validity
-    valid_end = travel_pass.get("endTravelValidityDateTime")
-    now_date = datetime.now()
-    b_start = now_date.strftime("%Y-%m-%d")
-
-    if valid_end:
-        vp_end = datetime.fromisoformat(valid_end.replace("Z", "+00:00")).replace(
-            tzinfo=None
-        )
-        b_end = (vp_end + timedelta(days=1)).strftime("%Y-%m-%d")
+    if prefetched_bookings is not None:
+        all_bookings = prefetched_bookings
     else:
-        b_end = (now_date + timedelta(days=90)).strftime("%Y-%m-%d")
+        valid_end = travel_pass.get("endTravelValidityDateTime") if travel_pass else None
+        now_date = datetime.now()
+        b_start = now_date.strftime("%Y-%m-%d")
 
-    with spinner(f"searching for booking {booking_number}"):
-        all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
+        if valid_end:
+            vp_end = datetime.fromisoformat(valid_end.replace("Z", "+00:00")).replace(
+                tzinfo=None
+            )
+            b_end = (vp_end + timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            b_end = (now_date + timedelta(days=90)).strftime("%Y-%m-%d")
+
+        with spinner(f"searching for booking {booking_number}"):
+            all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
 
     # Find the booking matching the booking number
     matched_item = None
@@ -1095,14 +1210,16 @@ def handle_cancel_booking(
         for s in selected
     ]
 
-    # Step 1: Provisional cancel
-    success = client.cancel_booking_with_patch(access_token, b_id, payload)
-    if not success:
-        pinfo(f"failed to cancel booking {booking_number}")
-        return
+    with spinner(f"cancelling booking {booking_number}"):
+        # Step 1: Provisional cancel
+        success = client.cancel_booking_with_patch(access_token, b_id, payload)
+        if not success:
+            pinfo(f"failed to cancel booking {booking_number}")
+            return
 
-    # Step 2: Confirm the cancellation (checkout)
-    confirmed = client.finalize_cancellation(access_token, b_id)
+        # Step 2: Confirm the cancellation (checkout)
+        confirmed = client.finalize_cancellation(access_token, b_id)
+
     n_selected = len(selected)
     n_total = len(segments_to_cancel)
     if confirmed:
@@ -1129,14 +1246,13 @@ def handle_list_bookings(
     b_start = now_date.strftime("%Y-%m-%d")
 
     if valid_end:
-        vp_end = datetime.fromisoformat(valid_end.replace("Z", "+00:00")).replace(
-            tzinfo=None
-        )
-        b_end_dt = vp_end + timedelta(days=1)
-        b_end = b_end_dt.strftime("%Y-%m-%d")
+        vp_end = datetime.fromisoformat(valid_end.replace("Z", "+00:00")).astimezone()
+        display_end = (vp_end - timedelta(days=1)).strftime("%Y-%m-%d")
+        b_end = vp_end.strftime("%Y-%m-%d")
     else:
         # Fallback: 3 months from now
-        b_end = (now_date + timedelta(days=90)).strftime("%Y-%m-%d")
+        display_end = (now_date + timedelta(days=90)).strftime("%Y-%m-%d")
+        b_end = display_end
 
     with spinner("fetching bookings"):
         all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
@@ -1191,6 +1307,10 @@ def handle_list_bookings(
                     "past": in_past,
                     "_sort_key": dep_dt,
                 })
+
+    if not display_rows:
+        pinfo(f"no bookings found between {b_start} and {display_end}")
+        return
 
     # Sort by date, then departure time
     display_rows.sort(key=lambda r: r.get("_sort_key", ""))

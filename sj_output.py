@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +142,10 @@ def print_dry_run_table(results: list[dict]) -> None:
             rows.append([
                 r.get("date", "\u2014"),
                 r.get("direction", "\u2014"),
-                "\u2014",
-                "\u2014",
-                "\u2014",
-                f"\u2014 ({note})",
+                "n/a",
+                "n/a",
+                "n/a",
+                "n/a",
             ])
         else:
             rows.append([
@@ -197,26 +197,34 @@ def print_bookings_table(bookings: list[dict], pass_name: str) -> None:
     pinfo(f"{len(bookings)} booking(s) shown")
 
 
-def _format_tp_date(iso_str: str | None) -> str:
-    """Format an ISO datetime string to YYYY-MM-DD."""
+def _format_tp_date(iso_str: str | None, exclusive: bool = False) -> str:
+    """Format an ISO datetime string to YYYY-MM-DD in local time.
+
+    Args:
+        iso_str: ISO datetime string from the API.
+        exclusive: If True, subtract one day (API end dates are exclusive).
+
+    """
     if not iso_str:
         return "\u2014"
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        return dt.strftime("%Y-%m-%d")
+        local_dt = dt.astimezone()
+        if exclusive:
+            local_dt -= timedelta(days=1)
+        return local_dt.strftime("%Y-%m-%d")
     except (ValueError, AttributeError):
         return iso_str[:10] if iso_str else "\u2014"
 
 
 def _days_remaining(end_iso: str | None) -> str:
-    """Calculate days remaining from now until end date."""
+    """Calculate days remaining until end of last valid day."""
     if not end_iso:
         return "\u2014"
     try:
-        end_dt = datetime.fromisoformat(
-            end_iso.replace("Z", "+00:00")
-        ).replace(tzinfo=None)
-        delta = end_dt - datetime.now()
+        end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00")).astimezone()
+        # End date is exclusive, so last valid day ends at end_dt
+        delta = end_dt - datetime.now().astimezone()
         days = delta.days
         if days < 0:
             return "expired"
@@ -254,7 +262,7 @@ def print_travelpasses_table(
         holder = f"{first} {last} ({email})".strip() if first or last else "\u2014"
 
         valid_from = _format_tp_date(tp.get("startTravelValidityDateTime"))
-        valid_to = _format_tp_date(tp.get("endTravelValidityDateTime"))
+        valid_to = _format_tp_date(tp.get("endTravelValidityDateTime"), exclusive=True)
         days_left = _days_remaining(tp.get("endTravelValidityDateTime"))
 
         # Try to get price from receipt info

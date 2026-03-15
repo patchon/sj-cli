@@ -55,12 +55,12 @@ def parse_args() -> argparse.Namespace:
         help="Cancel bookings for a specific date.",
     )
     group.add_argument(
-        "--cancel-booking",
+        "--cancel-bookings",
         metavar="BOOKING_NUMBER",
-        help="Cancel a booking by its booking number (e.g. 3HT2NEIL).",
+        help="Cancel booking(s) by number, comma-separated (e.g. 3HT2NEIL or 3HT2NEIL,ABCD1234).",
     )
     group.add_argument(
-        "--list-current-bookings",
+        "--list-bookings",
         action="store_true",
         help="Display all active bookings in a table.",
     )
@@ -227,10 +227,6 @@ def main():
     try:
         tm = TokenManager()
         access_token = ensure_authenticated(client, tm, email, password)
-    except KeyboardInterrupt:
-        pinfo("interrupted by user")
-        print()
-        sys.exit(130)
     except SJAuthError as e:
         pinfo(str(e))
         print()
@@ -246,7 +242,7 @@ def main():
     try:
         membership = client.get_membership(access_token)
         pinfo(
-            f"logged in as {membership.get('firstName')} {membership.get('lastName')}"
+            f"logged in as: {membership.get('firstName')} {membership.get('lastName')} ({email})"
         )
 
         tp_resp = client.get_travel_passes(access_token)
@@ -278,15 +274,17 @@ def main():
         if args.list_travelpasses:
             handle_list_travelpasses(client, access_token, travel_passes)
 
-        elif args.list_current_bookings:
+        elif args.list_bookings:
             handle_list_bookings(client, access_token, active_pass)
 
         elif args.cancel_date:
             validate_dates_against_pass(cfg, active_pass)
             handle_cancel_mode(client, access_token, cfg, args.cancel_date)
 
-        elif args.cancel_booking:
-            handle_cancel_booking(client, access_token, active_pass, args.cancel_booking)
+        elif args.cancel_bookings:
+            booking_numbers = [b.strip() for b in args.cancel_bookings.split(",") if b.strip()]
+            for bn in booking_numbers:
+                handle_cancel_booking(client, access_token, active_pass, bn)
 
         else:
             # Default booking mode or dry-run
@@ -318,6 +316,23 @@ def main():
 
             pinfo(f"found {len(bookings_list)} active bookings")
 
+            # Show active service type filter
+            service_type_names = {
+                "SJ_HIGH": "SJ High-speed train",
+                "SJ_IC": "SJ InterCity",
+                "SJ_REG": "SJ Regional",
+                "SJ_NT": "SJ Night train",
+                "X_TRAINOPS": "Other train operators",
+                "X_PTA": "Public transport",
+                "X_EXPBUS": "Express buses",
+            }
+            raw_types = params.get("service_types")
+            if raw_types and raw_types != ["ALL"]:
+                filter_str = ", ".join(
+                    service_type_names.get(t, t) for t in raw_types
+                )
+                pinfo(f"filter: {filter_str}")
+
             # Process date range
             results = process_date_range(
                 client, access_token, tm, cfg,
@@ -330,10 +345,6 @@ def main():
 
             pinfo("done")
 
-    except KeyboardInterrupt:
-        pinfo("interrupted by user")
-        print()
-        sys.exit(130)
     except SystemExit:
         raise
     except Exception as e:
@@ -346,4 +357,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pinfo("\ninterrupted by user")
+        print()
+        sys.exit(130)
