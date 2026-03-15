@@ -828,11 +828,11 @@ def handle_cancel_mode(
     to_cancel = []
 
     if outbound_booking and inbound_booking:
-        print(f"\nFound bookings for {cancel_date} ({origin_name} → {dest_name}):")
-        print(f"  1. Outbound  {outbound_booking['dep_time']} → {outbound_booking['arr_time']}")
-        print(f"  2. Return    {inbound_booking['dep_time']} → {inbound_booking['arr_time']}")
-        print("  3. Both")
-        choice = input("\nCancel which? [1/2/3]: ").strip()
+        pinfo(f"found bookings for {cancel_date} ({origin_name} → {dest_name}):")
+        pinfo(f"  1. outbound  {outbound_booking['dep_time']} → {outbound_booking['arr_time']}")
+        pinfo(f"  2. return    {inbound_booking['dep_time']} → {inbound_booking['arr_time']}")
+        pinfo(f"  3. both")
+        choice = input(" > cancel which? [1/2/3]: ").strip()
 
         if choice == "1":
             to_cancel = [("outbound", outbound_booking)]
@@ -855,7 +855,7 @@ def handle_cancel_mode(
         src = origin_name if direction == "outbound" else dest_name
         dst = dest_name if direction == "outbound" else origin_name
         confirm = input(
-            f"Cancel {direction} {cancel_date} {bk['dep_time']} {src} → {dst}? [y/N]: "
+            f" > cancel {direction} {cancel_date} {bk['dep_time']} {src} → {dst}? [y/n]: "
         ).strip().lower()
 
         if confirm != "y":
@@ -936,10 +936,10 @@ def handle_cancel_booking(
     )
     if booking_status == "CHANGED" and "REVERT" in possible_actions:
         pinfo(f"booking {booking_number} has a pending cancellation in progress")
-        print(f"\n  1. Confirm the pending cancellation")
-        print(f"  2. Revert (undo) the pending cancellation")
-        print(f"  3. Do nothing")
-        choice = input("\nSelect action [1/2/3]: ").strip()
+        pinfo("  1. confirm the pending cancellation")
+        pinfo("  2. revert (undo) the pending cancellation")
+        pinfo("  3. do nothing")
+        choice = input(" > select action [1/2/3]: ").strip()
 
         if choice == "1":
             confirmed = client.finalize_cancellation(access_token, b_id)
@@ -1041,19 +1041,19 @@ def handle_cancel_booking(
 
     # Select which segments to cancel
     if len(segments_to_cancel) == 1:
-        confirm = input(f"\nCancel booking {booking_number}? [y/N]: ").strip().lower()
+        confirm = input(f" > cancel booking {booking_number}? [y/n]: ").strip().lower()
         if confirm != "y":
             pinfo("cancellation aborted")
             return
         selected = segments_to_cancel
     else:
-        print("\nCancel which journey?")
+        pinfo("cancel which journey?")
         for i, seg in enumerate(segments_to_cancel, 1):
-            print(f"  {i}. {seg['_label']}")
-        print(f"  A. All")
+            pinfo(f"  {i}. {seg['_label']}")
+        pinfo("  a. all")
 
         valid_nums = [str(i) for i in range(1, len(segments_to_cancel) + 1)]
-        choice = input(f"\nSelect [{'/'.join(valid_nums)}/A]: ").strip()
+        choice = input(f" > select [{'/'.join(valid_nums)}/a]: ").strip()
 
         if choice.upper() == "A":
             selected = segments_to_cancel
@@ -1085,9 +1085,8 @@ def handle_cancel_booking(
             [r["date"], r["direction"], r["departure"], r["arrival"], r["route"]]
             for r in confirm_rows
         ]
-        print()
         print(format_table(confirm_headers, confirm_table_rows, title="Selected for cancellation"))
-        confirm = input(f"\nCancel selected journey(s)? [y/N]: ").strip().lower()
+        confirm = input(" > cancel selected journey(s)? [y/n]: ").strip().lower()
         if confirm != "y":
             pinfo("cancellation aborted")
             return

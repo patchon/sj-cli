@@ -36,25 +36,27 @@ def format_table(headers: list[str], rows: list[list[str]], title: str = "") -> 
     total_width = sum(col_widths)
     separator = "\u2500" * total_width
 
+    prefix = " > "
+
     lines = []
     if title:
-        lines.append(title)
+        lines.append(f"{prefix}{title.lower()}")
 
-    lines.append(separator)
+    lines.append(f"{prefix}{separator}")
     header_line = "".join(
         h.ljust(w) for h, w in zip(headers, col_widths, strict=False)
     )
-    lines.append(header_line)
-    lines.append(separator)
+    lines.append(f"{prefix}{header_line}")
+    lines.append(f"{prefix}{separator}")
 
     for row in rows:
         cells = []
         for i, w in enumerate(col_widths):
             cell = row[i] if i < len(row) else "\u2014"
             cells.append(cell.ljust(w))
-        lines.append("".join(cells))
+        lines.append(f"{prefix}{''.join(cells)}")
 
-    lines.append(separator)
+    lines.append(f"{prefix}{separator}")
     return "\n".join(lines)
 
 
@@ -91,7 +93,7 @@ def print_dry_run_table(results: list[dict]) -> None:
             ])
 
     table = format_table(headers, rows, title="Dry Run Results")
-    print(table)
+    print(table, file=sys.stdout)
 
 
 def print_bookings_table(bookings: list[dict], pass_name: str) -> None:
@@ -127,7 +129,7 @@ def print_bookings_table(bookings: list[dict], pass_name: str) -> None:
     title = f"Current Bookings ({pass_name})"
     table = format_table(headers, rows, title=title)
     print(table)
-    print(f" {len(bookings)} bookings shown.")
+    pinfo(f"{len(bookings)} booking(s) shown")
 
 
 def _format_tp_date(iso_str: str | None) -> str:
@@ -202,7 +204,7 @@ def print_travelpasses_table(
 
     table = format_table(headers, rows, title="Travel Passes")
     print(table)
-    print(f" {len(travel_passes)} travel pass(es) shown.")
+    pinfo(f"{len(travel_passes)} travel pass(es) shown")
 
 
 def _format_amount(raw_amount: str | int | float, currency: str = "SEK") -> str:

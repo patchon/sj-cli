@@ -104,22 +104,22 @@ def resolve_travel_pass(travel_passes: list) -> dict:
         return travel_passes[0]
 
     # Multiple passes: prompt for selection
-    print("\nAvailable travel passes:")
+    pinfo("available travel passes:")
     for i, tp in enumerate(travel_passes, 1):
         name = tp.get("name", "Unknown")
         valid_start = tp.get("startTravelValidityDateTime", "")[:10]
         valid_end = tp.get("endTravelValidityDateTime", "")[:10]
-        print(f"  {i}. {name} ({valid_start} → {valid_end})")
+        pinfo(f"  {i}. {name} ({valid_start} → {valid_end})")
 
     while True:
-        choice = input(f"\nSelect pass [1-{len(travel_passes)}]: ").strip()
+        choice = input(f" > select pass [1-{len(travel_passes)}]: ").strip()
         try:
             idx = int(choice) - 1
             if 0 <= idx < len(travel_passes):
                 return travel_passes[idx]
         except ValueError:
             pass
-        print("Invalid selection, try again.")
+        pinfo("invalid selection, try again")
 
 
 def validate_dates_against_pass(cfg: dict, travel_pass: dict) -> None:
@@ -186,18 +186,22 @@ def handle_test_logged_in() -> None:
 
     if not token_data:
         pinfo("not logged in: no cached token found")
+        print()
         sys.exit(1)
 
     if not tm.is_valid():
         pinfo("not logged in: cached token is expired")
+        print()
         sys.exit(1)
 
     pinfo("logged in: valid cached token exists")
+    print()
     sys.exit(0)
 
 
 def main():
     """Main entry point."""
+    print()
     args = parse_args()
 
     # Handle --test-if-already-logged-in early (no config or client needed)
@@ -213,6 +217,7 @@ def main():
         cm.verify_cfg(cfg)
     except SJConfigError as e:
         pinfo(str(e))
+        print()
         sys.exit(1)
 
     email = cfg["auth"]["email"]
@@ -223,16 +228,18 @@ def main():
         tm = TokenManager()
         access_token = ensure_authenticated(client, tm, email, password)
     except KeyboardInterrupt:
-        print()
         pinfo("interrupted by user")
+        print()
         sys.exit(130)
     except SJAuthError as e:
         pinfo(str(e))
+        print()
         sys.exit(1)
 
     # Handle --login-only: authenticate and exit
     if args.login_only:
         pinfo("login successful, token cached")
+        print()
         sys.exit(0)
 
     # 3. Fetch membership and travel pass
@@ -263,6 +270,7 @@ def main():
         raise
     except Exception as e:
         pinfo(f"initialization failed: {e}")
+        print()
         sys.exit(1)
 
     # 4. Mode dispatch
@@ -323,15 +331,18 @@ def main():
             pinfo("done")
 
     except KeyboardInterrupt:
-        print()
         pinfo("interrupted by user")
+        print()
         sys.exit(130)
     except SystemExit:
         raise
     except Exception as e:
         logger.error(f"error: {e}")
         pinfo(f"error: {e}")
+        print()
         sys.exit(1)
+
+    print()
 
 
 if __name__ == "__main__":
