@@ -9,6 +9,7 @@ ignore = [
     "D102",     # Undocumented public method
     "D107",     # Undocumented public __init__
     "D200",     # Unnecessary multiline docstring
+    "D203",     # Blank line before class docstring (conflicts with D211)
     "D401",     # Non-imperative mood in docstring
     "D404",     # Docstring starts with "this"
 
