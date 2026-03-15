@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from sj_auth import ensure_valid_token
 from sj_client import SJClient
-from sj_output import format_table, pinfo, print_bookings_table
+from sj_output import format_class_name, format_duration, format_table, pinfo, print_bookings_table, spinner
 from sj_token import TokenManager
 
 logger = logging.getLogger(__name__)
@@ -366,10 +366,9 @@ def cleanup_stale_provisionals(
         possible_actions = booking.get("possibleActions", [])
 
         if status == "NEW" and "CANCEL_JOURNEY" in possible_actions:
-            pinfo(f"cancelling stale provisional booking {b_id} ...")
             try:
-                client.cancel_provisional_booking(access_token, b_id)
-                logger.info(f"cancelled stale provisional booking {b_id}")
+                with spinner(f"cancelling stale provisional booking {b_id}"):
+                    client.cancel_provisional_booking(access_token, b_id)
             except Exception as e:
                 logger.warning(f"failed to cancel provisional booking {b_id}: {e}")
             continue
@@ -445,17 +444,16 @@ def handle_booking_process(
     # 1. Outbound
     if do_out and out_search_id:
         target_time = params.get("time_leave")
-        pinfo(f"searching {date_str}: {origin} → {dest} at {target_time}{filter_label}")
-
-        best_out = poll_and_select(
-            client,
-            access_token,
-            out_search_id,
-            target_time,
-            params["comfort_class"],
-            params.get("select_closest_ticket_available", False),
-            allow_fallback,
-        )
+        with spinner(f"searching {date_str}: {origin} → {dest} at {target_time}{filter_label}"):
+            best_out = poll_and_select(
+                client,
+                access_token,
+                out_search_id,
+                target_time,
+                params["comfort_class"],
+                params.get("select_closest_ticket_available", False),
+                allow_fallback,
+            )
         if best_out:
             if dry_run:
                 # Collect dry-run info: check offer availability
@@ -473,10 +471,10 @@ def handle_booking_process(
                 offers = client.get_offers(access_token, best_out["id"], passenger_token)
                 offer_id = find_offer_id(offers, best_out["class"], flexibility)
                 if offer_id:
-                    pinfo(f"creating booking with outbound at {best_out['time_str']} ...")
-                    b_resp = client.create_provisional_booking(
-                        access_token, offer_id, passenger_token
-                    )
+                    with spinner(f"creating booking with outbound at {best_out['time_str']}"):
+                        b_resp = client.create_provisional_booking(
+                            access_token, offer_id, passenger_token
+                        )
                     booking_id = b_resp.get("bookingId") or b_resp.get("id")
                 else:
                     pinfo("no valid 0-price offer found for outbound, skipping date")
@@ -498,17 +496,16 @@ def handle_booking_process(
     # 2. Inbound
     if do_in and in_search_id:
         target_time = params.get("time_return", "17:00")
-        pinfo(f"searching {date_str}: {dest} → {origin} at {target_time}{filter_label}")
-
-        best_in = poll_and_select(
-            client,
-            access_token,
-            in_search_id,
-            target_time,
-            params["comfort_class"],
-            params.get("select_closest_ticket_available", False),
-            allow_fallback,
-        )
+        with spinner(f"searching {date_str}: {dest} → {origin} at {target_time}{filter_label}"):
+            best_in = poll_and_select(
+                client,
+                access_token,
+                in_search_id,
+                target_time,
+                params["comfort_class"],
+                params.get("select_closest_ticket_available", False),
+                allow_fallback,
+            )
         if best_in:
             if dry_run:
                 offers = client.get_offers(access_token, best_in["id"], passenger_token)
@@ -528,16 +525,16 @@ def handle_booking_process(
                 if offer_id:
                     if booking_id:
                         # Add return leg to existing booking
-                        pinfo(f"adding return leg at {best_in['time_str']} ...")
-                        client.add_offer_to_booking(
-                            access_token, booking_id, offer_id, passenger_token
-                        )
+                        with spinner(f"adding return leg at {best_in['time_str']}"):
+                            client.add_offer_to_booking(
+                                access_token, booking_id, offer_id, passenger_token
+                            )
                     elif not do_out or book_partial:
                         # Inbound-only or partial booking: create standalone booking
-                        pinfo(f"creating booking with inbound at {best_in['time_str']} ...")
-                        b_resp = client.create_provisional_booking(
-                            access_token, offer_id, passenger_token
-                        )
+                        with spinner(f"creating booking with inbound at {best_in['time_str']}"):
+                            b_resp = client.create_provisional_booking(
+                                access_token, offer_id, passenger_token
+                            )
                         booking_id = b_resp.get("bookingId") or b_resp.get("id")
                 elif booking_id:
                     pinfo("no valid 0-price offer for return leg, booking outbound only")
@@ -567,9 +564,9 @@ def handle_booking_process(
     try:
         email = cfg["auth"]["email"]
         phone = cfg["auth"].get("phone", "+46700000000")
-        client.update_booking_customer(access_token, booking_id, email, phone)
-        client.checkout_booking(access_token, booking_id)
-        pinfo(f"booking {booking_id} checked out successfully")
+        with spinner(f"checking out booking {booking_id}"):
+            client.update_booking_customer(access_token, booking_id, email, phone)
+            client.checkout_booking(access_token, booking_id)
     except Exception as e:
         logger.error(f"checkout failed for booking {booking_id}: {e}")
         pinfo(f"checkout failed: {e}")
@@ -904,8 +901,8 @@ def handle_cancel_booking(
     else:
         b_end = (now_date + timedelta(days=90)).strftime("%Y-%m-%d")
 
-    pinfo(f"searching for booking {booking_number} ...")
-    all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
+    with spinner(f"searching for booking {booking_number}"):
+        all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
 
     # Find the booking matching the booking number
     matched_item = None
@@ -1010,8 +1007,8 @@ def handle_cancel_booking(
                 "direction": direction,
                 "departure": dep_time,
                 "arrival": arr_time,
-                "duration": duration,
-                "comfort_class": prod_name,
+                "duration": format_duration(duration),
+                "comfort_class": format_class_name(prod_name),
                 "route": f"{dep_station} → {arr_station}",
                 "booking_number": booking_number,
                 "past": in_past,
@@ -1031,6 +1028,7 @@ def handle_cancel_booking(
                 })
 
     print_bookings_table(display_rows, f"Booking {booking_number}")
+    print()
 
     if not segments_to_cancel:
         if has_past_segment:
@@ -1140,10 +1138,11 @@ def handle_list_bookings(
         # Fallback: 3 months from now
         b_end = (now_date + timedelta(days=90)).strftime("%Y-%m-%d")
 
-    pinfo("fetching bookings ...")
-    all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
+    with spinner("fetching bookings"):
+        all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
 
     # Transform raw API items into display rows
+    now = datetime.now()
     display_rows = []
     for item in all_bookings:
         booking = item.get("booking", {})
@@ -1161,6 +1160,16 @@ def handle_list_bookings(
                 dep_station = segment.get("departureStation", {}).get("name", "—")
                 arr_station = segment.get("arrivalStation", {}).get("name", "—")
 
+                in_past = "N"
+                try:
+                    dep_parsed = datetime.fromisoformat(
+                        dep_dt.replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    if dep_parsed < now:
+                        in_past = "Y"
+                except (ValueError, AttributeError):
+                    pass
+
                 try:
                     date_str = dep_dt.split("T")[0]
                     dep_time = dep_dt.split("T")[1][:5]
@@ -1175,10 +1184,11 @@ def handle_list_bookings(
                     "direction": direction,
                     "departure": dep_time,
                     "arrival": arr_time,
-                    "duration": duration,
-                    "comfort_class": prod_name,
+                    "duration": format_duration(duration),
+                    "comfort_class": format_class_name(prod_name),
                     "route": f"{dep_station} → {arr_station}",
                     "booking_number": booking_number,
+                    "past": in_past,
                     "_sort_key": dep_dt,
                 })
 

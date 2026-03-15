@@ -20,7 +20,7 @@ from sj_client import SJClient
 from sj_config import CfgManager
 from sj_errors import SJAuthError, SJConfigError
 from sj_logger import setup_logging
-from sj_output import pinfo, print_dry_run_table, print_travelpasses_table
+from sj_output import pinfo, print_dry_run_table, print_travelpasses_table, spinner
 from sj_token import TokenManager
 
 setup_logging(os.getenv("LOG_LEVEL", ""))
@@ -307,8 +307,8 @@ def main():
             else:
                 b_end = params["date_end"]
 
-            pinfo("fetching existing bookings ...")
-            bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)
+            with spinner("fetching existing bookings"):
+                bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)
 
             # Cleanup stale provisionals (unless dry-run)
             if not args.dry_run:

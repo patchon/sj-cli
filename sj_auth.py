@@ -6,7 +6,7 @@ import sys
 
 from sj_client import SJClient
 from sj_errors import SJAuthError
-from sj_output import pinfo
+from sj_output import pinfo, spinner
 from sj_token import TokenManager
 
 logger = logging.getLogger(__name__)
@@ -69,17 +69,17 @@ def perform_full_login(
             cookies = token_manager.load_cookies()
             if cookies:
                 logger.info("attempting cookie-based silent login ...")
-                pinfo("attempting session restore ...")
                 client.import_cookies(cookies)
                 try:
-                    mfa_required = client.initiate_login(email, password)
+                    with spinner("attempting session restore"):
+                        mfa_required = client.initiate_login(email, password)
                     if not mfa_required:
-                        pinfo("session restored, no sms required")
-                        auth_code = client.finalize_login()
-                        if auth_code:
-                            token_data = client.exchange_code(auth_code)
-                            token_manager.save_cookies(client.export_cookies())
-                            return token_data
+                        with spinner("restoring session"):
+                            auth_code = client.finalize_login()
+                            if auth_code:
+                                token_data = client.exchange_code(auth_code)
+                                token_manager.save_cookies(client.export_cookies())
+                                return token_data
                         logger.warning("cookie-based login: finalize returned no code")
                     else:
                         logger.info(
@@ -97,15 +97,17 @@ def perform_full_login(
                                 "sms code not provided or timed out after 2 minutes"
                             )
 
-                        client.sms_verify(code)
-                        auth_code = client.finalize_login()
+                        with spinner("verifying sms code"):
+                            client.sms_verify(code)
+                            auth_code = client.finalize_login()
                         if not auth_code:
                             raise SJAuthError(
                                 "could not retrieve authorization code "
                                 "from final redirect"
                             )
 
-                        token_data = client.exchange_code(auth_code)
+                        with spinner("exchanging authorization code"):
+                            token_data = client.exchange_code(auth_code)
                         token_manager.save_cookies(client.export_cookies())
                         return token_data
                 except SJAuthError:
@@ -116,8 +118,8 @@ def perform_full_login(
                     client.__init__()
 
         # Full login flow (no cookies or cookie attempt failed)
-        pinfo("performing login ...")
-        mfa_required = client.initiate_login(email, password)
+        with spinner("performing login"):
+            mfa_required = client.initiate_login(email, password)
 
         if mfa_required:
             # Step 2: SMS
@@ -129,17 +131,20 @@ def perform_full_login(
                 raise SJAuthError("sms code not provided or timed out after 2 minutes")
 
             # Step 3: Verify
-            client.sms_verify(code)
+            with spinner("verifying sms code"):
+                client.sms_verify(code)
         else:
             pinfo("sms verification not required, skipping")
 
         # Step 4: Finalize (device registration + extract auth code)
-        auth_code = client.finalize_login()
+        with spinner("finalizing login"):
+            auth_code = client.finalize_login()
         if not auth_code:
             raise SJAuthError("could not retrieve authorization code from final redirect")
 
         # Step 5: Exchange
-        token_data = client.exchange_code(auth_code)
+        with spinner("exchanging authorization code"):
+            token_data = client.exchange_code(auth_code)
 
         # Save cookies for future silent logins
         if token_manager:

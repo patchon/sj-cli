@@ -1,15 +1,82 @@
 """User-facing output helpers for the SJ API client."""
 
 import logging
+import re
 import sys
+import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+_BRAILLE_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+@contextmanager
+def spinner(msg: str, interval: float = 0.08):
+    """
+    Context manager that shows a braille spinner while work runs.
+
+    Usage:
+        with spinner("fetching bookings"):
+            do_slow_work()
+
+    The spinner line is erased when the block completes, and the message
+    is printed as a normal pinfo line.
+
+    """
+    stop = threading.Event()
+    text = msg.lower()
+
+    def _spin():
+        i = 0
+        while not stop.is_set():
+            frame = _BRAILLE_FRAMES[i % len(_BRAILLE_FRAMES)]
+            sys.stdout.write(f"\r{frame} {text}")
+            sys.stdout.flush()
+            i += 1
+            stop.wait(interval)
+        # Erase the spinner line
+        sys.stdout.write(f"\r\033[2K")
+        sys.stdout.flush()
+
+    t = threading.Thread(target=_spin, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join()
+        print(text, file=sys.stdout)
 
 
 def pinfo(msg: str) -> None:
     """Print a status message to stdout."""
     print(msg.lower(), file=sys.stdout)
+
+
+def format_duration(iso_duration: str) -> str:
+    """Format an ISO 8601 duration like PT4H37M into 4h 37m."""
+    if not iso_duration:
+        return "\u2014"
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?", iso_duration)
+    if not m:
+        return iso_duration
+    hours, minutes = m.group(1), m.group(2)
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    return " ".join(parts) if parts else iso_duration
+
+
+def format_class_name(raw_name: str) -> str:
+    """Clean up class name by stripping refund/flexibility suffix."""
+    if not raw_name or raw_name == "\u2014":
+        return raw_name or "\u2014"
+    return raw_name.split(",")[0].strip()
 
 
 def format_table(headers: list[str], rows: list[list[str]], title: str = "") -> str:
@@ -51,7 +118,7 @@ def format_table(headers: list[str], rows: list[list[str]], title: str = "") -> 
         cells = []
         for i, w in enumerate(col_widths):
             cell = row[i] if i < len(row) else "\u2014"
-            cells.append(cell.lower().ljust(w))
+            cells.append(cell.ljust(w))
         lines.append("".join(cells))
 
     lines.append(separator)
@@ -107,7 +174,7 @@ def print_bookings_table(bookings: list[dict], pass_name: str) -> None:
     has_past = any("past" in b for b in bookings)
     headers = ["Date", "Direction", "Departure", "Arrival", "Duration", "Class", "Route", "Booking"]
     if has_past:
-        headers.append("Past")
+        headers.append("In The Past")
     rows = []
     for b in bookings:
         row = [
