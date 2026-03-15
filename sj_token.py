@@ -186,7 +186,7 @@ class TokenManager:
 
         return False
 
-    def save_cookies(self, cookies: list[dict[str, str]]) -> None:
+    def save_cookies(self, cookies: list[dict[str, str | None]]) -> None:
         """Save cookies to the cookie cache file."""
         try:
             self.cookie_path.parent.mkdir(parents=True, exist_ok=True)
@@ -196,7 +196,7 @@ class TokenManager:
         except Exception as e:
             logger.warning(f"failed to save cookies: {e}")
 
-    def load_cookies(self) -> list[dict[str, str]] | None:
+    def load_cookies(self) -> list[dict[str, str | None]] | None:
         """Load cookies from the cookie cache file."""
         if not self.cookie_path.exists():
             logger.debug("no cookie cache found")

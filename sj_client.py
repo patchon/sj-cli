@@ -214,7 +214,7 @@ class SJClient:
         self.csrf_token = ""
         self.trans_id = ""
 
-    def export_cookies(self) -> list[dict[str, str]]:
+    def export_cookies(self) -> list[dict[str, str | None]]:
         """Export the client's cookies as a serializable list."""
         cookies = [
             {
@@ -228,11 +228,14 @@ class SJClient:
         logger.debug(f"exported {len(cookies)} cookies")
         return cookies
 
-    def import_cookies(self, cookies: list[dict[str, str]]) -> None:
+    def import_cookies(self, cookies: list[dict[str, str | None]]) -> None:
         """Import previously exported cookies into the client."""
         for c in cookies:
             self.client.cookies.set(
-                c["name"], c["value"], domain=c.get("domain", ""), path=c.get("path", "/")
+                c["name"] or "",
+                c["value"] or "",
+                domain=c.get("domain") or "",
+                path=c.get("path") or "/",
             )
         logger.debug(f"imported {len(cookies)} cookies")
 

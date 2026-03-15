@@ -75,7 +75,7 @@ def format_class_name(raw_name: str) -> str:
     """Clean up class name by stripping refund/flexibility suffix."""
     if not raw_name or raw_name == "\u2014":
         return raw_name or "\u2014"
-    return raw_name.split(",")[0].strip()
+    return raw_name.split(",", maxsplit=1)[0].strip()
 
 
 def format_table(headers: list[str], rows: list[list[str]], title: str = "") -> str:
