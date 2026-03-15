@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 def pinfo(msg: str) -> None:
     """Print a status message to stdout."""
-    print(f" > {msg.lower()}", file=sys.stdout)
+    print(msg.lower(), file=sys.stdout)
 
 
 def format_table(headers: list[str], rows: list[list[str]], title: str = "") -> str:
@@ -36,27 +36,25 @@ def format_table(headers: list[str], rows: list[list[str]], title: str = "") -> 
     total_width = sum(col_widths)
     separator = "\u2500" * total_width
 
-    prefix = " > "
-
     lines = []
     if title:
-        lines.append(f"{prefix}{title.lower()}")
+        lines.append(title.lower())
 
-    lines.append(f"{prefix}{separator}")
+    lines.append(separator)
     header_line = "".join(
-        h.ljust(w) for h, w in zip(headers, col_widths, strict=False)
+        h.lower().ljust(w) for h, w in zip(headers, col_widths, strict=False)
     )
-    lines.append(f"{prefix}{header_line}")
-    lines.append(f"{prefix}{separator}")
+    lines.append(header_line)
+    lines.append(separator)
 
     for row in rows:
         cells = []
         for i, w in enumerate(col_widths):
             cell = row[i] if i < len(row) else "\u2014"
-            cells.append(cell.ljust(w))
-        lines.append(f"{prefix}{''.join(cells)}")
+            cells.append(cell.lower().ljust(w))
+        lines.append("".join(cells))
 
-    lines.append(f"{prefix}{separator}")
+    lines.append(separator)
     return "\n".join(lines)
 
 
@@ -93,7 +91,7 @@ def print_dry_run_table(results: list[dict]) -> None:
             ])
 
     table = format_table(headers, rows, title="Dry Run Results")
-    print(table, file=sys.stdout)
+    print(f"\n{table}", file=sys.stdout)
 
 
 def print_bookings_table(bookings: list[dict], pass_name: str) -> None:
@@ -128,7 +126,7 @@ def print_bookings_table(bookings: list[dict], pass_name: str) -> None:
 
     title = f"Current Bookings ({pass_name})"
     table = format_table(headers, rows, title=title)
-    print(table)
+    print(f"\n{table}")
     pinfo(f"{len(bookings)} booking(s) shown")
 
 
@@ -203,7 +201,7 @@ def print_travelpasses_table(
         rows.append([name, card_number, holder, valid_from, valid_to, days_left, price])
 
     table = format_table(headers, rows, title="Travel Passes")
-    print(table)
+    print(f"\n{table}")
     pinfo(f"{len(travel_passes)} travel pass(es) shown")
 
 

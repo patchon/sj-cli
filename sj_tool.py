@@ -112,7 +112,7 @@ def resolve_travel_pass(travel_passes: list) -> dict:
         pinfo(f"  {i}. {name} ({valid_start} → {valid_end})")
 
     while True:
-        choice = input(f" > select pass [1-{len(travel_passes)}]: ").strip()
+        choice = input(f"select pass [1-{len(travel_passes)}]: ").strip()
         try:
             idx = int(choice) - 1
             if 0 <= idx < len(travel_passes):
