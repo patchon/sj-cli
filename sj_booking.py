@@ -41,9 +41,7 @@ def booking_date_range(
 
     valid_end = travel_pass.get("endTravelValidityDateTime") if travel_pass else None
     if valid_end:
-        vp_end = datetime.fromisoformat(
-            valid_end.replace("Z", "+00:00")
-        ).replace(tzinfo=None)
+        vp_end = datetime.fromisoformat(valid_end.replace("Z", "+00:00")).replace(tzinfo=None)
         b_end = (vp_end + timedelta(days=1)).strftime("%Y-%m-%d")
     else:
         b_end = (now_date + timedelta(days=fallback_days)).strftime("%Y-%m-%d")
@@ -51,9 +49,7 @@ def booking_date_range(
     return b_start, b_end
 
 
-def _segment_to_display_row(
-    segment: dict, booking_number: str, now: datetime
-) -> dict:
+def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -> dict:
     """
     Transform a raw booking segment into a display row dict.
 
@@ -77,9 +73,7 @@ def _segment_to_display_row(
 
     in_past = "N"
     try:
-        dep_parsed = datetime.fromisoformat(
-            dep_dt.replace("Z", "+00:00")
-        ).replace(tzinfo=None)
+        dep_parsed = datetime.fromisoformat(dep_dt.replace("Z", "+00:00")).replace(tzinfo=None)
         if dep_parsed < now:
             in_past = "Y"
     except (ValueError, AttributeError):
@@ -129,9 +123,7 @@ def get_departure_time_minutes(dep: dict) -> int:
 def check_comfort_availability(departure: dict, requested_class: str) -> bool:
     """Check if a departure supports the requested class based on serviceProperties."""
     props = [
-        p.get("code")
-        for leg in departure.get("legs", [])
-        for p in leg.get("serviceProperties", [])
+        p.get("code") for leg in departure.get("legs", []) for p in leg.get("serviceProperties", [])
     ]
 
     has_1_class = "COMFORT-AB" in props
@@ -314,9 +306,7 @@ def find_offer_id(
                     continue
 
                 if not flex_data.get("available"):
-                    logger.warning(
-                        f"found {comf_key}/{flex_type} but it is not available"
-                    )
+                    logger.warning(f"found {comf_key}/{flex_type} but it is not available")
                     continue
 
                 prices = flex_data.get("journeyPrices", {})
@@ -329,13 +319,11 @@ def find_offer_id(
                     amount_val = -1
 
                 if amount_val == 0:
-                    logger.info(f"found 0-price offer: {comf_key} - {flex_type}")
+                    logger.info(f"found offer: {comf_key} - {flex_type}")
                     specific_offer_id = flex_data.get("offerId")
                     if specific_offer_id:
                         return specific_offer_id
-                    logger.warning(
-                        "found 0-price match but no offerId in flex object"
-                    )
+                    logger.warning("found match but no offerId in flex object")
                     return None
                 logger.warning(
                     f"offer found {comf_key}/{flex_type} but price is {amount} "
@@ -419,7 +407,7 @@ def _try_alternative_departure(
         offers = client.get_offers(access_token, dep_id, passenger_token)
     offer_id = find_offer_id(offers, valid_class, flexibility)
     if offer_id:
-        pinfo(f"found 0-price offer at alternative departure {time_str}")
+        pinfo(f"found offer at alternative departure {time_str}")
         return {
             "offer_id": offer_id,
             "time_str": time_str,
@@ -465,9 +453,7 @@ def poll_and_select(
     )
 
 
-def check_existing_booking(
-    bookings: list, origin_id: str, dest_id: str, date_str: str
-) -> bool:
+def check_existing_booking(bookings: list, origin_id: str, dest_id: str, date_str: str) -> bool:
     """Check if a booking already exists for the given route and date."""
     for item in bookings:
         booking_details = item.get("booking", {})
@@ -491,9 +477,7 @@ def check_existing_booking(
     return False
 
 
-def fetch_all_bookings(
-    client: SJClient, access_token: str, start_date: str, end_date: str
-) -> list:
+def fetch_all_bookings(client: SJClient, access_token: str, start_date: str, end_date: str) -> list:
     """
     Fetch all bookings with pagination.
 
@@ -524,9 +508,7 @@ def fetch_all_bookings(
     return bookings_list
 
 
-def cleanup_stale_provisionals(
-    client: SJClient, access_token: str, bookings: list
-) -> list:
+def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: list) -> list:
     """
     Cancel stale provisional bookings and return the filtered list.
 
@@ -630,13 +612,19 @@ def handle_booking_process(
                 if not offer_id:
                     # Try alternative (earlier departure for outbound)
                     pinfo(
-                        f"no valid 0-price offer for outbound at {best_out['time_str']}, "
+                        f"no valid offer found for outbound at {best_out['time_str']},"
                         f"looking for closest alternative"
                     )
                     alt = _try_alternative_departure(
-                        client, access_token, out_search_id, target_time,
-                        params["comfort_class"], flexibility, allow_fallback,
-                        passenger_token, best_out["id"],
+                        client,
+                        access_token,
+                        out_search_id,
+                        target_time,
+                        params["comfort_class"],
+                        flexibility,
+                        allow_fallback,
+                        passenger_token,
+                        best_out["id"],
                         prefer_earlier=True,
                     )
                     if alt:
@@ -676,13 +664,19 @@ def handle_booking_process(
                     booking_id = b_resp.get("bookingId") or b_resp.get("id")
                 else:
                     pinfo(
-                        f"no valid 0-price offer for outbound {origin} → {dest} "
+                        f"no valid offer found for outbound {origin} → {dest}"
                         f"at {best_out['time_str']}, looking for closest alternative"
                     )
                     alt = _try_alternative_departure(
-                        client, access_token, out_search_id, target_time,
-                        params["comfort_class"], flexibility, allow_fallback,
-                        passenger_token, best_out["id"],
+                        client,
+                        access_token,
+                        out_search_id,
+                        target_time,
+                        params["comfort_class"],
+                        flexibility,
+                        allow_fallback,
+                        passenger_token,
+                        best_out["id"],
                         prefer_earlier=True,
                     )
                     if alt:
@@ -732,13 +726,19 @@ def handle_booking_process(
                 offer_id = find_offer_id(offers, best_in["class"], flexibility)
                 if not offer_id:
                     pinfo(
-                        f"no valid 0-price offer for inbound at {best_in['time_str']}, "
+                        f"no valid offer found for inbound at {best_in['time_str']},"
                         f"looking for closest alternative"
                     )
                     alt = _try_alternative_departure(
-                        client, access_token, in_search_id, target_time,
-                        params["comfort_class"], flexibility, allow_fallback,
-                        passenger_token, best_in["id"],
+                        client,
+                        access_token,
+                        in_search_id,
+                        target_time,
+                        params["comfort_class"],
+                        flexibility,
+                        allow_fallback,
+                        passenger_token,
+                        best_in["id"],
                         prefer_earlier=False,
                     )
                     if alt:
@@ -782,18 +782,26 @@ def handle_booking_process(
                         # Inbound-only search (one-way): API treats as outbound
                         with spinner(f"creating booking with inbound at {best_in['time_str']}"):
                             b_resp = client.create_provisional_booking(
-                                access_token, offer_id, passenger_token,
+                                access_token,
+                                offer_id,
+                                passenger_token,
                             )
                         booking_id = b_resp.get("bookingId") or b_resp.get("id")
                 else:
                     pinfo(
-                        f"no valid 0-price offer for inbound {dest} → {origin} "
+                        f"no valid offer found for inbound {dest} → {origin}"
                         f"at {best_in['time_str']}, looking for closest alternative"
                     )
                     alt = _try_alternative_departure(
-                        client, access_token, in_search_id, target_time,
-                        params["comfort_class"], flexibility, allow_fallback,
-                        passenger_token, best_in["id"],
+                        client,
+                        access_token,
+                        in_search_id,
+                        target_time,
+                        params["comfort_class"],
+                        flexibility,
+                        allow_fallback,
+                        passenger_token,
+                        best_in["id"],
                         prefer_earlier=False,
                     )
                     if alt:
@@ -806,7 +814,9 @@ def handle_booking_process(
                             alt_time = alt["time_str"]
                             with spinner(f"creating alternative inbound booking at {alt_time}"):
                                 b_resp = client.create_provisional_booking(
-                                    access_token, alt["offer_id"], passenger_token,
+                                    access_token,
+                                    alt["offer_id"],
+                                    passenger_token,
                                 )
                             booking_id = b_resp.get("bookingId") or b_resp.get("id")
                     elif booking_id:
@@ -886,7 +896,12 @@ def _search_and_book_one_way(
     logger.info(f"searching {direction} one-way: {from_station} → {to_station}")
 
     search_resp = client.search_journey(
-        access_token, from_station, to_station, date_str, None, tp_product_id,
+        access_token,
+        from_station,
+        to_station,
+        date_str,
+        None,
+        tp_product_id,
         service_types,
     )
     passenger_token = search_resp.get("passengerListId") or tp_token_id
@@ -898,13 +913,29 @@ def _search_and_book_one_way(
 
     if is_outbound:
         return handle_booking_process(
-            client, access_token, cfg, passenger_token,
-            search_id, None, True, False, dry_run, date_str,
+            client,
+            access_token,
+            cfg,
+            passenger_token,
+            search_id,
+            None,
+            True,
+            False,
+            dry_run,
+            date_str,
         )
     # Inbound as one-way: API sees it as outbound (do_out=False, do_in=True)
     return handle_booking_process(
-        client, access_token, cfg, passenger_token,
-        None, search_id, False, True, dry_run, date_str,
+        client,
+        access_token,
+        cfg,
+        passenger_token,
+        None,
+        search_id,
+        False,
+        True,
+        dry_run,
+        date_str,
     )
 
 
@@ -939,14 +970,10 @@ def process_booking_flow(
     logger.info(f"processing date: {date_str}")
 
     # Check duplicates
-    has_outbound = check_existing_booking(
-        existing_bookings, origin_id, dest_id, date_str
-    )
+    has_outbound = check_existing_booking(existing_bookings, origin_id, dest_id, date_str)
     has_inbound = False
     if do_roundtrip:
-        has_inbound = check_existing_booking(
-            existing_bookings, dest_id, origin_id, date_str
-        )
+        has_inbound = check_existing_booking(existing_bookings, dest_id, origin_id, date_str)
 
     if has_outbound and (not do_roundtrip or has_inbound):
         pinfo(f"{date_str}: already fully booked, skipping")
@@ -954,6 +981,11 @@ def process_booking_flow(
 
     req_outbound = not has_outbound
     req_inbound = do_roundtrip and not has_inbound
+
+    if do_roundtrip and req_outbound and not req_inbound:
+        pinfo(f"{date_str}: inbound already booked, searching outbound only")
+    elif do_roundtrip and not req_outbound and req_inbound:
+        pinfo(f"{date_str}: outbound already booked, searching inbound only")
 
     service_types = params.get("service_types")
     if service_types and service_types == ["ALL"]:
@@ -971,15 +1003,31 @@ def process_booking_flow(
             logger.info("booking roundtrip with partial fallback (separate searches)")
 
             out_result = _search_and_book_one_way(
-                client, access_token, cfg, origin_name, dest_name,
-                date_str, tp_product_id, tp_token_id, service_types,
-                is_outbound=True, dry_run=dry_run,
+                client,
+                access_token,
+                cfg,
+                origin_name,
+                dest_name,
+                date_str,
+                tp_product_id,
+                tp_token_id,
+                service_types,
+                is_outbound=True,
+                dry_run=dry_run,
             )
 
             in_result = _search_and_book_one_way(
-                client, access_token, cfg, dest_name, origin_name,
-                date_str, tp_product_id, tp_token_id, service_types,
-                is_outbound=False, dry_run=dry_run,
+                client,
+                access_token,
+                cfg,
+                dest_name,
+                origin_name,
+                date_str,
+                tp_product_id,
+                tp_token_id,
+                service_types,
+                is_outbound=False,
+                dry_run=dry_run,
             )
 
             if dry_run:
@@ -994,7 +1042,12 @@ def process_booking_flow(
         # Normal roundtrip search (single API call)
         logger.info("booking roundtrip (both legs missing)")
         search_resp = client.search_journey(
-            access_token, origin_name, dest_name, date_str, date_str, tp_product_id,
+            access_token,
+            origin_name,
+            dest_name,
+            date_str,
+            date_str,
+            tp_product_id,
             service_types,
         )
         passenger_token = search_resp.get("passengerListId") or tp_token_id
@@ -1003,8 +1056,16 @@ def process_booking_flow(
 
         if out_id and in_id:
             return handle_booking_process(
-                client, access_token, cfg, passenger_token,
-                out_id, in_id, True, True, dry_run, date_str
+                client,
+                access_token,
+                cfg,
+                passenger_token,
+                out_id,
+                in_id,
+                True,
+                True,
+                dry_run,
+                date_str,
             )
         logger.error("failed to get both outbound and inbound search IDs")
         return None
@@ -1012,15 +1073,28 @@ def process_booking_flow(
     if req_outbound:
         logger.info("booking outbound only")
         search_resp = client.search_journey(
-            access_token, origin_name, dest_name, date_str, None, tp_product_id,
+            access_token,
+            origin_name,
+            dest_name,
+            date_str,
+            None,
+            tp_product_id,
             service_types,
         )
         passenger_token = search_resp.get("passengerListId") or tp_token_id
         out_id = search_resp.get("departureSearchId")
         if out_id:
             return handle_booking_process(
-                client, access_token, cfg, passenger_token,
-                out_id, None, True, False, dry_run, date_str
+                client,
+                access_token,
+                cfg,
+                passenger_token,
+                out_id,
+                None,
+                True,
+                False,
+                dry_run,
+                date_str,
             )
         return None
 
@@ -1028,15 +1102,28 @@ def process_booking_flow(
         # Inbound-only: swap origin/dest
         logger.info("booking inbound only (return leg)")
         search_resp = client.search_journey(
-            access_token, dest_name, origin_name, date_str, None, tp_product_id,
+            access_token,
+            dest_name,
+            origin_name,
+            date_str,
+            None,
+            tp_product_id,
             service_types,
         )
         passenger_token = search_resp.get("passengerListId") or tp_token_id
         in_id = search_resp.get("departureSearchId")
         if in_id:
             return handle_booking_process(
-                client, access_token, cfg, passenger_token,
-                None, in_id, False, True, dry_run, date_str
+                client,
+                access_token,
+                cfg,
+                passenger_token,
+                None,
+                in_id,
+                False,
+                True,
+                dry_run,
+                date_str,
             )
         return None
 
@@ -1085,33 +1172,43 @@ def process_date_range(
 
         try:
             result = process_booking_flow(
-                client, access_token, cfg, curr,
-                tp_product_id, tp_token_id, existing_bookings, dry_run
+                client,
+                access_token,
+                cfg,
+                curr,
+                tp_product_id,
+                tp_token_id,
+                existing_bookings,
+                dry_run,
             )
             if dry_run and result:
                 # Flatten outbound/inbound into separate rows
                 if "outbound" in result:
                     out = result["outbound"]
-                    results.append({
-                        "date": date_str,
-                        "direction": "Outbound",
-                        "departure": out.get("departure", "—"),
-                        "arrival": out.get("arrival", "—"),
-                        "comfort_class": out.get("class", "—"),
-                        "flexibility": out.get("flexibility") or "—",
-                        "note": "" if out.get("has_offer") else "no 0-price offer",
-                    })
+                    results.append(
+                        {
+                            "date": date_str,
+                            "direction": "Outbound",
+                            "departure": out.get("departure", "—"),
+                            "arrival": out.get("arrival", "—"),
+                            "comfort_class": out.get("class", "—"),
+                            "flexibility": out.get("flexibility") or "—",
+                            "note": "" if out.get("has_offer") else "no 0-price offer",
+                        }
+                    )
                 if "inbound" in result:
                     inb = result["inbound"]
-                    results.append({
-                        "date": date_str,
-                        "direction": "Return",
-                        "departure": inb.get("departure", "—"),
-                        "arrival": inb.get("arrival", "—"),
-                        "comfort_class": inb.get("class", "—"),
-                        "flexibility": inb.get("flexibility") or "—",
-                        "note": "" if inb.get("has_offer") else "no 0-price offer",
-                    })
+                    results.append(
+                        {
+                            "date": date_str,
+                            "direction": "Return",
+                            "departure": inb.get("departure", "—"),
+                            "arrival": inb.get("arrival", "—"),
+                            "comfort_class": inb.get("class", "—"),
+                            "flexibility": inb.get("flexibility") or "—",
+                            "note": "" if inb.get("has_offer") else "no 0-price offer",
+                        }
+                    )
         except Exception as e:
             logger.error(f"error processing {date_str}: {e}")
             pinfo(f"error processing {date_str}: {e}")
@@ -1165,8 +1262,9 @@ def handle_cancel_mode(
                 if l_date != cancel_date:
                     continue
 
-                if (l_origin == origin_id and l_dest == dest_id) or \
-                   (l_origin == dest_id and l_dest == origin_id):
+                if (l_origin == origin_id and l_dest == dest_id) or (
+                    l_origin == dest_id and l_dest == origin_id
+                ):
                     b_num = booking.get("bookingNumber")
                     if b_num:
                         matched_numbers.add(b_num)
@@ -1225,17 +1323,12 @@ def handle_cancel_booking(
         return
 
     booking = matched_item.get("booking", {})
-    b_id = (
-        booking.get("bookingId")
-        or booking.get("id")
-        or matched_item.get("bookingId")
-    )
+    b_id = booking.get("bookingId") or booking.get("id") or matched_item.get("bookingId")
 
     # Check if there's a pending cancellation that needs to be resolved
     booking_status = booking.get("bookingStatus", "")
-    possible_actions = (
-        booking.get("possibleActions", [])
-        + booking.get("bookingPossibleActions", [])
+    possible_actions = booking.get("possibleActions", []) + booking.get(
+        "bookingPossibleActions", []
     )
     if booking_status == "CHANGED" and "REVERT" in possible_actions:
         pinfo(f"booking {booking_number} has a pending cancellation in progress")
@@ -1288,20 +1381,22 @@ def handle_cancel_booking(
 
                 dep_station = seg.get("departureStation", {}).get("name", "—")
                 arr_station = seg.get("arrivalStation", {}).get("name", "—")
-                segments_to_cancel.append({
-                    "serviceIdentifier": service_id,
-                    "passengerIds": passenger_ids,
-                    "_label": (
-                        f"{row['direction']}  {row['date']}  "
-                        f"{row['departure']} → {row['arrival']}  "
-                        f"{dep_station} → {arr_station}"
-                    ),
-                    "_date": row["date"],
-                    "_direction": row["direction"],
-                    "_dep_time": row["departure"],
-                    "_arr_time": row["arrival"],
-                    "_route": row["route"],
-                })
+                segments_to_cancel.append(
+                    {
+                        "serviceIdentifier": service_id,
+                        "passengerIds": passenger_ids,
+                        "_label": (
+                            f"{row['direction']}  {row['date']}  "
+                            f"{row['departure']} → {row['arrival']}  "
+                            f"{dep_station} → {arr_station}"
+                        ),
+                        "_date": row["date"],
+                        "_direction": row["direction"],
+                        "_dep_time": row["departure"],
+                        "_arr_time": row["arrival"],
+                        "_route": row["route"],
+                    }
+                )
 
     print_bookings_table(display_rows, f"Booking {booking_number}")
     print()
