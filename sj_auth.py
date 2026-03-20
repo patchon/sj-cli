@@ -64,7 +64,7 @@ def perform_full_login(
     logger.info("starting full authentication flow ...")
 
     try:
-        # Try cookie-based silent login first (may skip MFA)
+        # Try SSO cookie-based silent login first (no credentials needed)
         if token_manager:
             cookies = token_manager.load_cookies()
             if cookies:
@@ -72,50 +72,20 @@ def perform_full_login(
                 client.import_cookies(cookies)
                 try:
                     with spinner("attempting session restore"):
-                        mfa_required = client.initiate_login(email, password)
-                    if not mfa_required:
+                        auth_code = client.try_silent_login()
+                    if auth_code:
                         with spinner("restoring session"):
-                            auth_code = client.finalize_login()
-                            if auth_code:
-                                token_data = client.exchange_code(auth_code)
-                                token_manager.save_cookies(client.export_cookies())
-                                return token_data
-                        logger.warning("cookie-based login: finalize returned no code")
-                    else:
-                        logger.info(
-                            "cookie-based login still requires MFA, "
-                            "continuing with SMS flow"
-                        )
-                        # MFA required — continue directly with SMS below
-                        # (don't re-init, the login state is valid)
-                        pinfo("sms verification required")
-                        client.sms_trigger()
-
-                        code = read_sms_code()
-                        if not code:
-                            raise SJAuthError(
-                                "sms code not provided or timed out after 2 minutes"
-                            )
-
-                        with spinner("verifying sms code"):
-                            client.sms_verify(code)
-                            auth_code = client.finalize_login()
-                        if not auth_code:
-                            raise SJAuthError(
-                                "could not retrieve authorization code "
-                                "from final redirect"
-                            )
-
-                        with spinner("exchanging authorization code"):
                             token_data = client.exchange_code(auth_code)
                         token_manager.save_cookies(client.export_cookies())
                         return token_data
-                except SJAuthError:
-                    raise
+                    logger.info("silent login failed, falling back to full login")
                 except Exception as e:
-                    logger.warning(f"cookie-based login failed: {e}")
-                    # Reset client state for fresh attempt
-                    client.reset()
+                    logger.warning(f"cookie-based silent login failed: {e}")
+                # Reset client state for fresh attempt (new PKCE codes etc.)
+                client.reset()
+                # Re-import cookies so the full login flow can still benefit
+                # from the SSO cookie (e.g. for device trust)
+                client.import_cookies(cookies)
 
         # Full login flow (no cookies or cookie attempt failed)
         with spinner("performing login"):

@@ -153,6 +153,7 @@ def validate_dates_against_pass(cfg: dict, travel_pass: dict) -> None:
             f"search dates ({params['date_start']} – {params['date_end']}) "
             f"are outside travel pass validity "
             f"({vp_start.strftime('%Y-%m-%d')} – {vp_end.strftime('%Y-%m-%d')})"
+            f"\n"
         )
         sys.exit(1)
 

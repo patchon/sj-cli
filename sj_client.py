@@ -247,6 +247,46 @@ class SJClient:
     # PUBLIC
     #
 
+    def try_silent_login(self) -> str | None:
+        """
+        Attempt SSO-based silent login using existing cookies.
+
+        Sends the authorize request without following redirects. If the
+        x-ms-cpim-sso cookie is valid, the server returns a 302 with an
+        auth code directly — no credentials, no MFA needed.
+
+        Returns:
+            The authorization code if silent login succeeded, None otherwise.
+
+        """
+        logger.info("attempting silent login via SSO cookie ...")
+
+        params = {
+            "client_id": self.CLIENT_ID,
+            "code_challenge": self.code_challenge,
+            "code_challenge_method": "S256",
+            "nonce": self.nonce,
+            "redirect_uri": self.REDIRECT_URI,
+            "response_type": "code",
+            "scope": self.SCOPE,
+            "state": self.state,
+            "prompt": "none",
+        }
+
+        resp = self.client.get(
+            self.AUTH_BASE, params=params, follow_redirects=False
+        )
+        logger.info(f"silent login response code: {resp.status_code}")
+
+        if resp.status_code in (301, 302, 303):
+            auth_code = self._extract_auth_code(resp)
+            if auth_code:
+                logger.info("silent login succeeded — SSO cookie is valid")
+                return auth_code
+
+        logger.info("silent login failed — SSO cookie expired or missing")
+        return None
+
     def initiate_login(self, email: str, password: str) -> bool:
         """
         Orchestrates the initial login sequence for SJ B2C authentication.
@@ -746,6 +786,8 @@ class SJClient:
 
         Sends a GET request to the 'confirmed' endpoint to finalize the
         credential submission phase and prepare for device fingerprinting.
+        Extracts verified device IDs from SA_FIELDS for use in the
+        subsequent device fingerprint step.
         """
         logger.info("fetching 'confirmed' endpoint ...")
         tx_param = self._get_state_properties()
@@ -754,7 +796,7 @@ class SJClient:
             "csrf_token": self.csrf_token,
             "diags": '{"pageViewId":"test","pageId":"CombinedSigninAndSignup","trace":[]}',
             "p": self.PATH_B2C_POLICY,
-            "rememberMe": "false",
+            "rememberMe": "true",
             "tx": tx_param,
         }
 
@@ -774,6 +816,20 @@ class SJClient:
         # Set / update csrf and store confirmation url for referer
         self._get_csrf_token(resp.headers)
         self._confirmed_url = url_confirm
+
+        # Extract verified device IDs from SA_FIELDS — the server populates
+        # these when it recognizes the device via SSO cookies. They must be
+        # forwarded in the device fingerprint step to skip MFA.
+        self._verified_device_id = self._extract_sa_field(
+            resp.text, "verifiedDeviceId"
+        ) or ""
+        self._verified_device_unique_id = self._extract_sa_field(
+            resp.text, "verifiedDeviceUniqueId"
+        ) or ""
+        if self._verified_device_id:
+            logger.info("found verified device IDs from server (device is trusted)")
+        else:
+            logger.info("no verified device IDs from server (new/untrusted device)")
 
     def _extract_b2c_settings(self, html_content: str) -> None:
         """
@@ -954,8 +1010,9 @@ class SJClient:
         """
         Sends a generated device fingerprint to the provider.
 
-        Constructs a payload with random device IDs to mimic a browser
-        environment and submits it to the self-asserted endpoint.
+        Constructs a payload with device IDs and submits it to the
+        self-asserted endpoint. Includes verified device IDs extracted
+        from the confirm stage if available (allows skipping MFA).
         """
         logger.info("sending device fingerprint ...")
 
@@ -963,14 +1020,18 @@ class SJClient:
         device_unique_id = base64.b64encode(secrets.token_bytes(24)).decode()
         unique_id = str(secrets.token_urlsafe(16))
 
+        # Use verified device IDs from _confirm_login_stage if available
+        verified_id = getattr(self, "_verified_device_id", "") or ""
+        verified_unique_id = getattr(self, "_verified_device_unique_id", "") or ""
+
         payload = {
             "deviceUniqueIdUserId": device_unique_id,
             "deviceUserId": device_user_id,
             "request_type": "RESPONSE",
             "uniqueId": unique_id,
             "userAgent": self.client.headers["User-Agent"],
-            "verifiedDeviceId": "",
-            "verifiedDeviceUniqueId": "",
+            "verifiedDeviceId": verified_id,
+            "verifiedDeviceUniqueId": verified_unique_id,
         }
 
         headers = {
