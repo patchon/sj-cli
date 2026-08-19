@@ -3,3 +3,4 @@
 __pycache__/
 curl-traces/
 venv/
+config.toml

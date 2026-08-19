@@ -1,0 +1,24 @@
+# Copy to ~/.config/sj-api-client/config.toml (or $XDG_CONFIG_HOME/sj-api-client/config.toml)
+# and fill in your own values. See SPEC.md §4 for validation rules.
+
+[auth]
+email = "user@example.com"
+password = "your-password"
+
+[search_parameters]
+date_start = "2026-01-19"
+date_end = "2026-03-20"
+time_leave = "05:29"
+time_return = "17:22"
+station_from = "Göteborg Central"
+station_to = "Stockholm Central"
+comfort_class = "2 class calm"    # "1 class", "2 class", "2 class calm"
+flexibility = "FULLFLEX"          # FULLFLEX, SEMIFLEX, NOFLEX
+roundtrip = true
+select_closest_ticket_available = true
+allow_class_fallback = true       # optional, defaults to true
+book_partial = false              # optional; book the return leg alone if the outbound is unavailable (SPEC §6.5)
+skip_weekends = true              # optional, defaults to true
+skip_holidays = true              # optional, defaults to true — Swedish red days incl. Midsommar-/Jul-/Nyårsafton
+service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
+# Valid: ALL, SJ_HIGH, SJ_IC, SJ_REG, SJ_NT, X_TRAINOPS, X_PTA, X_EXPBUS
