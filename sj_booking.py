@@ -596,6 +596,147 @@ def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: li
     return valid_bookings
 
 
+def _resolve_leg(
+    client: SJClient,
+    access_token: str,
+    params: dict,
+    passenger_token: str,
+    search_id: str,
+    leg: str,
+    date_str: str,
+) -> dict:
+    """
+    Search one leg, pick the best departure and find a 0-price offer for it.
+
+    Shared by dry-run and booking mode: everything up to (but excluding) the
+    actual booking call is identical. If the closest departure has no offer,
+    one alternative is tried (earlier for outbound, later for inbound).
+
+    Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        params: cfg["search_parameters"].
+        passenger_token: Passenger token for the offers call.
+        search_id: Departure search ID for this leg.
+        leg: "outbound" or "inbound".
+        date_str: Date string for display purposes.
+
+    Returns:
+        {"found": False} when no departure exists at all; otherwise
+        {"found": True, "has_offer": bool, "departure": "HH:MM",
+         "arrival": "HH:MM", "class": str, "offer_id": str | None,
+         "alternative": bool} describing the chosen departure (the
+         alternative one if that is where the offer was found).
+
+    """
+    outbound = leg == "outbound"
+    origin, dest = params["station_from"], params["station_to"]
+    route = f"{origin} → {dest}" if outbound else f"{dest} → {origin}"
+    target_time = params.get("time_leave") if outbound else params.get("time_return", "17:00")
+    requested_class = params["comfort_class"]
+    flexibility = params.get("flexibility", "FULLFLEX")
+    allow_fallback = params.get("allow_class_fallback", True)
+
+    with spinner(f"searching {date_str}: {route} at {target_time}"):
+        best = poll_and_select(
+            client,
+            access_token,
+            search_id,
+            target_time,
+            requested_class,
+            params.get("select_closest_ticket_available", False),
+            allow_fallback,
+        )
+    if not best:
+        return {"found": False}
+
+    if best["diff"] != 0:
+        pinfo(
+            f"no exact match for {target_time}, closest is {best['time_str']} ({best['diff']:+d}m)"
+        )
+    logger.info(f"selected {leg}: {best['time_str']}")
+
+    with spinner(f"checking offers for {leg} at {best['time_str']}"):
+        offers = client.get_offers(access_token, best["id"], passenger_token)
+    offer_result = find_offer_id(offers, best["class"], flexibility)
+    if offer_result:
+        offer_id, matched_class = offer_result
+        if matched_class != best["class"]:
+            pinfo(f"{leg} class fallback: {best['class']} → {matched_class}")
+        return {
+            "found": True,
+            "has_offer": True,
+            "departure": best["time_str"],
+            "arrival": _get_arrival_time(best["departure"]),
+            "class": matched_class,
+            "offer_id": offer_id,
+            "alternative": False,
+        }
+
+    pinfo(
+        f"no valid offer found for {leg} {route} at {best['time_str']}, "
+        f"looking for closest alternative"
+    )
+    alt = _try_alternative_departure(
+        client,
+        access_token,
+        search_id,
+        target_time,
+        requested_class,
+        flexibility,
+        allow_fallback,
+        passenger_token,
+        best["id"],
+        prefer_earlier=outbound,
+    )
+    if alt:
+        return {
+            "found": True,
+            "has_offer": True,
+            "departure": alt["time_str"],
+            "arrival": alt["arrival"],
+            "class": alt["class"],
+            "offer_id": alt["offer_id"],
+            "alternative": True,
+        }
+    return {
+        "found": True,
+        "has_offer": False,
+        "departure": best["time_str"],
+        "arrival": _get_arrival_time(best["departure"]),
+        "class": best["class"],
+        "offer_id": None,
+        "alternative": False,
+    }
+
+
+def _dry_run_leg(resolved: dict, flexibility: str) -> dict:
+    """Dry-run row for a resolved leg (see _resolve_leg)."""
+    if not resolved["found"]:
+        return {
+            "departure": "—", "arrival": "—", "class": "—", "flexibility": "—", "has_offer": False
+        }
+    return {
+        "departure": resolved["departure"],
+        "arrival": resolved["arrival"],
+        "class": resolved["class"],
+        "flexibility": flexibility if resolved["has_offer"] else None,
+        "has_offer": resolved["has_offer"],
+    }
+
+
+def _create_provisional(
+    client: SJClient, access_token: str, passenger_token: str, resolved: dict, leg: str
+) -> tuple[str, str | None]:
+    """Create a provisional booking from a resolved leg. Returns (booking_id, booking_number)."""
+    alt = "alternative " if resolved["alternative"] else ""
+    with spinner(f"creating booking with {alt}{leg} at {resolved['departure']}"):
+        b_resp = client.create_provisional_booking(
+            access_token, resolved["offer_id"], passenger_token
+        )
+    return b_resp.get("bookingId") or b_resp.get("id"), b_resp.get("bookingNumber")
+
+
 def handle_booking_process(
     client: SJClient,
     access_token: str,
@@ -603,23 +744,24 @@ def handle_booking_process(
     passenger_token: str,
     out_search_id: str | None,
     in_search_id: str | None,
-    do_out: bool,
-    do_in: bool,
     dry_run: bool = False,
     date_str: str = "",
 ) -> dict | None:
     """
-    Handle the booking creation for outbound and/or inbound legs.
+    Resolve and book the outbound and/or inbound leg, then check out.
+
+    Pass a search ID for each leg that should be handled; None skips it. With
+    both IDs the return leg is added to the outbound booking (one booking
+    number); with only in_search_id the return leg is booked on its own (the
+    API sees a one-way search as "outbound").
 
     Args:
         client: The SJ HTTP client.
         access_token: Valid access token.
         cfg: The full config dict.
         passenger_token: Passenger token for booking.
-        out_search_id: Outbound search ID (None if not needed).
-        in_search_id: Inbound search ID (None if not needed).
-        do_out: Whether to book outbound.
-        do_in: Whether to book inbound.
+        out_search_id: Outbound search ID, or None to skip the outbound leg.
+        in_search_id: Inbound search ID, or None to skip the inbound leg.
         dry_run: If True, collect results without booking.
         date_str: Date string for display purposes.
 
@@ -633,10 +775,6 @@ def handle_booking_process(
     """
     params = cfg["search_parameters"]
     flexibility = params.get("flexibility", "FULLFLEX")
-    allow_fallback = params.get("allow_class_fallback", True)
-
-    origin = params["station_from"]
-    dest = params["station_to"]
 
     booking_id = None
     booking_number = None
@@ -644,279 +782,53 @@ def handle_booking_process(
     dry_run_result = {}
 
     # 1. Outbound
-    if do_out and out_search_id:
-        target_time = params.get("time_leave")
-        with spinner(f"searching {date_str}: {origin} → {dest} at {target_time}"):
-            best_out = poll_and_select(
-                client,
-                access_token,
-                out_search_id,
-                target_time,
-                params["comfort_class"],
-                params.get("select_closest_ticket_available", False),
-                allow_fallback,
-            )
-        if best_out and best_out["diff"] != 0:
-            pinfo(
-                f"no exact match for {target_time}, "
-                f"closest is {best_out['time_str']} ({best_out['diff']:+d}m)"
-            )
-        if best_out:
-            if dry_run:
-                # Collect dry-run info: check offer availability
-                with spinner(f"checking offers for outbound at {best_out['time_str']}"):
-                    offers = client.get_offers(access_token, best_out["id"], passenger_token)
-                offer_result = find_offer_id(offers, best_out["class"], flexibility)
-                if not offer_result:
-                    # Try alternative (earlier departure for outbound)
-                    pinfo(
-                        f"no valid offer found for outbound at {best_out['time_str']},"
-                        f"looking for closest alternative"
-                    )
-                    alt = _try_alternative_departure(
-                        client,
-                        access_token,
-                        out_search_id,
-                        target_time,
-                        params["comfort_class"],
-                        flexibility,
-                        allow_fallback,
-                        passenger_token,
-                        best_out["id"],
-                        prefer_earlier=True,
-                    )
-                    if alt:
-                        dry_run_result["outbound"] = {
-                            "departure": alt["time_str"],
-                            "arrival": alt["arrival"],
-                            "class": alt["class"],
-                            "flexibility": flexibility,
-                            "has_offer": True,
-                        }
-                    else:
-                        dry_run_result["outbound"] = {
-                            "departure": best_out["time_str"],
-                            "arrival": _get_arrival_time(best_out["departure"]),
-                            "class": best_out["class"],
-                            "flexibility": None,
-                            "has_offer": False,
-                        }
-                else:
-                    _, matched_class = offer_result
-                    if matched_class != best_out["class"]:
-                        pinfo(f"outbound class fallback: {best_out['class']} → {matched_class}")
-                    dry_run_result["outbound"] = {
-                        "departure": best_out["time_str"],
-                        "arrival": _get_arrival_time(best_out["departure"]),
-                        "class": matched_class,
-                        "flexibility": flexibility,
-                        "has_offer": True,
-                    }
-            else:
-                logger.info(f"selected outbound: {best_out['time_str']}")
-                with spinner(f"checking offers for outbound at {best_out['time_str']}"):
-                    offers = client.get_offers(access_token, best_out["id"], passenger_token)
-                offer_result = find_offer_id(offers, best_out["class"], flexibility)
-                if offer_result:
-                    offer_id, matched_class = offer_result
-                    if matched_class != best_out["class"]:
-                        pinfo(f"outbound class fallback: {best_out['class']} → {matched_class}")
-                    with spinner(f"creating booking with outbound at {best_out['time_str']}"):
-                        b_resp = client.create_provisional_booking(
-                            access_token, offer_id, passenger_token
-                        )
-                    booking_id = b_resp.get("bookingId") or b_resp.get("id")
-                    booking_number = b_resp.get("bookingNumber")
-                    legs.append("outbound")
-                else:
-                    pinfo(
-                        f"no valid offer found for outbound {origin} → {dest}"
-                        f"at {best_out['time_str']}, looking for closest alternative"
-                    )
-                    alt = _try_alternative_departure(
-                        client,
-                        access_token,
-                        out_search_id,
-                        target_time,
-                        params["comfort_class"],
-                        flexibility,
-                        allow_fallback,
-                        passenger_token,
-                        best_out["id"],
-                        prefer_earlier=True,
-                    )
-                    if alt:
-                        alt_time = alt["time_str"]
-                        with spinner(f"creating booking with alternative outbound at {alt_time}"):
-                            b_resp = client.create_provisional_booking(
-                                access_token, alt["offer_id"], passenger_token
-                            )
-                        booking_id = b_resp.get("bookingId") or b_resp.get("id")
-                        booking_number = b_resp.get("bookingNumber")
-                        legs.append("outbound")
-                    else:
-                        # Nothing can be booked without an outbound offer; the
-                        # caller handles the partial (return-leg-only) fallback.
-                        return None
-        elif dry_run:
-            dry_run_result["outbound"] = {
-                "departure": "—",
-                "arrival": "—",
-                "class": "—",
-                "flexibility": "—",
-                "has_offer": False,
-            }
-        else:
+    if out_search_id:
+        out = _resolve_leg(
+            client, access_token, params, passenger_token, out_search_id, "outbound", date_str
+        )
+        if dry_run:
+            dry_run_result["outbound"] = _dry_run_leg(out, flexibility)
+        elif not out["found"]:
             pinfo("no departure found for outbound")
             return None
+        elif not out["has_offer"]:
+            # Nothing can be booked without an outbound offer; the caller
+            # handles the partial (return-leg-only) fallback.
+            return None
+        else:
+            booking_id, booking_number = _create_provisional(
+                client, access_token, passenger_token, out, "outbound"
+            )
+            legs.append("outbound")
 
     # 2. Inbound
-    if do_in and in_search_id:
-        target_time = params.get("time_return", "17:00")
-        with spinner(f"searching {date_str}: {dest} → {origin} at {target_time}"):
-            best_in = poll_and_select(
-                client,
-                access_token,
-                in_search_id,
-                target_time,
-                params["comfort_class"],
-                params.get("select_closest_ticket_available", False),
-                allow_fallback,
-            )
-        if best_in and best_in["diff"] != 0:
-            pinfo(
-                f"no exact match for {target_time}, "
-                f"closest is {best_in['time_str']} ({best_in['diff']:+d}m)"
-            )
-        if best_in:
-            if dry_run:
-                with spinner(f"checking offers for inbound at {best_in['time_str']}"):
-                    offers = client.get_offers(access_token, best_in["id"], passenger_token)
-                offer_result = find_offer_id(offers, best_in["class"], flexibility)
-                if not offer_result:
-                    pinfo(
-                        f"no valid offer found for inbound at {best_in['time_str']},"
-                        f"looking for closest alternative"
-                    )
-                    alt = _try_alternative_departure(
-                        client,
-                        access_token,
-                        in_search_id,
-                        target_time,
-                        params["comfort_class"],
-                        flexibility,
-                        allow_fallback,
-                        passenger_token,
-                        best_in["id"],
-                        prefer_earlier=False,
-                    )
-                    if alt:
-                        dry_run_result["inbound"] = {
-                            "departure": alt["time_str"],
-                            "arrival": alt["arrival"],
-                            "class": alt["class"],
-                            "flexibility": flexibility,
-                            "has_offer": True,
-                        }
-                    else:
-                        dry_run_result["inbound"] = {
-                            "departure": best_in["time_str"],
-                            "arrival": _get_arrival_time(best_in["departure"]),
-                            "class": best_in["class"],
-                            "flexibility": None,
-                            "has_offer": False,
-                        }
-                else:
-                    _, matched_class = offer_result
-                    if matched_class != best_in["class"]:
-                        pinfo(f"inbound class fallback: {best_in['class']} → {matched_class}")
-                    dry_run_result["inbound"] = {
-                        "departure": best_in["time_str"],
-                        "arrival": _get_arrival_time(best_in["departure"]),
-                        "class": matched_class,
-                        "flexibility": flexibility,
-                        "has_offer": True,
-                    }
-            else:
-                logger.info(f"selected inbound: {best_in['time_str']}")
-                with spinner(f"checking offers for inbound at {best_in['time_str']}"):
-                    offers = client.get_offers(access_token, best_in["id"], passenger_token)
-                offer_result = find_offer_id(offers, best_in["class"], flexibility)
-
-                if offer_result:
-                    offer_id, matched_class = offer_result
-                    if matched_class != best_in["class"]:
-                        pinfo(f"inbound class fallback: {best_in['class']} → {matched_class}")
-                    if booking_id:
-                        # Add return leg to existing booking
-                        with spinner(f"adding return leg at {best_in['time_str']}"):
-                            client.add_offer_to_booking(
-                                access_token, booking_id, offer_id, passenger_token
-                            )
-                        legs.append("return")
-                    elif not do_out:
-                        # Inbound-only search (one-way): API treats as outbound
-                        with spinner(f"creating booking with inbound at {best_in['time_str']}"):
-                            b_resp = client.create_provisional_booking(
-                                access_token,
-                                offer_id,
-                                passenger_token,
-                            )
-                        booking_id = b_resp.get("bookingId") or b_resp.get("id")
-                        booking_number = b_resp.get("bookingNumber")
-                        legs.append("return")
-                else:
-                    pinfo(
-                        f"no valid offer found for inbound {dest} → {origin}"
-                        f"at {best_in['time_str']}, looking for closest alternative"
-                    )
-                    alt = _try_alternative_departure(
-                        client,
-                        access_token,
-                        in_search_id,
-                        target_time,
-                        params["comfort_class"],
-                        flexibility,
-                        allow_fallback,
-                        passenger_token,
-                        best_in["id"],
-                        prefer_earlier=False,
-                    )
-                    if alt:
-                        if booking_id:
-                            with spinner(f"adding alternative return leg at {alt['time_str']}"):
-                                client.add_offer_to_booking(
-                                    access_token, booking_id, alt["offer_id"], passenger_token
-                                )
-                            legs.append("return")
-                        elif not do_out:
-                            alt_time = alt["time_str"]
-                            with spinner(f"creating alternative inbound booking at {alt_time}"):
-                                b_resp = client.create_provisional_booking(
-                                    access_token,
-                                    alt["offer_id"],
-                                    passenger_token,
-                                )
-                            booking_id = b_resp.get("bookingId") or b_resp.get("id")
-                            booking_number = b_resp.get("bookingNumber")
-                            legs.append("return")
-                    elif booking_id:
-                        pinfo("no alternative found, booking outbound only")
-                    else:
-                        return None
-        elif dry_run:
-            dry_run_result["inbound"] = {
-                "departure": "—",
-                "arrival": "—",
-                "class": "—",
-                "flexibility": "—",
-                "has_offer": False,
-            }
-        elif booking_id:
+    if in_search_id:
+        inb = _resolve_leg(
+            client, access_token, params, passenger_token, in_search_id, "inbound", date_str
+        )
+        if dry_run:
+            dry_run_result["inbound"] = _dry_run_leg(inb, flexibility)
+        elif not inb["found"]:
+            if not booking_id:
+                pinfo("no departure found for inbound")
+                return None
             pinfo("no departure found for inbound, booking outbound only")
+        elif not inb["has_offer"]:
+            if not booking_id:
+                return None
+            pinfo("no alternative found, booking outbound only")
+        elif booking_id:
+            alt = "alternative " if inb["alternative"] else ""
+            with spinner(f"adding {alt}return leg at {inb['departure']}"):
+                client.add_offer_to_booking(
+                    access_token, booking_id, inb["offer_id"], passenger_token
+                )
+            legs.append("return")
         else:
-            pinfo("no departure found for inbound")
-            return None
+            booking_id, booking_number = _create_provisional(
+                client, access_token, passenger_token, inb, "inbound"
+            )
+            legs.append("return")
 
     if dry_run:
         return dry_run_result
@@ -1007,29 +919,11 @@ def _search_and_book_one_way(
 
     if is_outbound:
         return handle_booking_process(
-            client,
-            access_token,
-            cfg,
-            passenger_token,
-            search_id,
-            None,
-            True,
-            False,
-            dry_run,
-            date_str,
+            client, access_token, cfg, passenger_token, search_id, None, dry_run, date_str
         )
-    # Inbound as one-way: API sees it as outbound (do_out=False, do_in=True)
+    # Inbound as one-way: the API sees it as outbound
     return handle_booking_process(
-        client,
-        access_token,
-        cfg,
-        passenger_token,
-        None,
-        search_id,
-        False,
-        True,
-        dry_run,
-        date_str,
+        client, access_token, cfg, passenger_token, None, search_id, dry_run, date_str
     )
 
 
@@ -1115,16 +1009,7 @@ def process_booking_flow(
             return None
 
         result = handle_booking_process(
-            client,
-            access_token,
-            cfg,
-            passenger_token,
-            out_id,
-            in_id,
-            True,
-            True,
-            dry_run,
-            date_str,
+            client, access_token, cfg, passenger_token, out_id, in_id, dry_run, date_str
         )
         if dry_run or result or not book_partial:
             return result
@@ -1160,16 +1045,7 @@ def process_booking_flow(
         out_id = search_resp.get("departureSearchId")
         if out_id:
             return handle_booking_process(
-                client,
-                access_token,
-                cfg,
-                passenger_token,
-                out_id,
-                None,
-                True,
-                False,
-                dry_run,
-                date_str,
+                client, access_token, cfg, passenger_token, out_id, None, dry_run, date_str
             )
         return None
 
@@ -1189,16 +1065,7 @@ def process_booking_flow(
         in_id = search_resp.get("departureSearchId")
         if in_id:
             return handle_booking_process(
-                client,
-                access_token,
-                cfg,
-                passenger_token,
-                None,
-                in_id,
-                False,
-                True,
-                dry_run,
-                date_str,
+                client, access_token, cfg, passenger_token, None, in_id, dry_run, date_str
             )
         return None
 

@@ -52,7 +52,10 @@ def test_outbound_no_offer_uses_closest_earlier_alternative(capsys):
     assert result["legs"] == ["outbound", "return"]
     creates = [x for x in c.calls if x[0] in ("create", "offers")]
     assert creates[:3] == [("offers", "o-best"), ("offers", "o-early"), ("create", "OFF-calm")]
-    assert "looking for closest alternative" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert ("no valid offer found for outbound linköping central → stockholm central at 06:59, "
+            "looking for closest alternative") in out
+    assert "found offer at alternative departure 06:30" in out
 
 
 def test_outbound_no_offer_no_earlier_alternative_books_nothing(capsys):
@@ -190,7 +193,7 @@ def test_dry_run_no_departures_gives_dashes():
 
 def test_handle_booking_process_inbound_only_creates_booking():
     c = FakeClient({"IN": IN})
-    result = handle_booking_process(c, "tok", base_cfg(), "PT", None, "IN", False, True, False, D)
+    result = handle_booking_process(c, "tok", base_cfg(), "PT", None, "IN", False, D)
     assert result["legs"] == ["return"] and result["booking_number"] == "NUM1"
     assert c.calls[:3] == [("results", "IN"), ("offers", "i-best"), ("create", "OFF-calm")]
 
