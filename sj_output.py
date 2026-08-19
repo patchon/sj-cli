@@ -55,8 +55,27 @@ def pad(text: str, width: int) -> str:
     return text + " " * max(0, width - visible_len(text))
 
 
+_indent = ""
+
+
 @contextmanager
-def spinner(msg: str, interval: float = 0.08):
+def indented(prefix: str = "  "):
+    """
+    Indent everything printed through pinfo/pdim/spinner/print_* inside the block.
+
+    Used to nest a day's progress and result lines under its day header.
+    """
+    global _indent  # noqa: PLW0603
+    previous = _indent
+    _indent = previous + prefix
+    try:
+        yield
+    finally:
+        _indent = previous
+
+
+@contextmanager
+def spinner(msg: str, interval: float = 0.08, trail: bool = True):
     """
     Context manager that shows a braille spinner while work runs.
 
@@ -64,22 +83,25 @@ def spinner(msg: str, interval: float = 0.08):
         with spinner("fetching bookings"):
             do_slow_work()
 
-    The spinner line is erased when the block completes and replaced by a
-    dim trail line: "✓ msg" on success, "✗ msg" if the block raised. When
-    stdout is not a TTY the spinner is skipped and only the trail line is
-    printed.
+    The spinner line is erased when the block completes and, when ``trail``
+    is true, replaced by a dim trail line: "✓ msg" on success, "✗ msg" if the
+    block raised. When stdout is not a TTY the spinner is skipped and only
+    the trail line is printed. Text is printed as given (no case changes).
 
     """
     stop = threading.Event()
-    text = msg.lower()
+    text = msg
+    prefix = _indent
 
     if not sys.stdout.isatty():
         try:
             yield
         except BaseException:
-            print(style(f"\u2717 {text}", DIM), file=sys.stdout)
+            if trail:
+                _emit(style(f"\u2717 {text}", DIM))
             raise
-        print(style(f"\u2713 {text}", DIM), file=sys.stdout)
+        if trail:
+            _emit(style(f"\u2713 {text}", DIM))
         return
 
     def _spin():
@@ -87,7 +109,7 @@ def spinner(msg: str, interval: float = 0.08):
         while not stop.is_set():
             frame = _BRAILLE_FRAMES[i % len(_BRAILLE_FRAMES)]
             with _stdout_lock:
-                sys.stdout.write(f"\r{frame} {text}")
+                sys.stdout.write(f"\r{prefix}{frame} {text}")
                 sys.stdout.flush()
             i += 1
             stop.wait(interval)
@@ -110,25 +132,36 @@ def spinner(msg: str, interval: float = 0.08):
         stop.set()
         t.join()
         _spinner_active = False
-        _emit(style(f"{mark} {text}", DIM))
+        if trail:
+            _emit(style(f"{mark} {text}", DIM))
 
 
 def _emit(line: str) -> None:
-    """Print a line to stdout; if a spinner is drawing, erase its frame first."""
+    """Print a line to stdout (indented if inside indented()); erase a live spinner frame first."""
     with _stdout_lock:
         if _spinner_active:
             sys.stdout.write("\r\033[2K")
-        print(line, file=sys.stdout)
+        print(f"{_indent}{line}" if line else line, file=sys.stdout)
 
 
 def pinfo(msg: str) -> None:
-    """Print a status message to stdout."""
-    _emit(msg.lower())
+    """
+    Print a status message to stdout.
+
+    Convention: prose is lowercase; identifiers keep their case (booking
+    numbers are upper-case, station names as SJ writes them).
+    """
+    _emit(msg)
 
 
 def pdim(msg: str) -> None:
     """Print a low-emphasis context message (dimmed when colour is enabled)."""
-    _emit(style(msg.lower(), DIM))
+    _emit(style(msg, DIM))
+
+
+def blank() -> None:
+    """Print an empty line (never indented)."""
+    _emit("")
 
 
 def format_duration(iso_duration: str) -> str:
@@ -200,34 +233,6 @@ def format_table(headers: list[str], rows: list[list[str]], title: str = "") -> 
     return "\n".join(lines)
 
 
-def print_dry_run_table(results: list[dict]) -> None:
-    """
-    Print dry-run results as a formatted table.
-
-    Args:
-        results: List of dicts with keys: date, direction, departure,
-                 arrival, comfort_class, flexibility, note. A non-empty
-                 note means the leg cannot be booked; it is shown in place
-                 of the flexibility cell.
-
-    """
-    headers = ["Date", "Direction", "Departure", "Arrival", "Class", "Flexibility"]
-    rows = []
-    for r in results:
-        note = r.get("note", "")
-        rows.append([
-            r.get("date", "\u2014"),
-            r.get("direction", "\u2014"),
-            r.get("departure", "\u2014"),
-            r.get("arrival", "\u2014"),
-            r.get("comfort_class", "\u2014"),
-            style(note, DIM) if note else r.get("flexibility", "\u2014"),
-        ])
-
-    table = format_table(headers, rows, title="\U0001f50d dry run results")
-    print(f"\n{table}", file=sys.stdout)
-
-
 def _format_date_label(date_str: str) -> str:
     """Turn 2026-08-18 into 'tue 18 aug 2026'; fall back to the raw string."""
     try:
@@ -257,7 +262,92 @@ def _group_route(legs: list[dict]) -> str:
     return " \u00b7 ".join(routes)
 
 
-def print_bookings_table(bookings: list[dict], pass_name: str, summary: bool = True) -> None:
+def day_header(date_str: str, detail: str = "", dim: bool = False) -> str:
+    """'tue 15 sep 2026   <detail>' with a bold date; the whole line dimmed when dim."""
+    label = _format_date_label(date_str)
+    line = f"{style(label, BOLD)}   {detail}" if detail else style(label, BOLD)
+    if dim:
+        line = style(_ANSI_RE.sub("", line), DIM)
+    return line
+
+
+def print_day_header(date_str: str, route: str) -> None:
+    """Start a day card: bold date + route, e.g. 'tue 15 sep 2026   A ⇄ B'."""
+    _emit(day_header(date_str, route))
+
+
+def print_day_note(date_str: str, note: str) -> None:
+    """A one-line day card for a day that needs no work: bold date + dim note."""
+    _emit(f"{style(_format_date_label(date_str), BOLD)}   {style(note, DIM)}")
+
+
+# Leg-line columns after the time range, in display order (row keys). A
+# row's "note" (why it cannot be booked) is shown dimmed in the flexibility cell.
+_LEG_COLUMNS = ("duration", "train", "seat", "comfort_class", "flexibility", "booking_number")
+
+
+def _cell(row: dict, col: str) -> str:
+    """Raw (unstyled) cell text for a leg-line column."""
+    if col == "flexibility" and row.get("note"):
+        return str(row["note"])
+    return str(row.get(col) or "\u2014")
+
+
+def _has(row: dict, col: str) -> bool:
+    return bool(row.get(col)) or (col == "flexibility" and bool(row.get("note")))
+
+
+def leg_lines(rows: list[dict]) -> list[str]:
+    """
+    Render legs as aligned lines (no indent): "-> 04:01 - 08:38   4h 37m   X 2000 520   ...".
+
+    Row keys: departure, arrival, route, and optionally duration, train, seat,
+    comfort_class, flexibility, note, booking_number, past ("Y"/"N"). Columns
+    that are empty on every row are omitted, so the same renderer serves
+    bookings (train/seat/number), dry runs (flexibility/note) and cancels.
+    The arrow is inferred from the route: a leg whose route is the reverse of
+    the first leg's is a return (←); the API reports a standalone return
+    booking as OUTBOUND, so the direction field alone is not enough.
+    """
+    if not rows:
+        return []
+    cols = [c for c in _LEG_COLUMNS if any(_has(r, c) for r in rows)]
+    widths = {c: max(visible_len(_cell(r, c)) for r in rows) for c in cols}
+    first_route = rows[0].get("route", "")
+    lines = []
+    for row in rows:
+        is_past = row.get("past") == "Y"
+        is_return = bool(first_route) and row.get("route") == _reverse_route(first_route)
+        if not first_route and row.get("direction") == "Return":
+            is_return = True
+        arrow = style("\u2190", MAGENTA) if is_return else style("\u2192", CYAN)
+        cells = [f"{row.get('departure', '\u2014')} \u2013 {row.get('arrival', '\u2014')}"]
+        for c in cols:
+            val = _cell(row, c)
+            if c == "flexibility" and row.get("note"):
+                val = style(val, DIM)
+            cells.append(pad(val, widths[c]))
+        number = cells.pop() if "booking_number" in cols else None
+        body = "   ".join(cells)
+        if is_past:
+            arrow = style(_ANSI_RE.sub("", arrow), DIM)
+            body = style(_ANSI_RE.sub("", body), DIM)
+            if number is not None:
+                number = style(_ANSI_RE.sub("", number), DIM)
+        elif number is not None:
+            number = style(number, BOLD)
+        line = f"{arrow} {body}" + (f"   {number}" if number is not None else "")
+        lines.append(line.rstrip())
+    return lines
+
+
+def print_leg_lines(rows: list[dict]) -> None:
+    """Print leg lines at the current indent (used inside a day card)."""
+    for line in leg_lines(rows):
+        _emit(line)
+
+
+def print_bookings_table(bookings: list[dict], pass_name: str | None, summary: bool = True) -> None:
     """
     Print bookings as one card per travel day, legs indented beneath.
 
@@ -269,7 +359,7 @@ def print_bookings_table(bookings: list[dict], pass_name: str, summary: bool = T
         bookings: Leg rows (sorted by departure) with keys: date, direction,
                   departure, arrival, duration, comfort_class, route,
                   booking_number, past ("Y"/"N"), and optionally train, seat.
-        pass_name: Travel pass name (or other context) for the title.
+        pass_name: Travel pass name for the title line, or None for no title.
         summary: Print the "N day(s) · N booking(s) · …" footer line.
 
     """
@@ -278,46 +368,29 @@ def print_bookings_table(bookings: list[dict], pass_name: str, summary: bool = T
     for leg in bookings:
         groups.setdefault(leg.get("date", "\u2014"), []).append(leg)
 
-    # Column widths across all legs so cards line up with each other
-    def w(key: str) -> int:
-        return max((visible_len(leg.get(key) or "\u2014") for leg in bookings), default=0)
+    # Column widths across all legs so cards line up with each other: pad
+    # every row's values to the global width before rendering.
+    widths = {
+        c: max((visible_len(_cell(leg, c)) for leg in bookings), default=0) for c in _LEG_COLUMNS
+    }
+    padded_groups: dict[str, list[dict]] = {}
+    for leg in bookings:
+        padded = {**leg, **{c: pad(str(leg[c]), widths[c]) for c in _LEG_COLUMNS if leg.get(c)}}
+        padded_groups.setdefault(leg.get("date", "\u2014"), []).append(padded)
 
-    w_dur, w_train, w_seat, w_class = w("duration"), w("train"), w("seat"), w("comfort_class")
-
-    lines = ["", style(f"\U0001f3ab {pass_name.lower()}", BOLD), ""]
+    lines: list[str] = []
+    if pass_name:
+        lines += ["", style(f"\U0001f3ab {pass_name.lower()}", BOLD)]
+    lines.append("")
     past_legs = 0
-    for date_str, legs in groups.items():
+    for date_str, legs in padded_groups.items():
         all_past = all(leg.get("past") == "Y" for leg in legs)
-        header = f"{style(_format_date_label(date_str), BOLD)}   {_group_route(legs)}"
-        if all_past:
-            header = style(_ANSI_RE.sub("", header), DIM)
-            if not color_enabled():
-                header += "   past"  # dimming is invisible here, so say it
+        header = day_header(date_str, _group_route(legs), dim=all_past)
+        if all_past and not color_enabled():
+            header += "   past"  # dimming is invisible here, so say it
         lines.append(header)
-
-        # A standalone return booking is "OUTBOUND" to the API, so infer the
-        # arrow from the route: reverse of the day's first leg → return.
-        first_route = legs[0].get("route", "")
-        for leg in legs:
-            is_past = leg.get("past") == "Y"
-            past_legs += is_past
-            is_return = leg.get("route") == _reverse_route(first_route)
-            arrow = style("\u2190", MAGENTA) if is_return else style("\u2192", CYAN)
-            cells = [
-                f"{leg.get('departure', '\u2014')} \u2013 {leg.get('arrival', '\u2014')}",
-                pad(leg.get("duration") or "\u2014", w_dur),
-                pad(leg.get("train") or "\u2014", w_train),
-                pad(leg.get("seat") or "\u2014", w_seat),
-                pad(leg.get("comfort_class") or "\u2014", w_class),
-            ]
-            body = "   ".join(cells)
-            number = leg.get("booking_number") or "\u2014"
-            if is_past:
-                arrow = style(_ANSI_RE.sub("", arrow), DIM)
-                body, number = style(body, DIM), style(number, DIM)
-            else:
-                number = style(number, BOLD)
-            lines.append(f"  {arrow} {body}   {number}")
+        past_legs += sum(leg.get("past") == "Y" for leg in legs)
+        lines += [f"  {line}" for line in leg_lines(legs)]
         lines.append("")
 
     if summary:
@@ -331,7 +404,8 @@ def print_bookings_table(bookings: list[dict], pass_name: str, summary: bool = T
         lines.append(style(footer, DIM))
     else:
         lines.pop()  # drop trailing blank line
-    print("\n".join(lines))
+    for line in lines:
+        _emit(line)
 
 
 def _format_tp_date(iso_str: str | None, exclusive: bool = False) -> str:

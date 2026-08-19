@@ -12,17 +12,29 @@ Dry run is the default; nothing is booked until you pass `--book`.
 $ python3 sj_tool.py --book
 first last · user@example.com · sj årskort silver
 ✓ fetching existing bookings
-found 31 active bookings
-2026-09-15: already fully booked, skipping
-✓ searching 2026-09-16: linköping central → stockholm central at 06:59
-✓ checking offers for outbound at 06:59
-✓ creating booking with outbound at 06:59
-✓ searching 2026-09-16: stockholm central → linköping central at 17:22
-✓ checking offers for inbound at 17:22
-✓ adding return leg at 17:22
-✓ checking out booking js3twmf1
-2026-09-16: booked outbound + return · js3twmf1
+29 active bookings · filter: SJ High-speed train
+
+tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
+  ✓ searching outbound at 06:59
+  ✓ checking offers for outbound at 06:59
+  ✓ creating booking with outbound at 06:59
+  ✓ searching return at 17:22
+  ✓ checking offers for return at 17:22
+  ✓ adding return leg at 17:22
+  ✓ checking out booking ERU0HWB2
+  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
+  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
+
+wed 16 sep 2026   already fully booked
+
+sat 19 sep 2026   weekend
+
+🚆 3 day(s) · 1 booked · 1 already booked · 1 skipped
 ```
+
+Every mode prints the same shape: a context line, a dim progress trail, one card per travel day
+(bold date + route, legs beneath), and a dim summary. Dry run shows the legs it *would* book in
+the same cards; `--list-bookings` shows what is booked.
 
 ## Requirements
 
@@ -113,9 +125,9 @@ For each date in `[date_start, date_end]`:
 4. For each leg: pick the departure closest to the configured time, resolve the comfort class
    (with fallback), find the 0-price pass-holder offer. If the closest departure has no such
    offer, try one alternative — earlier for the outbound, later for the return.
-5. Check out. The day ends with a result line (`booked outbound + return · NUMBER`, `booked
-   outbound`, or why nothing was booked). Provisional bookings left behind by an interrupted run
-   are cancelled automatically at the start of the next `--book` run.
+5. Check out. The day card ends with the booked legs exactly as `--list-bookings` will show them
+   (or the reason nothing was booked). Provisional bookings left behind by an interrupted run are
+   cancelled automatically at the start of the next `--book` run.
 
 Retries: transient failures on reads are retried (1 s / 2 s / 4 s); booking/checkout requests are
 retried only when the request never reached the server, so a gateway hiccup can't create a
@@ -124,7 +136,7 @@ duplicate booking. Full details, edge cases and message catalogue: [`SPEC.md`](S
 ## Development
 
 ```bash
-./venv/bin/pytest      # 74 tests, <1 s, no network (scripted fake client)
+./venv/bin/pytest      # ~80 tests, <1 s, no network (scripted fake client)
 ruff check .           # lint; ruff.toml selects ALL with documented ignores
 ```
 

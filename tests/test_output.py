@@ -1,11 +1,16 @@
 from sj_output import (
     _group_route,
     _reverse_route,
+    day_header,
     format_class_name,
     format_duration,
+    indented,
+    leg_lines,
     pad,
+    pinfo,
     print_bookings_table,
-    print_dry_run_table,
+    print_day_note,
+    spinner,
     style,
     visible_len,
 )
@@ -41,17 +46,44 @@ def test_routes():
     assert _group_route([{"route": "A → B"}, {"route": "A → C"}]) == "A → B · A → C"
 
 
-def test_dry_run_table_shows_note_in_flexibility_cell(capsys):
-    print_dry_run_table([
-        {"date": "2026-09-01", "direction": "Outbound", "departure": "06:59", "arrival": "11:36",
-         "comfort_class": "2 class calm", "flexibility": "FULLFLEX", "note": ""},
-        {"date": "2026-09-01", "direction": "Return", "departure": "17:22", "arrival": "19:01",
-         "comfort_class": "2 class", "flexibility": "—", "note": "no 0-price offer"},
-    ])
-    out = capsys.readouterr().out
-    assert "06:59      11:36    2 class calm  FULLFLEX" in out
-    assert "17:22      19:01    2 class       no 0-price offer" in out
-    assert "n/a" not in out
+def test_leg_lines_omit_empty_columns_and_put_note_in_flexibility_cell():
+    rows = [
+        {"departure": "06:59", "arrival": "11:36", "duration": "4h 37m", "train": "X 2000 520",
+         "route": "A → B", "comfort_class": "2 class calm", "flexibility": "FULLFLEX", "note": ""},
+        {"departure": "17:22", "arrival": "21:53", "duration": "4h 31m", "train": "X 2000 543",
+         "route": "B → A", "comfort_class": "2 class", "flexibility": "", "note": "no 0-price offer"},
+    ]
+    lines = leg_lines(rows)
+    assert lines == [
+        "→ 06:59 – 11:36   4h 37m   X 2000 520   2 class calm   FULLFLEX",
+        "← 17:22 – 21:53   4h 31m   X 2000 543   2 class        no 0-price offer",
+    ]
+    # seat / booking number columns are absent because no row has them
+    assert "—" not in "".join(lines)
+    assert leg_lines([]) == []
+
+
+def test_leg_lines_dim_past_and_bold_number_without_colour():
+    rows = [{"departure": "06:59", "arrival": "11:36", "route": "A → B", "booking_number": "NUM1", "past": "Y"}]
+    assert leg_lines(rows) == ["→ 06:59 – 11:36   NUM1"]
+
+
+def test_pinfo_keeps_case_and_indents_inside_block(capsys):
+    pinfo("booking ERU0HWB2 cancelled")
+    with indented():
+        pinfo("inner")
+        with spinner("step"):
+            pass
+        with spinner("quiet", trail=False):
+            pass
+    pinfo("outer")
+    assert capsys.readouterr().out == "booking ERU0HWB2 cancelled\n  inner\n  ✓ step\nouter\n"
+
+
+def test_day_header_and_note(capsys):
+    assert day_header("2026-09-15", "A ⇄ B") == "tue 15 sep 2026   A ⇄ B"
+    print_day_note("2026-09-19", "weekend")
+    assert capsys.readouterr().out == "sat 19 sep 2026   weekend\n"
 
 
 def test_bookings_card_groups_by_day_and_infers_return_arrow(capsys):

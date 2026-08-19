@@ -9,11 +9,17 @@ from sj_calendar import skip_reason, sweden_now, to_sweden
 from sj_client import SJClient
 from sj_errors import SJAPIError
 from sj_output import (
+    blank,
     format_class_name,
     format_duration,
-    format_table,
+    indented,
+    leg_lines,
+    pdim,
     pinfo,
     print_bookings_table,
+    print_day_header,
+    print_day_note,
+    print_leg_lines,
     spinner,
 )
 from sj_token import TokenManager
@@ -440,7 +446,7 @@ def _try_alternative_departure(
         offer_id, matched_class = result
         pinfo(f"found offer at alternative departure {time_str}")
         if matched_class != valid_class:
-            pinfo(f"  class fallback: {valid_class} → {matched_class}")
+            pinfo(f"class fallback: {valid_class} → {matched_class}")
         return {
             "offer_id": offer_id,
             "time_str": time_str,
@@ -601,7 +607,6 @@ def _resolve_leg(
     passenger_token: str,
     search_id: str,
     leg: str,
-    date_str: str,
 ) -> dict:
     """
     Search one leg, pick the best departure and find a 0-price offer for it.
@@ -617,17 +622,18 @@ def _resolve_leg(
         passenger_token: Passenger token for the offers call.
         search_id: Departure search ID for this leg.
         leg: "outbound" or "inbound".
-        date_str: Date string for display purposes.
 
     Returns:
         {"found": False} when no departure exists at all; otherwise
         {"found": True, "has_offer": bool, "departure": "HH:MM",
-         "arrival": "HH:MM", "class": str, "offer_id": str | None,
+         "arrival": "HH:MM", "duration": "4h 37m", "train": "X 2000 520",
+         "route": "A → B", "class": str, "offer_id": str | None,
          "alternative": bool} describing the chosen departure (the
          alternative one if that is where the offer was found).
 
     """
     outbound = leg == "outbound"
+    label = "outbound" if outbound else "return"
     origin, dest = params["station_from"], params["station_to"]
     route = f"{origin} → {dest}" if outbound else f"{dest} → {origin}"
     target_time = params.get("time_leave") if outbound else params.get("time_return", "17:00")
@@ -635,7 +641,17 @@ def _resolve_leg(
     flexibility = params.get("flexibility", "FULLFLEX")
     allow_fallback = params.get("allow_class_fallback", True)
 
-    with spinner(f"searching {date_str}: {route} at {target_time}"):
+    def describe(dep: dict) -> dict:
+        legs = dep.get("legs") or [{}]
+        brand = legs[0].get("serviceBrandNameDescription") or ""
+        number = legs[0].get("publicServiceName") or legs[0].get("serviceName") or ""
+        return {
+            "duration": format_duration(dep.get("duration", "")),
+            "train": " ".join(x for x in (brand, number) if x),
+            "route": route,
+        }
+
+    with spinner(f"searching {label} at {target_time}"):
         best = poll_and_select(
             client,
             access_token,
@@ -652,29 +668,27 @@ def _resolve_leg(
         pinfo(
             f"no exact match for {target_time}, closest is {best['time_str']} ({best['diff']:+d}m)"
         )
-    logger.info(f"selected {leg}: {best['time_str']}")
+    logger.info(f"selected {label}: {best['time_str']}")
 
-    with spinner(f"checking offers for {leg} at {best['time_str']}"):
+    with spinner(f"checking offers for {label} at {best['time_str']}"):
         offers = client.get_offers(access_token, best["id"], passenger_token)
     offer_result = find_offer_id(offers, best["class"], flexibility)
     if offer_result:
         offer_id, matched_class = offer_result
         if matched_class != best["class"]:
-            pinfo(f"{leg} class fallback: {best['class']} → {matched_class}")
+            pinfo(f"{label} class fallback: {best['class']} → {matched_class}")
         return {
             "found": True,
             "has_offer": True,
             "departure": best["time_str"],
             "arrival": _get_arrival_time(best["departure"]),
+            **describe(best["departure"]),
             "class": matched_class,
             "offer_id": offer_id,
             "alternative": False,
         }
 
-    pinfo(
-        f"no valid offer found for {leg} {route} at {best['time_str']}, "
-        f"looking for closest alternative"
-    )
+    pinfo(f"no valid offer for {label} at {best['time_str']}, trying closest alternative")
     alt = _try_alternative_departure(
         client,
         access_token,
@@ -693,6 +707,7 @@ def _resolve_leg(
             "has_offer": True,
             "departure": alt["time_str"],
             "arrival": alt["arrival"],
+            **describe(alt["departure"]),
             "class": alt["class"],
             "offer_id": alt["offer_id"],
             "alternative": True,
@@ -702,6 +717,7 @@ def _resolve_leg(
         "has_offer": False,
         "departure": best["time_str"],
         "arrival": _get_arrival_time(best["departure"]),
+        **describe(best["departure"]),
         "class": best["class"],
         "offer_id": None,
         "alternative": False,
@@ -717,22 +733,38 @@ def _dry_run_leg(resolved: dict, flexibility: str) -> dict:
     return {
         "departure": resolved["departure"],
         "arrival": resolved["arrival"],
+        "duration": resolved.get("duration", ""),
+        "train": resolved.get("train", ""),
+        "route": resolved.get("route", ""),
         "class": resolved["class"],
         "flexibility": flexibility if resolved["has_offer"] else None,
         "has_offer": resolved["has_offer"],
     }
 
 
+def _booking_from_response(resp: dict) -> tuple[str | None, str | None, dict]:
+    """
+    Pull (booking_id, booking_number, booking) out of a booking API response.
+
+    The API wraps the booking: {"bookingId": ..., "booking": {"bookingNumber": ...,
+    "journeys": [...]}}; older/other shapes put the fields at the top level.
+    """
+    booking = resp.get("booking") if isinstance(resp.get("booking"), dict) else resp
+    booking_id = resp.get("bookingId") or booking.get("bookingId") or resp.get("id")
+    number = booking.get("bookingNumber") or resp.get("bookingNumber")
+    return booking_id, number, booking
+
+
 def _create_provisional(
     client: SJClient, access_token: str, passenger_token: str, resolved: dict, leg: str
-) -> tuple[str, str | None]:
-    """Create a provisional booking from a resolved leg. Returns (booking_id, booking_number)."""
+) -> tuple[str | None, str | None, dict]:
+    """Create a provisional booking from a resolved leg. Returns (id, number, booking)."""
     alt = "alternative " if resolved["alternative"] else ""
     with spinner(f"creating booking with {alt}{leg} at {resolved['departure']}"):
         b_resp = client.create_provisional_booking(
             access_token, resolved["offer_id"], passenger_token
         )
-    return b_resp.get("bookingId") or b_resp.get("id"), b_resp.get("bookingNumber")
+    return _booking_from_response(b_resp)
 
 
 def handle_booking_process(
@@ -743,7 +775,6 @@ def handle_booking_process(
     out_search_id: str | None,
     in_search_id: str | None,
     dry_run: bool = False,
-    date_str: str = "",
 ) -> dict | None:
     """
     Resolve and book the outbound and/or inbound leg, then check out.
@@ -761,14 +792,14 @@ def handle_booking_process(
         out_search_id: Outbound search ID, or None to skip the outbound leg.
         in_search_id: Inbound search ID, or None to skip the inbound leg.
         dry_run: If True, collect results without booking.
-        date_str: Date string for display purposes.
 
     Returns:
         Dry-run result dict in dry-run mode. In booking mode, a dict with
         "booking_id", "booking_number", "legs" (["outbound"], ["return"] or
-        both) and "checked_out" (False if the provisional booking was created
-        but checkout failed) when a booking was created; None when nothing
-        was booked.
+        both), "checked_out" (False if the provisional booking was created
+        but checkout failed) and "booking" (the booking object from the API,
+        with journeys/segments, for display) when a booking was created;
+        None when nothing was booked.
 
     """
     params = cfg["search_parameters"]
@@ -776,14 +807,13 @@ def handle_booking_process(
 
     booking_id = None
     booking_number = None
+    booking: dict = {}
     legs: list[str] = []
     dry_run_result = {}
 
     # 1. Outbound
     if out_search_id:
-        out = _resolve_leg(
-            client, access_token, params, passenger_token, out_search_id, "outbound", date_str
-        )
+        out = _resolve_leg(client, access_token, params, passenger_token, out_search_id, "outbound")
         if dry_run:
             dry_run_result["outbound"] = _dry_run_leg(out, flexibility)
         elif not out["found"]:
@@ -794,16 +824,14 @@ def handle_booking_process(
             # handles the partial (return-leg-only) fallback.
             return None
         else:
-            booking_id, booking_number = _create_provisional(
+            booking_id, booking_number, booking = _create_provisional(
                 client, access_token, passenger_token, out, "outbound"
             )
             legs.append("outbound")
 
     # 2. Inbound
     if in_search_id:
-        inb = _resolve_leg(
-            client, access_token, params, passenger_token, in_search_id, "inbound", date_str
-        )
+        inb = _resolve_leg(client, access_token, params, passenger_token, in_search_id, "inbound")
         if dry_run:
             dry_run_result["inbound"] = _dry_run_leg(inb, flexibility)
         elif not inb["found"]:
@@ -818,13 +846,16 @@ def handle_booking_process(
         elif booking_id:
             alt = "alternative " if inb["alternative"] else ""
             with spinner(f"adding {alt}return leg at {inb['departure']}"):
-                client.add_offer_to_booking(
+                resp = client.add_offer_to_booking(
                     access_token, booking_id, inb["offer_id"], passenger_token
                 )
+            _, _, updated = _booking_from_response(resp or {})
+            if updated.get("journeys"):
+                booking = updated
             legs.append("return")
         else:
-            booking_id, booking_number = _create_provisional(
-                client, access_token, passenger_token, inb, "inbound"
+            booking_id, booking_number, booking = _create_provisional(
+                client, access_token, passenger_token, inb, "return"
             )
             legs.append("return")
 
@@ -855,6 +886,7 @@ def handle_booking_process(
         "booking_number": booking_number,
         "legs": legs,
         "checked_out": checked_out,
+        "booking": booking,
     }
 
 
@@ -917,12 +949,46 @@ def _search_and_book_one_way(
 
     if is_outbound:
         return handle_booking_process(
-            client, access_token, cfg, passenger_token, search_id, None, dry_run, date_str
+            client, access_token, cfg, passenger_token, search_id, None, dry_run
         )
     # Inbound as one-way: the API sees it as outbound
     return handle_booking_process(
-        client, access_token, cfg, passenger_token, None, search_id, dry_run, date_str
+        client, access_token, cfg, passenger_token, None, search_id, dry_run
     )
+
+
+def plan_day(
+    client: SJClient, params: dict, existing_bookings: list, date_str: str
+) -> tuple[bool, bool]:
+    """
+    Decide which legs still need booking on a date.
+
+    Returns:
+        (need_outbound, need_inbound). For a one-way config need_inbound is
+        always False. Both False means the day is already fully booked.
+
+    """
+    origin_id = client.resolve_station(params["station_from"])
+    dest_id = client.resolve_station(params["station_to"])
+    do_roundtrip = params.get("roundtrip", False)
+
+    has_outbound = check_existing_booking(existing_bookings, origin_id, dest_id, date_str)
+    has_inbound = (
+        check_existing_booking(existing_bookings, dest_id, origin_id, date_str)
+        if do_roundtrip
+        else False
+    )
+    return not has_outbound, do_roundtrip and not has_inbound
+
+
+def day_route(params: dict, need_outbound: bool, need_inbound: bool) -> str:
+    """Route label for a day card: 'A ⇄ B', 'A → B' or 'B → A'."""
+    origin, dest = params["station_from"], params["station_to"]
+    if need_outbound and need_inbound:
+        return f"{origin} \u21c4 {dest}"
+    if need_inbound:
+        return f"{dest} \u2192 {origin}"
+    return f"{origin} \u2192 {dest}"
 
 
 def process_booking_flow(
@@ -932,11 +998,12 @@ def process_booking_flow(
     current_date: datetime,
     tp_product_id: str,
     tp_token_id: str,
-    existing_bookings: list,
+    need_outbound: bool,
+    need_inbound: bool,
     dry_run: bool = False,
 ) -> dict | None:
     """
-    Process booking for a single date.
+    Search and book the legs a day still needs (see plan_day).
 
     Returns:
         Dry-run result dict in dry-run mode; in booking mode the result of
@@ -944,35 +1011,15 @@ def process_booking_flow(
 
     """
     params = cfg["search_parameters"]
-
     origin_name = params["station_from"]
     dest_name = params["station_to"]
-
-    origin_id = client.resolve_station(origin_name)
-    dest_id = client.resolve_station(dest_name)
-
     date_str = current_date.strftime("%Y-%m-%d")
-    do_roundtrip = params.get("roundtrip", False)
 
     logger.info(f"processing date: {date_str}")
 
-    # Check duplicates
-    has_outbound = check_existing_booking(existing_bookings, origin_id, dest_id, date_str)
-    has_inbound = False
-    if do_roundtrip:
-        has_inbound = check_existing_booking(existing_bookings, dest_id, origin_id, date_str)
-
-    if has_outbound and (not do_roundtrip or has_inbound):
-        pinfo(f"{date_str}: already fully booked, skipping")
+    if not (need_outbound or need_inbound):
+        pinfo("already fully booked")
         return None
-
-    req_outbound = not has_outbound
-    req_inbound = do_roundtrip and not has_inbound
-
-    if do_roundtrip and req_outbound and not req_inbound:
-        pinfo(f"{date_str}: inbound already booked, searching outbound only")
-    elif do_roundtrip and not req_outbound and req_inbound:
-        pinfo(f"{date_str}: outbound already booked, searching inbound only")
 
     service_types = params.get("service_types")
     if service_types and service_types == ["ALL"]:
@@ -980,8 +1027,7 @@ def process_booking_flow(
 
     book_partial = params.get("book_partial", False)
 
-    # Search
-    if req_outbound and req_inbound:
+    if need_outbound and need_inbound:
         # Roundtrip search → single booking (outbound + return leg), exactly
         # like the SJ app. If the return leg fails the outbound is still kept.
         # If the *outbound* fails nothing can be booked from a roundtrip
@@ -1003,11 +1049,11 @@ def process_booking_flow(
 
         if not (out_id and in_id):
             logger.error("failed to get both outbound and inbound search IDs")
-            pinfo(f"{date_str}: search returned no result ids, skipping")
+            pinfo("search returned no result ids")
             return None
 
         result = handle_booking_process(
-            client, access_token, cfg, passenger_token, out_id, in_id, dry_run, date_str
+            client, access_token, cfg, passenger_token, out_id, in_id, dry_run
         )
         if dry_run or result or not book_partial:
             return result
@@ -1028,46 +1074,40 @@ def process_booking_flow(
             dry_run=dry_run,
         )
 
-    if req_outbound:
+    if need_outbound:
+        if params.get("roundtrip", False):
+            pinfo("return already booked, searching outbound only")
         logger.info("booking outbound only")
-        search_resp = client.search_journey(
+        return _search_and_book_one_way(
+            client,
             access_token,
+            cfg,
             origin_name,
             dest_name,
             date_str,
-            None,
             tp_product_id,
+            tp_token_id,
             service_types,
+            is_outbound=True,
+            dry_run=dry_run,
         )
-        passenger_token = search_resp.get("passengerListId") or tp_token_id
-        out_id = search_resp.get("departureSearchId")
-        if out_id:
-            return handle_booking_process(
-                client, access_token, cfg, passenger_token, out_id, None, dry_run, date_str
-            )
-        return None
 
-    if req_inbound:
-        # Inbound-only: swap origin/dest
-        logger.info("booking inbound only (return leg)")
-        search_resp = client.search_journey(
-            access_token,
-            dest_name,
-            origin_name,
-            date_str,
-            None,
-            tp_product_id,
-            service_types,
-        )
-        passenger_token = search_resp.get("passengerListId") or tp_token_id
-        in_id = search_resp.get("departureSearchId")
-        if in_id:
-            return handle_booking_process(
-                client, access_token, cfg, passenger_token, None, in_id, dry_run, date_str
-            )
-        return None
-
-    return None
+    # Inbound only: swap origin/dest
+    pinfo("outbound already booked, searching return only")
+    logger.info("booking inbound only (return leg)")
+    return _search_and_book_one_way(
+        client,
+        access_token,
+        cfg,
+        dest_name,
+        origin_name,
+        date_str,
+        tp_product_id,
+        tp_token_id,
+        service_types,
+        is_outbound=False,
+        dry_run=dry_run,
+    )
 
 
 def _dry_run_note(leg: dict) -> str:
@@ -1077,6 +1117,62 @@ def _dry_run_note(leg: dict) -> str:
     if leg.get("departure", "\u2014") == "\u2014":
         return "no departure found"
     return "no 0-price offer"
+
+
+def _dry_run_rows(result: dict, date_str: str) -> list[dict]:
+    """Leg rows for the dry-run day card, in outbound/return order."""
+    rows = []
+    for key, direction in (("outbound", "Outbound"), ("inbound", "Return")):
+        leg = result.get(key)
+        if not leg:
+            continue
+        rows.append(
+            {
+                "date": date_str,
+                "direction": direction,
+                "departure": leg.get("departure", "\u2014"),
+                "arrival": leg.get("arrival", "\u2014"),
+                "duration": leg.get("duration", ""),
+                "train": leg.get("train", ""),
+                "route": leg.get("route", ""),
+                "comfort_class": leg.get("class", "\u2014"),
+                "flexibility": leg.get("flexibility") or "",
+                "note": _dry_run_note(leg),
+                "has_offer": bool(leg.get("has_offer")),
+            }
+        )
+    return rows
+
+
+def _booked_rows(booking: dict, booking_number: str | None) -> list[dict]:
+    """Leg rows for a freshly booked day, from the booking object the API returned."""
+    now = sweden_now()
+    rows = []
+    for journey in booking.get("journeys", []):
+        for segment in journey.get("segments", []):
+            row = _segment_to_display_row(segment, booking_number or "\u2014", now)
+            row["_sort_key"] = segment.get("departureDateTime", "")
+            rows.append(row)
+    rows.sort(key=lambda r: r.pop("_sort_key", ""))
+    return rows
+
+
+def _run_summary(counts: dict[str, int], dry_run: bool) -> str:
+    """Footer line: '🚆 12 day(s) · 9 booked · 1 already booked · 2 skipped'."""
+    parts = [f"{counts['days']} day(s)"]
+    labels = (
+        ("booked", "bookable" if dry_run else "booked"),
+        ("partial", "partly bookable" if dry_run else "partly booked"),
+        ("unavailable", "unavailable" if dry_run else "not booked"),
+        ("failed", "checkout failed"),
+        ("already", "already booked"),
+        ("skipped", "skipped"),
+    )
+    parts += [f"{counts[k]} {label}" for k, label in labels if counts.get(k)]
+    if dry_run:
+        parts.insert(0, "dry run")
+    icon = "\U0001f50d" if dry_run else "\U0001f686"
+    return f"{icon} " + " \u00b7 ".join(parts)
 
 
 def process_date_range(
@@ -1090,7 +1186,12 @@ def process_date_range(
     dry_run: bool = False,
 ) -> list[dict]:
     """
-    Process all dates in the configured range.
+    Process all dates in the configured range, printing one card per day.
+
+    Each day is a card: bold date + route header, the progress trail and
+    messages indented beneath it, then the booked (or bookable) legs in the
+    same shape as --list-bookings. Skipped and already-booked days are a
+    single dim line. A summary footer closes the run.
 
     Args:
         client: The SJ HTTP client.
@@ -1103,7 +1204,7 @@ def process_date_range(
         dry_run: If True, collect results without booking.
 
     Returns:
-        List of dry-run result dicts (empty if not dry-run).
+        List of dry-run leg rows (empty if not dry-run).
 
     """
     params = cfg["search_parameters"]
@@ -1112,78 +1213,91 @@ def process_date_range(
     skip_weekends = params.get("skip_weekends", True)
     skip_holidays = params.get("skip_holidays", True)
 
-    results = []
+    results: list[dict] = []
+    counts: dict[str, int] = {"days": 0}
     curr = start_date
 
+    def count(key: str) -> None:
+        counts[key] = counts.get(key, 0) + 1
+
+    blank()
     while curr <= end_date:
         date_str = curr.strftime("%Y-%m-%d")
+        counts["days"] += 1
 
         reason = skip_reason(curr.date(), skip_weekends, skip_holidays)
         if reason:
-            pinfo(f"skipping {date_str} ({reason})")
+            print_day_note(date_str, reason)
+            blank()
+            count("skipped")
             curr += timedelta(days=1)
             continue
 
         # Mid-run token refresh
         access_token = ensure_valid_token(client, token_manager, access_token)
 
-        try:
-            result = process_booking_flow(
-                client,
-                access_token,
-                cfg,
-                curr,
-                tp_product_id,
-                tp_token_id,
-                existing_bookings,
-                dry_run,
-            )
-            if dry_run and result:
-                # Flatten outbound/inbound into separate rows
-                if "outbound" in result:
-                    out = result["outbound"]
-                    results.append(
-                        {
-                            "date": date_str,
-                            "direction": "Outbound",
-                            "departure": out.get("departure", "—"),
-                            "arrival": out.get("arrival", "—"),
-                            "comfort_class": out.get("class", "—"),
-                            "flexibility": out.get("flexibility") or "—",
-                            "note": _dry_run_note(out),
-                        }
-                    )
-                if "inbound" in result:
-                    inb = result["inbound"]
-                    results.append(
-                        {
-                            "date": date_str,
-                            "direction": "Return",
-                            "departure": inb.get("departure", "—"),
-                            "arrival": inb.get("arrival", "—"),
-                            "comfort_class": inb.get("class", "—"),
-                            "flexibility": inb.get("flexibility") or "—",
-                            "note": _dry_run_note(inb),
-                        }
-                    )
-            elif result:
-                legs = " + ".join(result.get("legs") or []) or "booking"
-                ref = result.get("booking_number") or result.get("booking_id")
-                if result.get("checked_out"):
-                    pinfo(f"{date_str}: booked {legs} \u00b7 {ref}")
+        need_outbound, need_inbound = plan_day(client, params, existing_bookings, date_str)
+        if not (need_outbound or need_inbound):
+            print_day_note(date_str, "already fully booked")
+            blank()
+            count("already")
+            curr += timedelta(days=1)
+            continue
+
+        print_day_header(date_str, day_route(params, need_outbound, need_inbound))
+        with indented():
+            try:
+                result = process_booking_flow(
+                    client,
+                    access_token,
+                    cfg,
+                    curr,
+                    tp_product_id,
+                    tp_token_id,
+                    need_outbound,
+                    need_inbound,
+                    dry_run,
+                )
+            except Exception as e:
+                logger.error(f"error processing {date_str}: {e}")
+                pinfo(f"error: {e}")
+                result = None
+
+            if dry_run:
+                rows = _dry_run_rows(result or {}, date_str)
+                results.extend(rows)
+                print_leg_lines(rows)
+                offers = sum(r["has_offer"] for r in rows)
+                if rows and offers == len(rows):
+                    count("booked")
                 else:
-                    pinfo(f"{date_str}: {legs} {ref} created but checkout failed")
-        except Exception as e:
-            logger.error(f"error processing {date_str}: {e}")
-            pinfo(f"error processing {date_str}: {e}")
+                    count("partial" if offers else "unavailable")
+            elif result:
+                booked = _booked_rows(result.get("booking") or {}, result["booking_number"])
+                print_leg_lines(booked)
+                if not result.get("checked_out"):
+                    pinfo("checkout failed, provisional left (cleaned up on next --book run)")
+                    count("failed")
+                else:
+                    wanted = int(need_outbound) + int(need_inbound)
+                    count("booked" if len(result.get("legs") or []) >= wanted else "partial")
+            else:
+                pdim("nothing booked")
+                count("unavailable")
+        blank()
 
         curr += timedelta(days=1)
         if curr <= end_date:
-            next_date = curr.strftime("%Y-%m-%d")
-            with spinner(f"waiting before processing {next_date}"):
+            with spinner("waiting before next date", trail=False):
                 time.sleep(2)
 
+    pdim(_run_summary(counts, dry_run))
     return results
+
+
+def _confirm(prompt: str) -> bool:
+    """Ask a yes/no question on stdin; 'y' and 'yes' (any case) mean yes."""
+    return input(prompt).strip().lower() in ("y", "yes")
 
 
 def handle_cancel_mode(
@@ -1343,27 +1457,16 @@ def handle_cancel_booking(
                 if not passenger_ids:
                     passenger_ids = ["passenger_1"]
 
-                dep_station = seg.get("departureStation", {}).get("name", "—")
-                arr_station = seg.get("arrivalStation", {}).get("name", "—")
                 segments_to_cancel.append(
                     {
                         "serviceIdentifier": service_id,
                         "passengerIds": passenger_ids,
-                        "_label": (
-                            f"{row['direction']}  {row['date']}  "
-                            f"{row['departure']} → {row['arrival']}  "
-                            f"{dep_station} → {arr_station}"
-                        ),
-                        "_date": row["date"],
-                        "_direction": row["direction"],
-                        "_dep_time": row["departure"],
-                        "_arr_time": row["arrival"],
-                        "_route": row["route"],
+                        "_row": row,
                     }
                 )
 
-    print_bookings_table(display_rows, f"Booking {booking_number}", summary=False)
-    print()
+    print_bookings_table(display_rows, None, summary=False)
+    blank()
 
     if not segments_to_cancel:
         if has_past_segment:
@@ -1374,15 +1477,17 @@ def handle_cancel_booking(
 
     # Select which segments to cancel
     if len(segments_to_cancel) == 1:
-        confirm = input(f"cancel booking {booking_number}? [y/n]: ").strip().lower()
-        if confirm != "y":
+        if not _confirm(f"cancel booking {booking_number}? [y/n]: "):
             pinfo("cancellation aborted")
             return
         selected = segments_to_cancel
     else:
         pinfo("cancel which journey?")
-        for i, seg in enumerate(segments_to_cancel, 1):
-            pinfo(f"  {i}. {seg['_label']}")
+        # same booking on every line, so drop the number from the choices
+        choices = [{**seg["_row"], "booking_number": ""} for seg in segments_to_cancel]
+        lines = leg_lines(choices)
+        for i, line in enumerate(lines, 1):
+            pinfo(f"  {i}. {line}")
         pinfo("  a. all")
 
         valid_nums = [str(i) for i in range(1, len(segments_to_cancel) + 1)]
@@ -1402,26 +1507,12 @@ def handle_cancel_booking(
                 return
             selected = [segments_to_cancel[i] for i in indices]
 
-        # Confirm with table
-        confirm_rows = [
-            {
-                "date": s.get("_date", ""),
-                "direction": s.get("_direction", ""),
-                "departure": s.get("_dep_time", ""),
-                "arrival": s.get("_arr_time", ""),
-                "route": s.get("_route", ""),
-            }
-            for s in selected
-        ]
-        confirm_headers = ["Date", "Direction", "Departure", "Arrival", "Route"]
-        confirm_table_rows = [
-            [r["date"], r["direction"], r["departure"], r["arrival"], r["route"]]
-            for r in confirm_rows
-        ]
-        table = format_table(confirm_headers, confirm_table_rows, title="Selected for cancellation")
-        print(f"\n{table}")
-        confirm = input("cancel selected journey(s)? [y/n]: ").strip().lower()
-        if confirm != "y":
+        # Confirm: show exactly what will be cancelled
+        blank()
+        pinfo("selected for cancellation:")
+        with indented():
+            print_leg_lines([{**seg["_row"], "booking_number": ""} for seg in selected])
+        if not _confirm("cancel selected journey(s)? [y/n]: "):
             pinfo("cancellation aborted")
             return
 

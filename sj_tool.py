@@ -22,7 +22,7 @@ from sj_client import SJClient
 from sj_config import SERVICE_TYPE_NAMES, CfgManager
 from sj_errors import SJAuthError, SJConfigError
 from sj_logger import setup_logging
-from sj_output import pdim, pinfo, print_dry_run_table, print_travelpasses_table, spinner
+from sj_output import pdim, pinfo, print_travelpasses_table, spinner
 from sj_token import TokenManager
 
 setup_logging(os.getenv("LOG_LEVEL", ""))
@@ -285,7 +285,9 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             or tp_product_id
         )
 
-        pdim(f"{user_name} \u00b7 {email} \u00b7 {active_pass.get('name', 'Unknown')}")
+        # Context line: lowercase by convention (names/pass read as a title here)
+        pass_name = active_pass.get("name", "Unknown")
+        pdim(f"{user_name} \u00b7 {email} \u00b7 {pass_name}".lower())
 
     except SystemExit:
         raise
@@ -330,26 +332,19 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                     client, access_token, bookings_list
                 )
 
-            pdim(f"found {len(bookings_list)} active bookings")
-
-            # Show active service type filter
+            context = f"{len(bookings_list)} active bookings"
             raw_types = params.get("service_types")
             if raw_types and raw_types != ["ALL"]:
                 filter_str = ", ".join(SERVICE_TYPE_NAMES.get(t, t) for t in raw_types)
-                pdim(f"filter: {filter_str}")
+                context += f" \u00b7 filter: {filter_str}"
+            pdim(context)
 
-            # Process date range
-            dry_run = not args.book
-            results = process_date_range(
+            # Process date range: one card per day, summary footer at the end
+            process_date_range(
                 client, access_token, tm, cfg,
                 tp_product_id, tp_token_id, bookings_list,
-                dry_run=dry_run,
+                dry_run=not args.book,
             )
-
-            if dry_run and results:
-                print_dry_run_table(results)
-
-            pinfo("done")
 
     except SystemExit:
         raise

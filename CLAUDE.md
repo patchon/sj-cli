@@ -81,7 +81,7 @@ Modules organized by separation of concerns, plain venv (no package manager):
 | `sj_token.py` | Token cache management (`TokenManager`). Load (raises `SJAuthError` if corrupt), save, validate expiry, refresh availability; cookie cache next to it. |
 | `sj_logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. `log_json()` redacts password/tokens/Authorization recursively — use it for any dict that might hold secrets. |
 | `sj_errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`). |
-| `sj_output.py` | User-facing output helpers. `pinfo()`/`pdim()` (lowercase, stdout), `spinner()` (shares a stdout lock with pinfo so messages never interleave with frames), ANSI styling (`style`/`pad`/`visible_len`; auto-off when not a TTY or `NO_COLOR` set), dry-run/travel-pass tables, per-day booking cards. |
+| `sj_output.py` | User-facing output helpers. `pinfo()`/`pdim()`/`blank()`, `spinner()` (shares a stdout lock with pinfo so messages never interleave with frames; `trail=False` for silent waits), `indented()` nesting, ANSI styling (`style`/`pad`/`visible_len`; auto-off when not a TTY or `NO_COLOR` set), the shared day-card renderer (`day_header`, `print_day_note`, `leg_lines`/`print_leg_lines`, `print_bookings_table`) and the travel-pass table. |
 | `sj_calendar.py` | Swedish red-day calendar (no dependency; Easter computed). `skip_reason()` for weekend/holiday skipping. Timezone helpers `parse_api_datetime()` / `to_sweden()` / `sweden_now()` — all API timestamp handling goes through these (Swedish wall-clock for train times/pass validity, aware "now" for past/expiry). |
 
 ### Key design rules
@@ -89,10 +89,10 @@ Modules organized by separation of concerns, plain venv (no package manager):
 - **No business logic in `sj_client.py`** — it exposes methods like `search_journey()`, `get_offers()`, etc. It does not interpret results or make decisions, and it raises (never returns an error body) on failure.
 - **Thin entry point** — `sj_tool.py` parses CLI args, wires modules together, and delegates.
 - **Errors as typed exceptions** — `SJAPIError`, `SJAuthError`, `SJConfigError`. Catch at the orchestration layer; `process_date_range` catches per date so one bad day doesn't stop the run.
-- **Booking-flow contract** — `handle_booking_process(client, token, cfg, passenger_token, out_search_id, in_search_id, dry_run, date_str)`: a leg is handled iff its search id is passed. Dry run returns `{"outbound"/"inbound": {departure, arrival, class, flexibility, has_offer}}`; book mode returns `{"booking_id", "booking_number", "legs", "checked_out"}` or `None` when nothing was booked (a checkout failure still returns the dict, with `checked_out=False`, so the `book_partial` fallback doesn't create a second provisional). `process_date_range` prints the per-day result line from this.
+- **Booking-flow contract** — `process_date_range` → `plan_day()` (which legs a day still needs) → `process_booking_flow(…, need_outbound, need_inbound)` → `handle_booking_process(client, token, cfg, passenger_token, out_search_id, in_search_id, dry_run)`: a leg is handled iff its search id is passed. Dry run returns `{"outbound"/"inbound": {departure, arrival, duration, train, route, class, flexibility, has_offer}}`; book mode returns `{"booking_id", "booking_number", "legs", "checked_out", "booking"}` (the API's booking object, with journeys, for the card) or `None` when nothing was booked (a checkout failure still returns the dict, with `checked_out=False`, so the `book_partial` fallback doesn't create a second provisional). `process_date_range` renders the day card from this.
 - **Stale provisionals** — `is_stale_provisional()` (status NEW + CANCEL_JOURNEY) is used by both the `--book` cleanup and the duplicate check, so dry run and book agree on what is already booked.
 - **Dates/times** — never parse API timestamps by hand; use `sj_calendar` helpers. Config times are Swedish local.
-- **Output style** — lowercase `pinfo` lines, dim context, spinner trail lines (`✓`/`✗`), restrained colour/emoji, no redundant tags; booking numbers are shown on every leg line.
+- **Output style** — every mode has the same shape: context line → dim progress trail → one card per day (`print_day_header`/`print_day_note` + `print_leg_lines`, nested with `indented()`) → dim summary footer. Prose is lowercase; identifiers keep their case (booking numbers UPPER, station names as SJ writes them) — `pinfo` no longer lowercases anything. Restrained colour/emoji (titles/footers only), no redundant tags; booking numbers on every leg line. Spinner trail lines (`✓`/`✗`) for real steps, `trail=False` for waits.
 - **Secrets** — never log raw config/token dicts or request payloads with f-strings; go through `log_json()`.
 
 ## Configuration
@@ -138,7 +138,7 @@ Caches: `~/.cache/sj-api-client/token.json` (tokens) and `cookies.json` (SSO coo
 ## Tests and lint
 
 ```bash
-./venv/bin/pytest               # 74 tests, <1s, no network
+./venv/bin/pytest               # ~80 tests, <1s, no network
 ruff check .                    # lint (ruff.toml selects ALL with documented ignores; tests have their own)
 ```
 

@@ -17,7 +17,12 @@ def dep(dep_id: str, date: str, dep_time: str, arr_time: str, props=("COMFORT-B"
         "departureId": dep_id,
         "departureDateTime": f"{date}T{dep_time}:00+02:00",
         "arrivalDateTime": f"{date}T{arr_time}:00+02:00",
-        "legs": [{"serviceProperties": [{"code": c} for c in props]}],
+        "duration": "PT4H37M",
+        "legs": [{
+            "serviceProperties": [{"code": c} for c in props],
+            "serviceBrandNameDescription": "X 2000",
+            "publicServiceName": dep_id.upper(),
+        }],
     }
 
 
@@ -50,8 +55,13 @@ class FakeClient:
 
     departures: {search_id: [departure dicts]}
     offers_by_dep: {departure_id: offers response} (default: 0-price calm+second)
-    Records every call in .calls as (method, *key args).
+    Records every call in .calls as (method, *key args). Booking responses use
+    the real API shape: {"bookingId": ..., "booking": {"bookingNumber": ...,
+    "journeys": [{"segments": [...]}]}}, with one segment per booked leg built
+    from the departure whose offer was used.
     """
+
+    STATIONS = {"Linköping Central": "740000009", "Stockholm Central": "740000001"}
 
     def __init__(self, departures=None, offers_by_dep=None, *, checkout_ok=True, search_ids=None):
         self.departures = departures or {}
@@ -60,9 +70,11 @@ class FakeClient:
         self.search_ids = search_ids or {"departureSearchId": "OUT", "returnDepartureSearchId": "IN"}
         self.calls: list[tuple] = []
         self._booking_counter = 0
+        self._last_dep: dict | None = None
+        self._bookings: dict[str, dict] = {}
 
     def resolve_station(self, name):
-        return {"Linköping Central": "740000009", "Stockholm Central": "740000001"}.get(name, name)
+        return self.STATIONS.get(name, name)
 
     def search_journey(self, token, origin, dest, date, return_date=None, tp_id=None, service_types=None):
         self.calls.append(("search", origin, dest, date, return_date))
@@ -78,16 +90,47 @@ class FakeClient:
 
     def get_offers(self, token, dep_id, passenger_token):
         self.calls.append(("offers", dep_id))
+        self._last_dep = next(
+            (d for deps in self.departures.values() for d in deps if d["departureId"] == dep_id), None
+        )
         return self.offers_by_dep.get(dep_id, offers())
+
+    def _segment(self, direction):
+        dep = self._last_dep or {}
+        a, b = ("Linköping Central", "Stockholm Central")
+        if direction == "INBOUND":
+            a, b = b, a
+        return {
+            "direction": direction,
+            "departureDateTime": dep.get("departureDateTime", "2026-09-01T00:00:00+02:00"),
+            "arrivalDateTime": dep.get("arrivalDateTime", "2026-09-01T00:00:00+02:00"),
+            "duration": dep.get("duration", "PT4H37M"),
+            "departureStation": {"name": a, "uicStationCode": self.STATIONS[a]},
+            "arrivalStation": {"name": b, "uicStationCode": self.STATIONS[b]},
+            "productFamily": {"name": "2 klass Lugn, Kan återbetalas"},
+            "serviceBrandNameDescription": "X 2000",
+            "publicServiceName": "520" if direction == "OUTBOUND" else "543",
+            "requiredProducts": [{"seat": {"carriageNumber": "3", "number": "17"}}],
+        }
+
+    def _response(self, booking_id):
+        return {"bookingId": booking_id, "booking": self._bookings[booking_id]}
 
     def create_provisional_booking(self, token, offer_id, passenger_token):
         self._booking_counter += 1
         self.calls.append(("create", offer_id))
-        return {"bookingId": f"UUID-{self._booking_counter}", "bookingNumber": f"NUM{self._booking_counter}"}
+        booking_id = f"UUID-{self._booking_counter}"
+        self._bookings[booking_id] = {
+            "bookingNumber": f"NUM{self._booking_counter}",
+            "bookingStatus": "NEW",
+            "journeys": [{"segments": [self._segment("OUTBOUND")]}],
+        }
+        return self._response(booking_id)
 
     def add_offer_to_booking(self, token, booking_id, offer_id, passenger_token):
         self.calls.append(("add", booking_id, offer_id))
-        return {}
+        self._bookings[booking_id]["journeys"].append({"segments": [self._segment("INBOUND")]})
+        return self._response(booking_id)
 
     def update_booking_customer(self, token, booking_id, email, phone):
         self.calls.append(("customer", booking_id))
