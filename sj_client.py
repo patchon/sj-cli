@@ -161,6 +161,7 @@ class SJClient:
         "image/avif,image/webp,*/*;q=0.8"
     )
     H_ACCEPT_JSON = "application/json"
+    H_CONTENT_TYPE_JSON = "application/json"
     H_CONTENT_TYPE_FORM = "application/x-www-form-urlencoded; charset=UTF-8"
     H_OCP_APIM_SUB_KEY = "d6625619def348d38be070027fd24ff6"
     H_SEC_CH_UA = '"Google Chrome";v="120", "Chromium";v="120", "Not?A_Brand";v="24"'
@@ -178,9 +179,13 @@ class SJClient:
     )
     URL_SJ = "https://www.sj.se"
     URL_SJ_ID = "https://id.sj.se"
+    URL_API = "https://prod-api.adp.sj.se/public"
+    URL_API_BOOKING = f"{URL_API}/sales/booking/v3"
+    URL_API_SECURE_BOOKING = f"{URL_API}/sales/secure/booking/v3"
+    X_CLIENT_VERSION = "20251217.0004-prod"
 
     def __init__(self) -> None:
-        logger.debug("initializing SJlient")
+        logger.debug("initializing SJClient")
 
         # Create a new client instance with retry transport
         base_transport = httpx.HTTPTransport()
@@ -501,10 +506,10 @@ class SJClient:
             except Exception:
                 pass
 
-            logger.error(f"API Error refreshing token: {e}")
+            logger.error(f"api error refreshing token: {e}")
             return None
         except Exception as e:
-            logger.error(f"Error refreshing token: {e}")
+            logger.error(f"error refreshing token: {e}")
             return None
 
         return resp.json()
@@ -928,9 +933,9 @@ class SJClient:
 
         """
         digest = hashlib.sha256(verifier.encode()).digest()
-        challange = base64.urlsafe_b64encode(digest).decode().rstrip("=")
-        logger.debug(f"generated code challenge: {challange}")
-        return challange
+        challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+        logger.debug(f"generated code challenge: {challenge}")
+        return challenge
 
     def _get_csrf_token(self, resp: httpx.Headers) -> None:
         """
@@ -1139,10 +1144,10 @@ class SJClient:
             "code_verifier": self.code_verifier,
         }
 
-        logger.info("Exchanging code for token...")
+        logger.info("exchanging code for token ...")
         resp = self.client.post(url_token, data=data)
         if resp.status_code != 200:
-            logger.error("Token Exchange Failed:")
+            logger.error("token exchange failed:")
             logger.error(resp.text)
             resp.raise_for_status()
 
@@ -1159,7 +1164,7 @@ class SJClient:
             The membership data dictionary.
 
         """
-        url_api = "https://prod-api.adp.sj.se/public/sj-web/customer/v1/Me/Membership"
+        url_api = f"{self.URL_API}/sj-web/customer/v1/Me/Membership"
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": self.H_ACCEPT_JSON,
@@ -1170,10 +1175,10 @@ class SJClient:
             "ocp-apim-trace": "false",
         }
 
-        logger.info(f"Fetching membership info from {url_api}...")
+        logger.info(f"fetching membership info from {url_api} ...")
         resp = self.client.get(url_api, headers=headers)
         if resp.status_code != 200:
-            logger.error(f"Membership API Failed: {resp.status_code}")
+            logger.error(f"membership api failed: {resp.status_code}")
             logger.debug(resp.text)
 
         return resp.json()
@@ -1194,7 +1199,7 @@ class SJClient:
             A dictionary containing the list of bookings and pagination info.
 
         """
-        url_api = "https://prod-api.adp.sj.se/public/sales/secure/booking/v3/bookings"
+        url_api = f"{self.URL_API_SECURE_BOOKING}/bookings"
 
         params = {
             "fromPage": str(page),
@@ -1214,12 +1219,12 @@ class SJClient:
         }
 
         logger.info(
-            f"Fetching bookings (page {page}) from {start_date} to {end_date}..."
+            f"fetching bookings (page {page}) from {start_date} to {end_date} ..."
         )
         resp = self.client.get(url_api, params=params, headers=headers)
 
         if resp.status_code != 200:
-            logger.error(f"Booking API Failed: {resp.status_code}")
+            logger.error(f"bookings api failed: {resp.status_code}")
             logger.debug(resp.text)
 
         return resp.json()
@@ -1244,7 +1249,7 @@ class SJClient:
                 return v
 
         logger.warning(
-            f"Station '{station_name}' not found in hardcoded map. Trying to use as-is."
+            f"station '{station_name}' not found in station map, using as-is"
         )
         return station_name
 
@@ -1259,25 +1264,23 @@ class SJClient:
             A dictionary (or list, depending on API) containing travel passes.
 
         """
-        url_api = (
-            "https://prod-api.adp.sj.se/public/sales/secure/booking/v3/travelpasses"
-        )
+        url_api = f"{self.URL_API_SECURE_BOOKING}/travelpasses"
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": self.H_ACCEPT_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "x-client-name": "sjse-booking-client",
-            "x-client-version": "20251217.0004-prod",
+            "x-client-version": self.X_CLIENT_VERSION,
             "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
             "ocp-apim-trace": "true",
         }
 
-        logger.info("Fetching travel passes...")
+        logger.info("fetching travel passes ...")
         resp = self.client.get(url_api, headers=headers)
 
         if resp.status_code != 200:
-            logger.error(f"Get Travel Passes Failed: {resp.status_code}")
+            logger.error(f"travel passes api failed: {resp.status_code}")
             logger.debug(resp.text)
 
         return resp.json()
@@ -1293,11 +1296,11 @@ class SJClient:
             A list of receipt summary dicts.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/receipts/search/{booking_id}"
+        url_api = f"{self.URL_API_BOOKING}/receipts/search/{booking_id}"
 
         headers = {
             "Accept": self.H_ACCEPT_JSON,
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "ocp-apim-trace": "true",
             "subscription-id": "sales-web",
@@ -1306,11 +1309,11 @@ class SJClient:
         }
         headers.update(self.generate_trace_headers())
 
-        logger.info(f"Searching receipts for booking {booking_id}...")
+        logger.info(f"searching receipts for booking {booking_id} ...")
         resp = self.client.get(url_api, headers=headers)
 
         if resp.status_code != 200:
-            logger.warning(f"Receipt search failed: {resp.status_code}")
+            logger.warning(f"receipt search failed: {resp.status_code}")
             logger.debug(resp.text)
             return []
 
@@ -1345,7 +1348,7 @@ class SJClient:
             A dictionary containing the search results (search IDs).
 
         """
-        url_api = "https://prod-api.adp.sj.se/public/sales/booking/v3/search"
+        url_api = f"{self.URL_API_BOOKING}/search"
 
         origin_id = self.resolve_station(origin_name)
         dest_id = self.resolve_station(destination_name)
@@ -1384,20 +1387,20 @@ class SJClient:
             "Accept": self.H_ACCEPT_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "x-client-name": "sjse-booking-client",
-            "x-client-version": "20251217.0004-prod",
+            "x-client-version": self.X_CLIENT_VERSION,
             "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "Referer": f"{self.URL_SJ}/",
         }
 
         logger.info(
-            f"Searching journey: {origin_name} ({origin_id}) -> "
-            f"{destination_name} ({dest_id}) on {departure_date}..."
+            f"searching journey: {origin_name} ({origin_id}) -> "
+            f"{destination_name} ({dest_id}) on {departure_date} ..."
         )
         resp = self.client.post(url_api, json=payload, headers=headers)
 
         if resp.status_code != 200:
-            logger.error(f"Search API Failed: {resp.status_code}")
+            logger.error(f"search api failed: {resp.status_code}")
             logger.debug(resp.text)
             resp.raise_for_status()  # Raise here to catch early
 
@@ -1415,24 +1418,24 @@ class SJClient:
             A dictionary containing the list of departures.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/departures/search/{search_id}"
+        url_api = f"{self.URL_API_BOOKING}/departures/search/{search_id}"
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": self.H_ACCEPT_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "x-client-name": "sjse-booking-client",
-            "x-client-version": "20251217.0004-prod",
+            "x-client-version": self.X_CLIENT_VERSION,
             "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
             "Referer": f"{self.URL_SJ}/",
             "ocp-apim-trace": "true",
         }
 
-        logger.info(f"Fetching search results for ID: {search_id}...")
+        logger.info(f"fetching search results for id {search_id} ...")
         resp = self.client.get(url_api, headers=headers)
 
         if resp.status_code != 200:
-            logger.error(f"Get Search Results Failed: {resp.status_code}")
+            logger.error(f"search results api failed: {resp.status_code}")
             logger.debug(resp.text)
 
         return resp.json()
@@ -1452,7 +1455,7 @@ class SJClient:
             A dictionary containing available offers and prices.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/departures/{departure_id}/offers"
+        url_api = f"{self.URL_API_BOOKING}/departures/{departure_id}/offers"
         params = {"passengerListId": passenger_token}
 
         headers = {
@@ -1460,15 +1463,15 @@ class SJClient:
             "Accept": self.H_ACCEPT_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "x-client-name": "sjse-booking-client",
-            "x-client-version": "20251217.0004-prod",
+            "x-client-version": self.X_CLIENT_VERSION,
             "Referer": f"{self.URL_SJ}/",
         }
 
-        logger.info(f"Fetching offers for departure {departure_id}...")
+        logger.info(f"fetching offers for departure {departure_id} ...")
         resp = self.client.get(url_api, params=params, headers=headers)
 
         if resp.status_code != 200:
-            logger.error(f"Get Offers Failed: {resp.status_code}")
+            logger.error(f"offers api failed: {resp.status_code}")
             logger.debug(resp.text)
             resp.raise_for_status()
 
@@ -1510,9 +1513,7 @@ class SJClient:
             A dictionary containing the booking details (bookingId, etc).
 
         """
-        url_api = (
-            "https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/provisional"
-        )
+        url_api = f"{self.URL_API_BOOKING}/bookings/provisional"
 
         payload = {
             "outboundOfferId": offer_id,
@@ -1522,29 +1523,29 @@ class SJClient:
 
         headers = {
             "Authorization": f"Bearer {access_token}",
-            "Content-Type": self.H_ACCEPT_JSON,
-            "Ocp-Apim-Subscription-Key": self.H_OCP_APIM_SUB_KEY,
-            "Ocp-Apim-Trace": "true",
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
+            "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
+            "ocp-apim-trace": "true",
             "Referer": f"{self.URL_SJ}/",
             "User-Agent": self.H_USER_AGENT,
             "sec-ch-ua": self.H_SEC_CH_UA,
             "sec-ch-ua-mobile": self.H_SEC_CH_UA_MOBILE,
             "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
             "x-client-name": "sjse-booking-client",
-            "x-client-version": "20251217.0004-prod",
+            "x-client-version": self.X_CLIENT_VERSION,
         }
 
         # Add required trace headers (W3C standard)
         # Browser sends BOTH ocp-apim-trace AND traceparent.
         headers.update(self.generate_trace_headers())
 
-        logger.info(f"Creating provisional booking for offer {offer_id}...")
-        logger.debug(f"Creation Payload:\n{json.dumps(payload, indent=2)}")
-        logger.debug(f"Creation Headers:\n{json.dumps(headers, indent=2)}")
+        logger.info(f"creating provisional booking for offer {offer_id} ...")
+        logger.debug(f"creation payload:\n{log_json(payload)}")
+        logger.debug(f"creation headers:\n{log_json(headers)}")
         resp = self.client.post(url_api, json=payload, headers=headers)
 
         if resp.status_code not in [200, 201]:
-            logger.error(f"Create Booking Failed: {resp.status_code}")
+            logger.error(f"create booking failed: {resp.status_code}")
             logger.debug(resp.text)
             resp.raise_for_status()
 
@@ -1569,7 +1570,7 @@ class SJClient:
             httpx.HTTPStatusError: If the API request fails.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/provisional/{booking_id}"
+        url_api = f"{self.URL_API_BOOKING}/bookings/provisional/{booking_id}"
 
         payload = {
             "offerId": offer_id,
@@ -1580,10 +1581,10 @@ class SJClient:
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": self.H_ACCEPT_JSON,
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "x-client-name": "sjse-booking-client",
-            "x-client-version": "20251217.0004-prod",
+            "x-client-version": self.X_CLIENT_VERSION,
             "ocp-apim-trace": "true",
             "Referer": f"{self.URL_SJ}/",
             "User-Agent": self.H_USER_AGENT,
@@ -1592,12 +1593,12 @@ class SJClient:
         # Add required trace headers (W3C standard)
         headers.update(self.generate_trace_headers())
 
-        logger.info(f"Adding offer {offer_id} to booking {booking_id} (PATCH)...")
+        logger.info(f"adding offer {offer_id} to booking {booking_id} (patch) ...")
         # NOTE: Using PATCH, not POST
         resp = self.client.patch(url_api, json=payload, headers=headers)
 
         if resp.status_code not in [200, 201]:
-            logger.error(f"Add Offer (PATCH) Failed: {resp.status_code}")
+            logger.error(f"add offer (patch) failed: {resp.status_code}")
             logger.debug(resp.text)
             resp.raise_for_status()
 
@@ -1623,7 +1624,7 @@ class SJClient:
             The API response dictionary.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/provisional/{booking_id}/customer"
+        url_api = f"{self.URL_API_BOOKING}/bookings/provisional/{booking_id}/customer"
 
         payload = {
             "email": email,
@@ -1633,17 +1634,17 @@ class SJClient:
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": self.H_ACCEPT_JSON,
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "x-client-name": "sjse-booking-client",
             "Referer": f"{self.URL_SJ}/",
         }
 
-        logger.info(f"Updating customer for booking {booking_id}...")
+        logger.info(f"updating customer for booking {booking_id} ...")
         resp = self.client.patch(url_api, json=payload, headers=headers)
 
         if resp.status_code != 200:
-            logger.error(f"Update Customer Failed: {resp.status_code}")
+            logger.error(f"update customer failed: {resp.status_code}")
             logger.debug(resp.text)
 
         return resp.json()
@@ -1660,12 +1661,12 @@ class SJClient:
             The checkout response dictionary.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/{booking_id}/checkout"
+        url_api = f"{self.URL_API_BOOKING}/bookings/{booking_id}/checkout"
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": self.H_ACCEPT_JSON,
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "x-client-name": "sjse-booking-client",
             "Referer": f"{self.URL_SJ}/",
@@ -1673,11 +1674,11 @@ class SJClient:
 
         payload = {"paymentMethod": "PAY_0"}
 
-        logger.info(f"Checking out booking {booking_id}...")
+        logger.info(f"checking out booking {booking_id} ...")
         resp = self.client.post(url_api, json=payload, headers=headers)
 
         if resp.status_code not in [200, 201]:
-            logger.error(f"Checkout Failed: {resp.status_code}")
+            logger.error(f"checkout failed: {resp.status_code}")
             logger.debug(resp.text)
             resp.raise_for_status()
 
@@ -1695,12 +1696,12 @@ class SJClient:
             True if cancellation was successful, False otherwise.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/provisional/{booking_id}/cancel"
+        url_api = f"{self.URL_API_BOOKING}/bookings/provisional/{booking_id}/cancel"
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": self.H_ACCEPT_JSON,
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "x-client-name": "sjse-account-client",
             "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
@@ -1708,22 +1709,22 @@ class SJClient:
             "Origin": self.URL_SJ,
             "ocp-apim-trace": "false",
         }
-        logger.info(f"Cancelling provisional booking {booking_id} with status NEW")
-        logger.debug(f"Cancellation Headers:\n{log_json(headers)}")
+        logger.info(f"cancelling provisional booking {booking_id} with status NEW")
+        logger.debug(f"cancellation headers:\n{log_json(headers)}")
 
         try:
             resp = self.client.patch(url_api, headers=headers)
 
             if resp.status_code not in [200, 204]:
-                logger.error(f"Cancel provisional booking failed: {resp.status_code}")
+                logger.error(f"cancel provisional booking failed: {resp.status_code}")
                 logger.debug(resp.text)
                 return False
 
-            logger.info("Cancellation Successful!")
+            logger.info("cancellation successful")
             return True
 
         except Exception as e:
-            logger.error(f"Exception during cancellation: {e}")
+            logger.error(f"exception during cancellation: {e}")
             return False
 
     def cancel_booking_with_patch(
@@ -1745,12 +1746,12 @@ class SJClient:
             True if cancellation was successful, False otherwise.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/{booking_id}/cancel"
+        url_api = f"{self.URL_API_BOOKING}/bookings/{booking_id}/cancel"
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "*/*",
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "ocp-apim-trace": "true",
             "subscription-id": "sales-web",
@@ -1762,23 +1763,23 @@ class SJClient:
 
         payload = {"segmentAndPassengers": segments_and_passengers}
 
-        logger.info(f"Cancelling booking {booking_id} via PATCH")
-        logger.debug(f"Cancellation Headers:\n{log_json(headers)}")
-        logger.debug(f"Cancellation Payload:\n{log_json(payload)}")
+        logger.info(f"cancelling booking {booking_id} via patch")
+        logger.debug(f"cancellation headers:\n{log_json(headers)}")
+        logger.debug(f"cancellation payload:\n{log_json(payload)}")
 
         try:
             resp = self.client.patch(url_api, headers=headers, json=payload)
 
             if resp.status_code not in [200, 204]:
-                logger.error(f"Cancel (PATCH) failed: {resp.status_code}")
+                logger.error(f"cancel (patch) failed: {resp.status_code}")
                 logger.debug(resp.text)
                 return False
 
-            logger.info("Cancellation successful")
+            logger.info("cancellation successful")
             return True
 
         except Exception as e:
-            logger.error(f"Exception during cancellation: {e}")
+            logger.error(f"exception during cancellation: {e}")
             return False
 
     def finalize_cancellation(self, access_token: str, booking_id: str) -> bool:
@@ -1799,7 +1800,7 @@ class SJClient:
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "*/*",
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "ocp-apim-trace": "true",
             "subscription-id": "sales-web",
@@ -1810,32 +1811,32 @@ class SJClient:
         headers.update(self.generate_trace_headers())
 
         # 1. Get Refunds (Optional but good to log)
-        url_refund = f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/{booking_id}/checkout/refunds"
+        url_refund = f"{self.URL_API_BOOKING}/bookings/{booking_id}/checkout/refunds"
         try:
-            logger.info("Checking refund details...")
+            logger.info("checking refund details ...")
             res = self.client.get(url_refund, headers=headers)
             if res.status_code == 200:
-                logger.debug(f"Refund Details: {res.text}")
+                logger.debug(f"refund details: {res.text}")
             else:
-                logger.warning(f"Failed to get refunds: {res.status_code}")
+                logger.warning(f"failed to get refunds: {res.status_code}")
         except Exception as e:
-            logger.warning(f"Error checking refunds: {e}")
+            logger.warning(f"error checking refunds: {e}")
 
         # 2. POST Checkout
-        url_checkout = f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/{booking_id}/checkout"
+        url_checkout = f"{self.URL_API_BOOKING}/bookings/{booking_id}/checkout"
         payload = {"paymentMethod": "PAY_0"}
 
-        logger.info("Finalizing cancellation (Checkout)...")
+        logger.info("finalizing cancellation (checkout) ...")
         try:
             res = self.client.post(url_checkout, json=payload, headers=headers)
             if res.status_code in [200, 201, 204]:
-                logger.info("Checkout/Confirmation Successful!")
-                logger.debug(f"Checkout Response: {res.text}")
+                logger.info("checkout/confirmation successful")
+                logger.debug(f"checkout response: {res.text}")
                 return True
-            logger.error(f"Checkout Failed: {res.status_code} - {res.text}")
+            logger.error(f"checkout failed: {res.status_code} - {res.text}")
             return False
         except Exception as e:
-            logger.error(f"Error finalizing cancellation: {e}")
+            logger.error(f"error finalizing cancellation: {e}")
             return False
 
     def revert_booking(self, access_token: str, booking_id: str) -> bool:
@@ -1850,12 +1851,12 @@ class SJClient:
             True if successful, False otherwise.
 
         """
-        url_api = f"https://prod-api.adp.sj.se/public/sales/booking/v3/bookings/{booking_id}/revert"
+        url_api = f"{self.URL_API_BOOKING}/bookings/{booking_id}/revert"
 
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "*/*",
-            "Content-Type": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
             "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
             "ocp-apim-trace": "true",
             "subscription-id": "sales-web",
@@ -1865,17 +1866,17 @@ class SJClient:
         }
         headers.update(self.generate_trace_headers())
 
-        logger.info(f"Reverting booking {booking_id}...")
+        logger.info(f"reverting booking {booking_id} ...")
         try:
             resp = self.client.post(url_api, headers=headers, content=b"")
             if resp.status_code in [200, 204]:
-                logger.info("Revert successful")
+                logger.info("revert successful")
                 return True
-            logger.error(f"Revert failed: {resp.status_code}")
+            logger.error(f"revert failed: {resp.status_code}")
             logger.debug(resp.text)
             return False
         except Exception as e:
-            logger.error(f"Exception during revert: {e}")
+            logger.error(f"exception during revert: {e}")
             return False
 
     def close(self) -> None:
