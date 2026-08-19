@@ -1180,6 +1180,7 @@ class SJClient:
         if resp.status_code != 200:
             logger.error(f"membership api failed: {resp.status_code}")
             logger.debug(resp.text)
+            resp.raise_for_status()
 
         return resp.json()
 
@@ -1226,6 +1227,7 @@ class SJClient:
         if resp.status_code != 200:
             logger.error(f"bookings api failed: {resp.status_code}")
             logger.debug(resp.text)
+            resp.raise_for_status()
 
         return resp.json()
 
@@ -1282,6 +1284,7 @@ class SJClient:
         if resp.status_code != 200:
             logger.error(f"travel passes api failed: {resp.status_code}")
             logger.debug(resp.text)
+            resp.raise_for_status()
 
         return resp.json()
 
@@ -1437,6 +1440,7 @@ class SJClient:
         if resp.status_code != 200:
             logger.error(f"search results api failed: {resp.status_code}")
             logger.debug(resp.text)
+            resp.raise_for_status()
 
         return resp.json()
 
@@ -1646,6 +1650,7 @@ class SJClient:
         if resp.status_code != 200:
             logger.error(f"update customer failed: {resp.status_code}")
             logger.debug(resp.text)
+            resp.raise_for_status()
 
         return resp.json()
 
