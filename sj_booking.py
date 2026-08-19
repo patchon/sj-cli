@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta
 
 from sj_auth import ensure_valid_token
+from sj_calendar import skip_reason
 from sj_client import SJClient
 from sj_output import (
     format_class_name,
@@ -1187,15 +1188,23 @@ def process_date_range(
     params = cfg["search_parameters"]
     start_date = datetime.strptime(params["date_start"], "%Y-%m-%d")
     end_date = datetime.strptime(params["date_end"], "%Y-%m-%d")
+    skip_weekends = params.get("skip_weekends", True)
+    skip_holidays = params.get("skip_holidays", True)
 
     results = []
     curr = start_date
 
     while curr <= end_date:
+        date_str = curr.strftime("%Y-%m-%d")
+
+        reason = skip_reason(curr.date(), skip_weekends, skip_holidays)
+        if reason:
+            pinfo(f"skipping {date_str} ({reason})")
+            curr += timedelta(days=1)
+            continue
+
         # Mid-run token refresh
         access_token = ensure_valid_token(client, token_manager, access_token)
-
-        date_str = curr.strftime("%Y-%m-%d")
 
         try:
             result = process_booking_flow(

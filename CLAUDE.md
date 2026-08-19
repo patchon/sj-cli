@@ -67,6 +67,7 @@ Modules organized by separation of concerns, plain venv (no package manager):
 | `sj_logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. |
 | `sj_errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`). |
 | `sj_output.py` | User-facing output helpers. `pinfo()`, table formatting for dry-run results and booking listings. |
+| `sj_calendar.py` | Swedish red-day calendar (no dependency; Easter computed). `skip_reason()` decides whether a date is skipped for weekend/holiday. |
 
 ### Key design rules
 
@@ -96,6 +97,8 @@ roundtrip = true
 select_closest_ticket_available = true
 allow_class_fallback = true       # optional, defaults to true
 book_partial = false              # optional, continue booking if one leg fails
+skip_weekends = true              # optional, defaults to true
+skip_holidays = true              # optional, defaults to true — Swedish red days incl. Midsommar-/Jul-/Nyårsafton
 service_types = ["SJ_HIGH", "SJ_IC"]  # optional, filter train types (omit or ["ALL"] for no filter)
 # Valid: ALL, SJ_HIGH, SJ_IC, SJ_REG, SJ_NT, X_TRAINOPS, X_PTA, X_EXPBUS
 ```

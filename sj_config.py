@@ -163,6 +163,12 @@ class CfgManager:
         if bp is not None and not isinstance(bp, bool):
             errors.append("book_partial must be a boolean if specified")
 
+        # skip_weekends / skip_holidays (optional, default true)
+        for key in ("skip_weekends", "skip_holidays"):
+            val = params.get(key)
+            if val is not None and not isinstance(val, bool):
+                errors.append(f"{key} must be a boolean if specified")
+
         # service_types (optional, list of allowed service type strings)
         valid_service_types = {
             "ALL", "SJ_HIGH", "SJ_IC", "SJ_REG", "SJ_NT",

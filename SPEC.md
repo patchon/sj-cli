@@ -119,6 +119,8 @@ flexibility = "FULLFLEX"
 roundtrip = true
 select_closest_ticket_available = true
 allow_class_fallback = true
+skip_weekends = true
+skip_holidays = true
 ```
 
 ### 4.3 Validation rules
@@ -140,6 +142,8 @@ All validation runs at startup before any API calls. Fail fast with clear error 
 | `roundtrip` | Required. Boolean (`true` / `false`). |
 | `select_closest_ticket_available` | Required. Boolean. |
 | `allow_class_fallback` | Optional. Boolean. Defaults to `true`. |
+| `skip_weekends` | Optional. Boolean. Defaults to `true`. Skip Saturdays and Sundays. |
+| `skip_holidays` | Optional. Boolean. Defaults to `true`. Skip Swedish red days (see §6.4). |
 
 Report all validation errors at once (don't stop at the first one).
 
@@ -262,6 +266,7 @@ Flags are mutually exclusive. Specifying more than one is a config error (exit 1
 
 For each date in `[date_start, date_end]`:
 
+0. **Calendar filter**: if the date is a weekend (`skip_weekends`) or a Swedish red day (`skip_holidays`), print `skipping YYYY-MM-DD (reason)` and continue to the next date without any API calls (see §6.4).
 1. **Duplicate check**: fetch existing bookings and check if a booking already exists for this (route, date). If fully booked (both legs for roundtrip, or single leg for one-way), skip with an info message.
 2. **Determine what to book**: outbound only, return only, or both — based on which legs are missing.
 3. **Search**: call `search_journey` with the appropriate parameters. For roundtrip where both legs are needed, use a single roundtrip search. For single missing legs, use a one-way search.
@@ -280,7 +285,13 @@ On startup (after auth, before the booking loop), fetch all existing bookings in
 
 ### 6.3 Timing between dates
 
-2-second delay between processing each date to avoid hammering the API. No evidence of rate limiting at this interval over 1–3 month ranges.
+2-second delay between processing each date to avoid hammering the API. No evidence of rate limiting at this interval over 1–3 month ranges. Skipped dates (§6.4) do not incur the delay.
+
+### 6.4 Weekend and holiday skipping
+
+Implemented in `sj_calendar.py` with no external dependency. `skip_reason(date, skip_weekends, skip_holidays)` returns `"weekend"`, the holiday name, or `None`.
+
+Swedish red days are computed per year: fixed dates (Nyårsdagen, Trettondedag jul, Första maj, Nationaldagen, Juldagen, Annandag jul), Easter-derived (Långfredagen, Påskdagen, Annandag påsk, Kristi himmelsfärdsdag, Pingstdagen; Easter via the Meeus/Jones/Butcher algorithm) and window-based Saturdays (Midsommardagen = Saturday in June 20–26, Alla helgons dag = Saturday in Oct 31–Nov 6). The three eves — Midsommarafton, Julafton, Nyårsafton — are also included: they are not formal public holidays but are legally treated as Sundays and are de facto non-working days for commuters.
 
 ## 7. Departure Selection
 
