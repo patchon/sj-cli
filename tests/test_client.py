@@ -65,6 +65,35 @@ def test_connect_error_exhausted_reraises():
         send("GET", [httpx.ConnectError("boom")] * 4)
 
 
+def test_get_retries_read_timeout():
+    resp, attempts = send("GET", [httpx.ReadTimeout("slow"), 200])
+    assert resp.status_code == 200
+    assert attempts == 2
+
+
+def test_post_is_not_retried_on_5xx():
+    resp, attempts = send("POST", [503, 200])
+    assert resp.status_code == 503
+    assert attempts == 1
+
+
+def test_post_is_not_retried_on_read_timeout():
+    with pytest.raises(httpx.ReadTimeout):
+        send("POST", [httpx.ReadTimeout("slow"), 200])
+
+
+def test_post_is_retried_when_never_sent():
+    resp, attempts = send("POST", [httpx.ConnectError("refused"), httpx.ConnectTimeout("slow"), 201])
+    assert resp.status_code == 201
+    assert attempts == 3
+
+
+def test_patch_is_not_retried_on_502():
+    resp, attempts = send("PATCH", [502, 200])
+    assert resp.status_code == 502
+    assert attempts == 1
+
+
 def test_parse_json_response_paths():
     req = httpx.Request("GET", "https://x")
     parse_json_response(httpx.Response(200, json={"ok": 1}, request=req), "u")

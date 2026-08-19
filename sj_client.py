@@ -98,47 +98,58 @@ class RetryTransport(httpx.BaseTransport):
     """
     Transport wrapper that retries on transient failures.
 
-    Retries on 502, 503, TimeoutException, and ConnectError with
-    exponential backoff (1s, 2s, 4s). Does not retry on 4xx errors.
+    Idempotent requests (GET/HEAD/OPTIONS) are retried on 502/503, timeouts
+    and connection errors with exponential backoff (1s, 2s, 4s). Other
+    methods (POST/PATCH — booking creation, checkout, cancellation) are
+    retried only when the request provably never reached the server
+    (connection error / connect timeout): a 502 or read timeout after a POST
+    may mean the server already acted on it, and a retry could create a
+    duplicate provisional booking. 4xx responses are never retried.
     """
 
     RETRYABLE_STATUS_CODES = {502, 503}
     RETRY_DELAYS = [1, 2, 4]
+    IDEMPOTENT_METHODS = {"GET", "HEAD", "OPTIONS"}
 
     def __init__(self, transport: httpx.BaseTransport) -> None:
         self._transport = transport
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         """Send request with retry logic for transient failures."""
-        last_exc: Exception | None = None
+        idempotent = request.method.upper() in self.IDEMPOTENT_METHODS
         for attempt in range(len(self.RETRY_DELAYS) + 1):
             try:
                 response = self._transport.handle_request(request)
-                if (
-                    response.status_code in self.RETRYABLE_STATUS_CODES
-                    and attempt < len(self.RETRY_DELAYS)
-                ):
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                # Connection never established → the request was not sent → safe
+                # to retry for any method. Otherwise only idempotent methods.
+                never_sent = isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
+                if (idempotent or never_sent) and attempt < len(self.RETRY_DELAYS):
                     delay = self.RETRY_DELAYS[attempt]
                     logger.warning(
-                        f"got {response.status_code} from {request.url}, "
+                        f"{type(e).__name__} for {request.method} {request.url}, "
                         f"retrying in {delay}s (attempt {attempt + 1}/{len(self.RETRY_DELAYS)})"
                     )
                     time.sleep(delay)
                     continue
-                return response
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
-                last_exc = e
-                if attempt < len(self.RETRY_DELAYS):
-                    delay = self.RETRY_DELAYS[attempt]
-                    logger.warning(
-                        f"{type(e).__name__} for {request.url}, "
-                        f"retrying in {delay}s (attempt {attempt + 1}/{len(self.RETRY_DELAYS)})"
-                    )
-                    time.sleep(delay)
-                else:
-                    raise
-        # All retries exhausted — last_exc is guaranteed set here
-        raise last_exc  # type: ignore[misc]
+                raise
+
+            if (
+                response.status_code in self.RETRYABLE_STATUS_CODES
+                and idempotent
+                and attempt < len(self.RETRY_DELAYS)
+            ):
+                delay = self.RETRY_DELAYS[attempt]
+                logger.warning(
+                    f"got {response.status_code} from {request.method} {request.url}, "
+                    f"retrying in {delay}s (attempt {attempt + 1}/{len(self.RETRY_DELAYS)})"
+                )
+                time.sleep(delay)
+                continue
+            return response
+
+        # Unreachable: the loop either returns a response or re-raises.
+        raise AssertionError("retry loop exited without a result")
 
     def close(self) -> None:
         """Close the underlying transport."""

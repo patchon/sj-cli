@@ -375,9 +375,10 @@ If the SJ API returns an error indicating an existing booking conflicts with the
 
 ### 8.4 Network failures & retries
 
-For transient HTTP errors (timeouts, 502, 503, connection resets):
-- Retry up to 3 times with delays of 1s, 2s, 4s (exponential backoff).
-- After 3 failures, skip the current operation and log the error.
+For transient HTTP errors (timeouts, 502, 503, connection resets), in `RetryTransport`:
+- Idempotent requests (GET/HEAD/OPTIONS): retry up to 3 times with delays of 1s, 2s, 4s (exponential backoff).
+- Non-idempotent requests (POST/PATCH — provisional booking, add leg, checkout, cancel): retry only when the request provably never reached the server (connection error / connect timeout). A 502/503 or read timeout *after* sending is not retried — the server may already have acted on it, and a retry could create a duplicate provisional booking (which would only be cleaned up on the next `--book` run, §6.2).
+- After the retries are exhausted, the current operation fails and is logged; the date loop continues with the next date.
 - Do not retry on 4xx errors (these are not transient).
 
 ### 8.5 Unknown API response shapes
