@@ -66,7 +66,7 @@ Modules organized by separation of concerns, plain venv (no package manager):
 | `sj_token.py` | Token cache management (`TokenManager`). Load, save, validate expiry, check refresh availability. |
 | `sj_logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. |
 | `sj_errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`). |
-| `sj_output.py` | User-facing output helpers. `pinfo()`, table formatting for dry-run results and booking listings. |
+| `sj_output.py` | User-facing output helpers. `pinfo()`, ANSI styling (`style`/`pad`/`visible_len`; auto-off when not a TTY or `NO_COLOR` set), tables for dry-run/travel passes, per-day booking cards. |
 | `sj_calendar.py` | Swedish red-day calendar (no dependency; Easter computed). `skip_reason()` decides whether a date is skipped for weekend/holiday. |
 
 ### Key design rules

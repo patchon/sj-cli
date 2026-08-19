@@ -212,35 +212,44 @@ If only one leg exists, skip the direction question and go straight to confirmat
 ### 5.4 List current bookings
 
 ```bash
-python3 sj_tool.py --list-current-bookings
+python3 sj_tool.py --list-bookings
 ```
 
-Fetches all active bookings within the travel pass validity period and displays them in a table:
+Fetches all active bookings within the travel pass validity period and displays them as one card per travel day, legs indented beneath:
 
 ```
-Current Bookings (SJ Årskort Silver)
-─────────────────────────────────────────────────────────────────────────────────────────
- Date        Direction  Departure  Arrival  Duration  Class          Route
-─────────────────────────────────────────────────────────────────────────────────────────
- 2026-01-19  Outbound   05:29      08:15    2h 46m    2 class calm   Linköping C → Stockholm C
- 2026-01-19  Return     17:22      20:08    2h 46m    2 class calm   Stockholm C → Linköping C
- 2026-01-20  Outbound   05:29      08:15    2h 46m    2 class calm   Linköping C → Stockholm C
- 2026-01-20  Return     17:22      20:08    2h 46m    2 class calm   Stockholm C → Linköping C
- 2026-01-21  Outbound   06:29      09:15    2h 46m    2 class        Linköping C → Stockholm C
-─────────────────────────────────────────────────────────────────────────────────────────
- 5 bookings shown.
+🎫 sj årskort silver
+
+tue 18 aug 2026   Linköping Central ⇄ Stockholm Central   past
+  → 04:01 – 08:38   4h 37m   X 2000 520   vagn 3 plats 34   2 klass Lugn   ZR8C6RT1
+  ← 17:22 – 21:53   4h 31m   X 2000 543   vagn 3 plats 22   2 klass Lugn   ZR8C6RT1
+
+wed 19 aug 2026   Linköping Central ⇄ Stockholm Central
+  → 04:01 – 08:38   4h 37m   X 2000 520   vagn 3 plats 30   2 klass Lugn   TBRS43MG
+  ← 17:22 – 21:53   4h 31m   X 2000 543   vagn 3 plats 55   2 klass Lugn   TBRS43MG
+
+mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
+  → 04:01 – 08:38   4h 37m   X 2000 520   vagn 7 plats 32   2 klass        3RK7YJU4
+  ← 17:22 – 21:53   4h 31m   X 2000 543   vagn 3 plats 21   2 klass Lugn   K883DH2T
+
+🚆 3 day(s) · 4 booking(s) · 6 leg(s) · 2 in the past
 ```
 
-- Only shows non-cancelled bookings.
-- Sorted by date, then direction (outbound before return).
-- Pagination: fetches all pages from the bookings API.
-- No booking modifications — read-only mode.
+- Header per day: date, route (`A ⇄ B` when both directions are present, otherwise the distinct routes), and a `past` tag when every leg has departed.
+- Leg line: direction arrow, departure – arrival, duration, train (brand + number), carriage/seat, class, booking number. The arrow is inferred from the route (reverse of the day's first leg → `←`) because the API reports a standalone return booking as `OUTBOUND`.
+- Grouped by date rather than booking number: a return leg booked via the `book_partial` fallback (§6.5) is its own booking, so the booking number is shown per leg. Legs are sorted by departure time.
+- A day whose legs have all departed is dimmed; when colour is unavailable a `past` tag is appended instead.
+- Only shows non-cancelled bookings. Pagination: fetches all pages from the bookings API. Read-only.
+- Preamble: one dimmed context line (`name · email · travel pass`) instead of separate "logged in as"/"travel pass" lines. Progress steps show a spinner while running and leave a dimmed trail line when done — `✓ fetching bookings`, or `✗ …` if the step raised — so logs show where time went or where a step failed. When stdout is not a TTY only the trail line is printed.
+- Styling: bold header/booking numbers, dimmed past days, coloured arrows. ANSI colour is emitted only when stdout is a TTY and `NO_COLOR` is unset (`TERM=dumb` also disables it); piped output is plain text. Emoji appear only in the title and summary lines, never inside aligned rows.
+- The same primitives (`style`, `pad`, `visible_len` in `sj_output.py`) style the dry-run and travel-pass tables (bold headers, dimmed separators and `n/a` cells).
 
 ### 5.5 Environment variables
 
 | Variable | Effect |
 |---|---|
 | `LOG_LEVEL` | Set log verbosity: `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Default: `CRITICAL` (silent). |
+| `NO_COLOR` | If set (any value), disable ANSI colour/bold in output. Colour is also disabled automatically when stdout is not a TTY. |
 
 ### 5.6 CLI flag summary
 

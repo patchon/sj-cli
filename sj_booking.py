@@ -61,7 +61,7 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
 
     Returns:
         Display row dict with keys: date, direction, departure, arrival,
-        duration, comfort_class, route, booking_number, past.
+        duration, comfort_class, route, booking_number, past, train, seat.
 
     """
     direction = segment.get("direction", "OUTBOUND").capitalize()
@@ -71,6 +71,23 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
     prod_name = segment.get("productFamily", {}).get("name", "—")
     dep_station = segment.get("departureStation", {}).get("name", "—")
     arr_station = segment.get("arrivalStation", {}).get("name", "—")
+
+    # Train: brand + public service number, e.g. "X 2000 537"
+    brand = segment.get("serviceBrandNameDescription") or segment.get("serviceType", {}).get(
+        "name", ""
+    )
+    number = segment.get("publicServiceName") or segment.get("serviceName") or ""
+    train = " ".join(part for part in (brand, number) if part) or "—"
+
+    # Seat: carriage + seat number from the first required product
+    seat = "—"
+    products = segment.get("requiredProducts") or []
+    if products:
+        seat_info = products[0].get("seat") or {}
+        carriage = seat_info.get("carriageNumber")
+        seat_no = seat_info.get("number")
+        if carriage or seat_no:
+            seat = f"vagn {carriage or '?'} plats {seat_no or '?'}"
 
     in_past = "N"
     try:
@@ -99,6 +116,8 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
         "route": f"{dep_station} → {arr_station}",
         "booking_number": booking_number,
         "past": in_past,
+        "train": train,
+        "seat": seat,
     }
 
 
@@ -1417,7 +1436,7 @@ def handle_cancel_booking(
                     }
                 )
 
-    print_bookings_table(display_rows, f"Booking {booking_number}")
+    print_bookings_table(display_rows, f"Booking {booking_number}", summary=False)
     print()
 
     if not segments_to_cancel:

@@ -21,7 +21,7 @@ from sj_client import SJClient
 from sj_config import CfgManager
 from sj_errors import SJAuthError, SJConfigError
 from sj_logger import setup_logging
-from sj_output import pinfo, print_dry_run_table, print_travelpasses_table, spinner
+from sj_output import pdim, pinfo, print_dry_run_table, print_travelpasses_table, spinner
 from sj_token import TokenManager
 
 setup_logging(os.getenv("LOG_LEVEL", ""))
@@ -243,9 +243,7 @@ def main():
     # 3. Fetch membership and travel pass
     try:
         membership = client.get_membership(access_token)
-        pinfo(
-            f"logged in as: {membership.get('firstName')} {membership.get('lastName')} ({email})"
-        )
+        user_name = f"{membership.get('firstName')} {membership.get('lastName')}"
 
         tp_resp = client.get_travel_passes(access_token)
         travel_passes = (
@@ -262,7 +260,7 @@ def main():
             or tp_product_id
         )
 
-        pinfo(f"travel pass: {active_pass.get('name', 'Unknown')}")
+        pdim(f"{user_name} \u00b7 {email} \u00b7 {active_pass.get('name', 'Unknown')}")
 
     except SystemExit:
         raise
@@ -305,7 +303,7 @@ def main():
                     client, access_token, bookings_list
                 )
 
-            pinfo(f"found {len(bookings_list)} active bookings")
+            pdim(f"found {len(bookings_list)} active bookings")
 
             # Show active service type filter
             service_type_names = {
@@ -322,7 +320,7 @@ def main():
                 filter_str = ", ".join(
                     service_type_names.get(t, t) for t in raw_types
                 )
-                pinfo(f"filter: {filter_str}")
+                pdim(f"filter: {filter_str}")
 
             # Process date range
             dry_run = not args.book
