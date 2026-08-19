@@ -14,7 +14,7 @@ Plain venv, no package manager or build system. Modules organized by separation 
 
 | Module | Role |
 |---|---|
-| `sj_tool.py` | Entry point. CLI argument parsing (`--dry-run`, `--cancel-date`, `--list-current-bookings`), top-level orchestration. |
+| `sj_tool.py` | Entry point. CLI argument parsing (see §5.6), top-level orchestration. |
 | `sj_auth.py` | Authentication orchestration. B2C login flow, token lifecycle (validate → refresh → full login), SMS input with timeout. |
 | `sj_client.py` | HTTP client. All SJ API communication via `httpx.Client`. Low-level request methods only — no business logic. Includes HTTP retry logic. |
 | `sj_booking.py` | Booking business logic. Search, departure selection, offer matching, provisional booking creation, checkout, cancellation, duplicate detection. |
@@ -22,7 +22,8 @@ Plain venv, no package manager or build system. Modules organized by separation 
 | `sj_token.py` | Token cache management (`TokenManager`). Load, save, validate expiry, check refresh availability. |
 | `sj_logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. |
 | `sj_errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`). |
-| `sj_output.py` | User-facing output helpers. `pinfo()`, table formatting for dry-run results and booking listings. |
+| `sj_output.py` | User-facing output helpers. `pinfo()`/`pdim()`, ANSI styling, spinner, tables for dry-run/travel passes, per-day booking cards. |
+| `sj_calendar.py` | Swedish red-day calendar (Easter computed, no dependency). `skip_reason()` for weekend/holiday skipping. |
 
 ### Design principles
 
@@ -34,7 +35,7 @@ Plain venv, no package manager or build system. Modules organized by separation 
 ### Data flow
 
 ```
-CLI args (--dry-run, --cancel-date, --list-current-bookings)
+CLI args (see §5.6)
   ↓
 config.toml → sj_config.CfgManager → validate all fields
   ↓
@@ -45,15 +46,20 @@ sj_auth: refresh_token                sj_auth: full B2C login (interactive SMS)
 sj_auth: full B2C login → save tokens
   ↓
 Mode dispatch:
-  --list-current-bookings → fetch & display bookings table → exit
-  --cancel-date DATE      → find bookings → interactive cancel → exit
-  --dry-run               → search loop → display results table → exit
-  (default)               → booking loop:
+  --list-bookings         → fetch & display per-day booking cards → exit
+  --list-travelpasses     → fetch & display travel-pass table → exit
+  --cancel-date DATE      → find bookings on route → interactive cancel → exit
+  --cancel-bookings NUMS  → find bookings by number → interactive cancel → exit
+  --login-only            → exit after auth
+  (default, dry run)      → search loop → display results table → exit
+  --book                  → booking loop:
                               clean up stale provisionals
                               for each date in range:
+                                sj_calendar: skip weekends / red days
                                 sj_booking: check duplicates
                                 sj_booking: search → select → offer → book → checkout
-                              summary → exit
+                                per-day result line
+                              exit
 ```
 
 ## 3. Authentication
@@ -62,7 +68,7 @@ Mode dispatch:
 
 Follow industry-standard OAuth2 token handling:
 
-1. **Load cached token** from `~/.cache/sj_tool/token.json`.
+1. **Load cached token** from `~/.cache/sj-api-client/token.json`.
 2. **Validate access token**: check `expires_on` timestamp with a 5-minute safety buffer. If valid, use it.
 3. **Refresh**: if access token is expired but refresh token exists, call the B2C token endpoint with `grant_type=refresh_token`. On success, cache the new token set and proceed.
 4. **Full login**: if no cached token exists, or refresh fails, perform the interactive B2C login flow. This is the only path that requires user interaction.
@@ -98,7 +104,7 @@ Email and password stored in plaintext in `config.toml`. Acceptable for this use
 
 ### 4.1 File location
 
-`~/.config/sj_tool/config.toml` (or `$XDG_CONFIG_HOME/sj_tool/config.toml`)
+`~/.config/sj-api-client/config.toml` (or `$XDG_CONFIG_HOME/sj-api-client/config.toml`)
 
 ### 4.2 Schema
 
@@ -118,9 +124,11 @@ comfort_class = "2 class calm"
 flexibility = "FULLFLEX"
 roundtrip = true
 select_closest_ticket_available = true
-allow_class_fallback = true
-skip_weekends = true
-skip_holidays = true
+allow_class_fallback = true       # optional, default true
+book_partial = false              # optional, default false (see §6.5)
+skip_weekends = true              # optional, default true
+skip_holidays = true              # optional, default true
+service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 ```
 
 ### 4.3 Validation rules
@@ -142,29 +150,31 @@ All validation runs at startup before any API calls. Fail fast with clear error 
 | `roundtrip` | Required. Boolean (`true` / `false`). |
 | `select_closest_ticket_available` | Required. Boolean. |
 | `allow_class_fallback` | Optional. Boolean. Defaults to `true`. |
+| `book_partial` | Optional. Boolean. Defaults to `false`. See §6.5. |
 | `skip_weekends` | Optional. Boolean. Defaults to `true`. Skip Saturdays and Sundays. |
 | `skip_holidays` | Optional. Boolean. Defaults to `true`. Skip Swedish red days (see §6.4). |
+| `service_types` | Optional. List of strings from `ALL, SJ_HIGH, SJ_IC, SJ_REG, SJ_NT, X_TRAINOPS, X_PTA, X_EXPBUS`. `ALL` cannot be combined with other values. |
 
 Report all validation errors at once (don't stop at the first one).
 
 ### 4.4 Token cache
 
-`~/.cache/sj_tool/token.json` — auto-created on first successful login. Contains `access_token`, `refresh_token`, `expires_on`, etc.
+`~/.cache/sj-api-client/token.json` — auto-created on first successful login. Contains `access_token`, `refresh_token`, `expires_on`, etc. SSO cookies for silent re-login are cached next to it in `cookies.json`.
 
 ## 5. CLI Interface
 
-### 5.1 Normal mode (book)
+### 5.1 Book mode
+
+```bash
+python3 sj_tool.py --book
+```
+
+Reads config, authenticates, and books tickets for every date in the configured range. No confirmation prompt — the config is the source of truth. Each processed day ends with a result line (`booked …`, `booking … created but checkout failed`, or the reason nothing was booked).
+
+### 5.2 Dry-run mode (default)
 
 ```bash
 python3 sj_tool.py
-```
-
-Reads config, authenticates, and books tickets for every date in the configured range. No confirmation prompt — the config is the source of truth.
-
-### 5.2 Dry-run mode
-
-```bash
-python3 sj_tool.py --dry-run
 ```
 
 Performs the full search flow for each date but does **not** create bookings. Instead, prints a summary table showing what *would* be booked:
@@ -178,7 +188,8 @@ Dry Run Results
  2026-01-19  Return      17:22      20:08     2 class calm   FULLFLEX
  2026-01-20  Outbound    05:29      08:15     2 class calm   FULLFLEX
  2026-01-20  Return      17:22      20:08     2 class calm   FULLFLEX
- 2026-01-21  Outbound    —          —         —              — (no 0-price offer)
+ 2026-01-21  Outbound    05:29      08:15     2 class calm   no 0-price offer
+ 2026-01-22  Outbound    —          —         —              no departure found
  2026-01-21  Return      17:22      20:08     2 class calm   FULLFLEX
 ───────────────────────────────────────────────────────────────────────────
 ```
@@ -221,16 +232,16 @@ Fetches all active bookings within the travel pass validity period and displays 
 🎫 sj årskort silver
 
 tue 18 aug 2026   Linköping Central ⇄ Stockholm Central   past
-  → 04:01 – 08:38   4h 37m   X 2000 520   vagn 3 plats 34   2 klass Lugn   ZR8C6RT1
-  ← 17:22 – 21:53   4h 31m   X 2000 543   vagn 3 plats 22   2 klass Lugn   ZR8C6RT1
+  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 34   2 klass Lugn   ZR8C6RT1
+  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 22   2 klass Lugn   ZR8C6RT1
 
 wed 19 aug 2026   Linköping Central ⇄ Stockholm Central
-  → 04:01 – 08:38   4h 37m   X 2000 520   vagn 3 plats 30   2 klass Lugn   TBRS43MG
-  ← 17:22 – 21:53   4h 31m   X 2000 543   vagn 3 plats 55   2 klass Lugn   TBRS43MG
+  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 30   2 klass Lugn   TBRS43MG
+  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 55   2 klass Lugn   TBRS43MG
 
 mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
-  → 04:01 – 08:38   4h 37m   X 2000 520   vagn 7 plats 32   2 klass        3RK7YJU4
-  ← 17:22 – 21:53   4h 31m   X 2000 543   vagn 3 plats 21   2 klass Lugn   K883DH2T
+  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 7 seat 32   2 klass        3RK7YJU4
+  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 21   2 klass Lugn   K883DH2T
 
 🚆 3 day(s) · 4 booking(s) · 6 leg(s) · 2 in the past
 ```
@@ -242,7 +253,7 @@ mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
 - Only shows non-cancelled bookings. Pagination: fetches all pages from the bookings API. Read-only.
 - Preamble: one dimmed context line (`name · email · travel pass`) instead of separate "logged in as"/"travel pass" lines. Progress steps show a spinner while running and leave a dimmed trail line when done — `✓ fetching bookings`, or `✗ …` if the step raised — so logs show where time went or where a step failed. When stdout is not a TTY only the trail line is printed.
 - Styling: bold header/booking numbers, dimmed past days, coloured arrows. ANSI colour is emitted only when stdout is a TTY and `NO_COLOR` is unset (`TERM=dumb` also disables it); piped output is plain text. Emoji appear only in the title and summary lines, never inside aligned rows.
-- The same primitives (`style`, `pad`, `visible_len` in `sj_output.py`) style the dry-run and travel-pass tables (bold headers, dimmed separators and `n/a` cells).
+- The same primitives (`style`, `pad`, `visible_len` in `sj_output.py`) style the dry-run and travel-pass tables (bold headers, dimmed separators and dimmed note cells).
 
 ### 5.5 Environment variables
 
@@ -255,12 +266,16 @@ mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
 
 | Flag | Description | Interactive? |
 |---|---|---|
-| *(none)* | Book tickets for the configured date range. | Only SMS on first login. |
-| `--dry-run` | Search and display what would be booked, without booking. | Only SMS on first login. |
-| `--cancel-date YYYY-MM-DD` | Cancel bookings for a specific date. | Yes (direction choice + confirmation). |
-| `--list-current-bookings` | Display all active bookings in a table. | Only SMS on first login. |
+| *(none)* | Dry run: search and display what would be booked, without booking. | Only SMS on first login. |
+| `--book` | Book tickets for the configured date range. | Only SMS on first login. |
+| `--cancel-date YYYY-MM-DD` | Cancel bookings on the configured route for a specific date. | Yes (journey choice + confirmation). |
+| `--cancel-bookings NUM[,NUM…]` | Cancel booking(s) by booking number. | Yes (journey choice + confirmation). |
+| `--list-bookings` | Display all active bookings as per-day cards. | Only SMS on first login. |
+| `--list-travelpasses` | Display travel passes with validity and receipt details. | Only SMS on first login. |
+| `--login-only` | Authenticate, cache the token, exit. | Only SMS on first login. |
+| `--test-if-already-logged-in` | Exit 0 if a valid cached token exists, else 1. No network. | No. |
 
-Flags are mutually exclusive. Specifying more than one is a config error (exit 1).
+Flags are mutually exclusive. Specifying more than one is a usage error (exit 1).
 
 ### 5.7 Exit codes
 
@@ -290,7 +305,7 @@ For each date in `[date_start, date_end]`:
 
 ### 6.2 Provisional booking cleanup
 
-On startup (after auth, before the booking loop), fetch all existing bookings in the date range. Any booking with status `"NEW"` and `"CANCEL_JOURNEY"` in `possibleActions` is a stale provisional booking from a previous interrupted run. Cancel these automatically. This always runs — it is not opt-in.
+On startup (after auth, before the booking loop), fetch all existing bookings in the date range. Any booking with status `"NEW"` and `"CANCEL_JOURNEY"` in `possibleActions` is a stale provisional booking from a previous interrupted run. Cancel these automatically. This runs in `--book` mode only (dry-run must not mutate anything); the duplicate check ignores such stale provisionals in both modes so dry-run and book agree on what is already booked.
 
 ### 6.3 Timing between dates
 
@@ -374,14 +389,14 @@ If the API returns a JSON response that doesn't match any known structure (no `s
 ### 8.6 SMS input timeout
 
 If the user does not enter the SMS code within 2 minutes:
-- Print `"SMS code input timed out after 2 minutes."` to stdout.
+- Print `"sms code not provided or timed out after 2 minutes"` to stdout.
 - Exit with code 1.
 
 ## 9. Travel Pass Handling
 
 ### 9.1 Auto-selection
 
-On startup, fetch all travel passes. Filter to only active/valid passes. Behavior:
+On startup, fetch all travel passes and drop expired ones (`endTravelValidityDateTime` in the past; passes that have not started yet are kept so future dates can be booked). Behavior:
 - **One valid pass**: use it automatically.
 - **Multiple valid passes**: display a numbered list and prompt the user to select one.
 - **No valid passes**: exit with an error.
@@ -449,7 +464,7 @@ Color-coded by level in terminal.
 - **Multi-passenger booking**: always single passenger (the pass holder).
 - **Dynamic station lookup**: use hardcoded map for now.
 - **SMS retry / re-trigger**: user re-runs the tool if SMS doesn't arrive.
-- **`dry_run` config key**: removed from config. Dry-run is a CLI flag (`--dry-run`) only.
+- **`dry_run` config key**: removed from config. Dry-run is the default CLI mode; `--book` books for real.
 - **Interactive confirmation before booking**: the config is the contract. The tool books what's configured.
 
 ## 12. Dependencies
