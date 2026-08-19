@@ -293,6 +293,16 @@ Implemented in `sj_calendar.py` with no external dependency. `skip_reason(date, 
 
 Swedish red days are computed per year: fixed dates (Nyårsdagen, Trettondedag jul, Första maj, Nationaldagen, Juldagen, Annandag jul), Easter-derived (Långfredagen, Påskdagen, Annandag påsk, Kristi himmelsfärdsdag, Pingstdagen; Easter via the Meeus/Jones/Butcher algorithm) and window-based Saturdays (Midsommardagen = Saturday in June 20–26, Alla helgons dag = Saturday in Oct 31–Nov 6). The three eves — Midsommarafton, Julafton, Nyårsafton — are also included: they are not formal public holidays but are legally treated as Sundays and are de facto non-working days for commuters.
 
+### 6.5 Partial booking (`book_partial`)
+
+A round trip is always attempted the way the SJ app does it: one roundtrip search, one booking created from the outbound offer, return leg added to that booking via PATCH. Result: a single booking number for both legs.
+
+- If the **return** leg has no 0-price offer (nor a close alternative), the outbound is kept and the booking is checked out outbound-only. This happens regardless of `book_partial`.
+- If the **outbound** leg has no 0-price offer, nothing can be booked from the roundtrip search (the API requires an outbound offer to create a booking). With `book_partial = true` the tool then runs a one-way search for the return leg and books it as a separate booking; with `book_partial = false` the day is skipped.
+- Missing legs are picked up on later runs via the duplicate check (§6.1 step 1), which searches only the missing direction as a one-way trip.
+
+`handle_booking_process` returns `{"booking_id": ...}` when a booking was created and `None` when nothing was booked; `process_booking_flow` uses that to decide whether to run the fallback.
+
 ## 7. Departure Selection
 
 ### 7.1 Time matching

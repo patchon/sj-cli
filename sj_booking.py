@@ -587,13 +587,14 @@ def handle_booking_process(
         date_str: Date string for display purposes.
 
     Returns:
-        Dry-run result dict if in dry-run mode, None otherwise.
+        Dry-run result dict in dry-run mode. In booking mode, a dict with
+        "booking_id" when a booking was created (possibly outbound-only),
+        None when nothing was booked.
 
     """
     params = cfg["search_parameters"]
     flexibility = params.get("flexibility", "FULLFLEX")
     allow_fallback = params.get("allow_class_fallback", True)
-    book_partial = params.get("book_partial", False)
 
     origin = params["station_from"]
     dest = params["station_to"]
@@ -708,7 +709,9 @@ def handle_booking_process(
                                 access_token, alt["offer_id"], passenger_token
                             )
                         booking_id = b_resp.get("bookingId") or b_resp.get("id")
-                    elif not book_partial:
+                    else:
+                        # Nothing can be booked without an outbound offer; the
+                        # caller handles the partial (return-leg-only) fallback.
                         return None
         elif dry_run:
             dry_run_result["outbound"] = {
@@ -720,8 +723,7 @@ def handle_booking_process(
             }
         else:
             pinfo("no departure found for outbound")
-            if not book_partial:
-                return None
+            return None
 
     # 2. Inbound
     if do_in and in_search_id:
@@ -881,7 +883,7 @@ def handle_booking_process(
         logger.error(f"checkout failed for booking {booking_id}: {e}")
         pinfo(f"checkout failed: {e}")
 
-    return None
+    return {"booking_id": booking_id}
 
 
 def _search_and_book_one_way(
@@ -900,8 +902,10 @@ def _search_and_book_one_way(
     """
     Search and book a single one-way leg independently.
 
-    Used by partial booking to treat each leg as a standalone one-way trip,
-    avoiding the roundtrip search's inbound offer restriction.
+    Used by partial booking as a fallback when the roundtrip's outbound leg
+    could not be booked: the return leg is searched and booked as a
+    standalone one-way trip (the API needs an outbound offer to create a
+    booking, so a roundtrip search's return offer cannot be used alone).
 
     Args:
         client: The SJ HTTP client.
@@ -1023,51 +1027,11 @@ def process_booking_flow(
 
     # Search
     if req_outbound and req_inbound:
-        if book_partial:
-            # Partial booking: search each leg independently as one-way so
-            # each can be booked standalone if the other leg fails. The API
-            # requires outboundOfferId to create a booking — offers from a
-            # roundtrip search's return leg can't be used standalone.
-            logger.info("booking roundtrip with partial fallback (separate searches)")
-
-            out_result = _search_and_book_one_way(
-                client,
-                access_token,
-                cfg,
-                origin_name,
-                dest_name,
-                date_str,
-                tp_product_id,
-                tp_token_id,
-                service_types,
-                is_outbound=True,
-                dry_run=dry_run,
-            )
-
-            in_result = _search_and_book_one_way(
-                client,
-                access_token,
-                cfg,
-                dest_name,
-                origin_name,
-                date_str,
-                tp_product_id,
-                tp_token_id,
-                service_types,
-                is_outbound=False,
-                dry_run=dry_run,
-            )
-
-            if dry_run:
-                merged = {}
-                if out_result and "outbound" in out_result:
-                    merged["outbound"] = out_result["outbound"]
-                if in_result and "inbound" in in_result:
-                    merged["inbound"] = in_result["inbound"]
-                return merged or None
-            return None
-
-        # Normal roundtrip search (single API call)
+        # Roundtrip search → single booking (outbound + return leg), exactly
+        # like the SJ app. If the return leg fails the outbound is still kept.
+        # If the *outbound* fails nothing can be booked from a roundtrip
+        # search (the API needs an outbound offer to create a booking), so
+        # with book_partial we fall back to a standalone one-way return leg.
         logger.info("booking roundtrip (both legs missing)")
         search_resp = client.search_journey(
             access_token,
@@ -1082,21 +1046,40 @@ def process_booking_flow(
         out_id = search_resp.get("departureSearchId")
         in_id = search_resp.get("returnDepartureSearchId")
 
-        if out_id and in_id:
-            return handle_booking_process(
-                client,
-                access_token,
-                cfg,
-                passenger_token,
-                out_id,
-                in_id,
-                True,
-                True,
-                dry_run,
-                date_str,
-            )
-        logger.error("failed to get both outbound and inbound search IDs")
-        return None
+        if not (out_id and in_id):
+            logger.error("failed to get both outbound and inbound search IDs")
+            return None
+
+        result = handle_booking_process(
+            client,
+            access_token,
+            cfg,
+            passenger_token,
+            out_id,
+            in_id,
+            True,
+            True,
+            dry_run,
+            date_str,
+        )
+        if dry_run or result or not book_partial:
+            return result
+
+        # Nothing booked (outbound unavailable): try the return leg on its own
+        pinfo("outbound unavailable, trying return leg as a separate booking")
+        return _search_and_book_one_way(
+            client,
+            access_token,
+            cfg,
+            dest_name,
+            origin_name,
+            date_str,
+            tp_product_id,
+            tp_token_id,
+            service_types,
+            is_outbound=False,
+            dry_run=dry_run,
+        )
 
     if req_outbound:
         logger.info("booking outbound only")
