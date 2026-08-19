@@ -231,7 +231,14 @@ def main():
         handle_test_logged_in()
 
     client = SJClient()
+    try:
+        _run(args, client)
+    finally:
+        client.close()
 
+
+def _run(args: argparse.Namespace, client: SJClient) -> None:
+    """Everything after argument parsing; split out so main() can close the client."""
     # 1. Load and validate config
     try:
         cm = CfgManager()
@@ -302,7 +309,9 @@ def main():
             handle_cancel_mode(client, access_token, cfg, args.cancel_date)
 
         elif args.cancel_bookings:
-            booking_numbers = [b.strip() for b in args.cancel_bookings.split(",") if b.strip()]
+            booking_numbers = [
+                b.strip().upper() for b in args.cancel_bookings.split(",") if b.strip()
+            ]
             for bn in booking_numbers:
                 handle_cancel_booking(client, access_token, active_pass, bn)
 

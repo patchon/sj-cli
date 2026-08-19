@@ -467,11 +467,12 @@ def poll_and_select(
     """
     Poll for search results and select the best departure.
 
-    Polls up to 5 times with 1-second intervals until departures appear.
+    Polls up to 5 times, 1 second apart, until departures appear.
     """
     departures = []
-    for _ in range(5):
-        time.sleep(1.0)
+    for attempt in range(5):
+        if attempt:
+            time.sleep(1.0)
         results = client.get_search_results(access_token, search_id)
         travels = results.get("travels", [])
         if travels:
