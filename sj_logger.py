@@ -76,10 +76,10 @@ def log_response(response: httpx.Response) -> None:
 class HttpxTraceLevelFilter(logging.Filter):
     """A filter to downgrade httpx/httpcore DEBUG logs to TRACE."""
 
-    def __init__(self, name=""):
-        """Initializes the filter."""
+    def __init__(self, is_trace_level: bool, name=""):
+        """Initializes the filter. is_trace_level: whether the global level is TRACE."""
         super().__init__(name)
-        self.is_trace_level = os.getenv("LOG_LEVEL", "").upper() == "TRACE"
+        self.is_trace_level = is_trace_level
 
     @override
     def filter(self, record: logging.LogRecord) -> bool:
@@ -213,7 +213,7 @@ def setup_logging(level: str) -> None:
     log level changes on subsequent calls.
 
     Args:
-        level: The log level to set. Defaults to "WARNING".
+        level: The log level to set. Empty or invalid values fall back to CRITICAL.
 
     """
     levels = {
@@ -252,7 +252,7 @@ def setup_logging(level: str) -> None:
 
     if not root_logger.handlers:
         handler = logging.StreamHandler(sys.stderr)
-        handler.addFilter(HttpxTraceLevelFilter())
+        handler.addFilter(HttpxTraceLevelFilter(level_upper == "TRACE"))
         handler.setFormatter(
             CliLogFormatter(
                 "time=%(asctime)s level=%(levelname)s "

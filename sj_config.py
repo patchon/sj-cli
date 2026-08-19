@@ -14,6 +14,18 @@ from sj_logger import log_json
 
 logger = logging.getLogger(__name__)
 
+# Valid service_types values and their display names ("ALL" = no filter).
+SERVICE_TYPE_NAMES = {
+    "ALL": "All",
+    "SJ_HIGH": "SJ High-speed train",
+    "SJ_IC": "SJ InterCity",
+    "SJ_REG": "SJ Regional",
+    "SJ_NT": "SJ Night train",
+    "X_TRAINOPS": "Other train operators",
+    "X_PTA": "Public transport",
+    "X_EXPBUS": "Express buses",
+}
+
 
 class CfgManager:
     """
@@ -168,10 +180,7 @@ class CfgManager:
                 errors.append(f"{key} must be a boolean if specified")
 
         # service_types (optional, list of allowed service type strings)
-        valid_service_types = {
-            "ALL", "SJ_HIGH", "SJ_IC", "SJ_REG", "SJ_NT",
-            "X_TRAINOPS", "X_PTA", "X_EXPBUS",
-        }
+        valid_service_types = set(SERVICE_TYPE_NAMES)
         st = params.get("service_types")
         if st is not None:
             if not isinstance(st, list) or not all(isinstance(s, str) for s in st):

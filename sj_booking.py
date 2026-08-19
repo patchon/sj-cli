@@ -64,7 +64,8 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
         duration, comfort_class, route, booking_number, past, train, seat.
 
     """
-    direction = segment.get("direction", "OUTBOUND").capitalize()
+    # API says OUTBOUND/INBOUND; the UI (and the dry-run table) says Outbound/Return
+    direction = "Return" if segment.get("direction") == "INBOUND" else "Outbound"
     dep_dt = segment.get("departureDateTime", "")
     arr_dt = segment.get("arrivalDateTime", "")
     duration = segment.get("duration", "")
@@ -87,7 +88,7 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
         carriage = seat_info.get("carriageNumber")
         seat_no = seat_info.get("number")
         if carriage or seat_no:
-            seat = f"vagn {carriage or '?'} plats {seat_no or '?'}"
+            seat = f"carriage {carriage or '?'} seat {seat_no or '?'}"
 
     in_past = "N"
     try:
@@ -1158,6 +1159,15 @@ def process_booking_flow(
     return None
 
 
+def _dry_run_note(leg: dict) -> str:
+    """Why a dry-run leg could not be booked ("" when it could)."""
+    if leg.get("has_offer"):
+        return ""
+    if leg.get("departure", "\u2014") == "\u2014":
+        return "no departure found"
+    return "no 0-price offer"
+
+
 def process_date_range(
     client: SJClient,
     access_token: str,
@@ -1229,7 +1239,7 @@ def process_date_range(
                             "arrival": out.get("arrival", "—"),
                             "comfort_class": out.get("class", "—"),
                             "flexibility": out.get("flexibility") or "—",
-                            "note": "" if out.get("has_offer") else "no 0-price offer",
+                            "note": _dry_run_note(out),
                         }
                     )
                 if "inbound" in result:
@@ -1242,7 +1252,7 @@ def process_date_range(
                             "arrival": inb.get("arrival", "—"),
                             "comfort_class": inb.get("class", "—"),
                             "flexibility": inb.get("flexibility") or "—",
-                            "note": "" if inb.get("has_offer") else "no 0-price offer",
+                            "note": _dry_run_note(inb),
                         }
                     )
         except Exception as e:

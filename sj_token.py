@@ -82,7 +82,7 @@ class TokenManager:
                 logger.debug(f"saved token data {token_data} to {self.path}")
             self.token = token_data
         except Exception as e:
-            logging.error(f"failed to save token data {token_data} to {self.path}: {e}")
+            logger.error(f"failed to save token data to {self.path}: {e}")
 
     def is_valid(self):
         """

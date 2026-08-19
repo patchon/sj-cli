@@ -18,7 +18,7 @@ from sj_booking import (
     process_date_range,
 )
 from sj_client import SJClient
-from sj_config import CfgManager
+from sj_config import SERVICE_TYPE_NAMES, CfgManager
 from sj_errors import SJAuthError, SJConfigError
 from sj_logger import setup_logging
 from sj_output import pdim, pinfo, print_dry_run_table, print_travelpasses_table, spinner
@@ -304,20 +304,9 @@ def main():
             pdim(f"found {len(bookings_list)} active bookings")
 
             # Show active service type filter
-            service_type_names = {
-                "SJ_HIGH": "SJ High-speed train",
-                "SJ_IC": "SJ InterCity",
-                "SJ_REG": "SJ Regional",
-                "SJ_NT": "SJ Night train",
-                "X_TRAINOPS": "Other train operators",
-                "X_PTA": "Public transport",
-                "X_EXPBUS": "Express buses",
-            }
             raw_types = params.get("service_types")
             if raw_types and raw_types != ["ALL"]:
-                filter_str = ", ".join(
-                    service_type_names.get(t, t) for t in raw_types
-                )
+                filter_str = ", ".join(SERVICE_TYPE_NAMES.get(t, t) for t in raw_types)
                 pdim(f"filter: {filter_str}")
 
             # Process date range

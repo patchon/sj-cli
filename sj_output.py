@@ -186,31 +186,23 @@ def print_dry_run_table(results: list[dict]) -> None:
 
     Args:
         results: List of dicts with keys: date, direction, departure,
-                 arrival, comfort_class, flexibility, note.
+                 arrival, comfort_class, flexibility, note. A non-empty
+                 note means the leg cannot be booked; it is shown in place
+                 of the flexibility cell.
 
     """
     headers = ["Date", "Direction", "Departure", "Arrival", "Class", "Flexibility"]
     rows = []
     for r in results:
         note = r.get("note", "")
-        if note:
-            rows.append([
-                r.get("date", "\u2014"),
-                r.get("direction", "\u2014"),
-                style("n/a", DIM),
-                style("n/a", DIM),
-                style("n/a", DIM),
-                style("n/a", DIM),
-            ])
-        else:
-            rows.append([
-                r.get("date", "\u2014"),
-                r.get("direction", "\u2014"),
-                r.get("departure", "\u2014"),
-                r.get("arrival", "\u2014"),
-                r.get("comfort_class", "\u2014"),
-                r.get("flexibility", "\u2014"),
-            ])
+        rows.append([
+            r.get("date", "\u2014"),
+            r.get("direction", "\u2014"),
+            r.get("departure", "\u2014"),
+            r.get("arrival", "\u2014"),
+            r.get("comfort_class", "\u2014"),
+            style(note, DIM) if note else r.get("flexibility", "\u2014"),
+        ])
 
     table = format_table(headers, rows, title="\U0001f50d dry run results")
     print(f"\n{table}", file=sys.stdout)
