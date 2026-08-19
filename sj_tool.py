@@ -5,7 +5,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sj_auth import ensure_authenticated
 from sj_booking import (
@@ -84,11 +84,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _is_expired(travel_pass: dict) -> bool:
+    """True if the pass's validity end lies in the past (unknown end = not expired)."""
+    end = travel_pass.get("endTravelValidityDateTime")
+    if not end:
+        return False
+    try:
+        return datetime.fromisoformat(end.replace("Z", "+00:00")) < datetime.now(UTC)
+    except ValueError:
+        return False
+
+
 def resolve_travel_pass(travel_passes: list) -> dict:
     """
     Select the travel pass to use.
 
-    Auto-picks if only one valid pass exists. Prompts for selection if multiple.
+    Expired passes are dropped (SPEC §9.1). Auto-picks if only one pass
+    remains. Prompts for selection if multiple.
 
     Returns:
         The selected travel pass dict.
@@ -97,9 +109,14 @@ def resolve_travel_pass(travel_passes: list) -> dict:
         SystemExit: If no valid passes found.
 
     """
-    if not travel_passes:
-        pinfo("no travel pass found")
+    valid = [tp for tp in travel_passes if not _is_expired(tp)]
+    if len(valid) < len(travel_passes):
+        logger.info(f"ignoring {len(travel_passes) - len(valid)} expired travel pass(es)")
+
+    if not valid:
+        pinfo("no valid travel pass found" if travel_passes else "no travel pass found")
         sys.exit(1)
+    travel_passes = valid
 
     if len(travel_passes) == 1:
         return travel_passes[0]
