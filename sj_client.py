@@ -213,9 +213,16 @@ class SJClient:
         self.state = secrets.token_urlsafe(16)
         self.nonce = secrets.token_urlsafe(16)
 
-        # B2C Context
+        # B2C context, filled in step by step during the login flow. All of it
+        # lives here so reset() (which re-runs __init__) clears it.
         self.csrf_token = ""
         self.trans_id = ""
+        self.page_view_id = ""
+        self.b2c_api_type = ""
+        self.last_response: httpx.Response | None = None
+        self._confirmed_url = ""
+        self._verified_device_id = ""
+        self._verified_device_unique_id = ""
 
     def reset(self) -> None:
         """Reset client state for a fresh login attempt."""
@@ -358,6 +365,8 @@ class SJClient:
         # Use the response from verify_sms (Phonefactor/confirmed)
         # This page contains the device registration SA_FIELDS
         resp = self.last_response
+        if resp is None:
+            raise Exception("missing last_response, login sequence was not run")
 
         if "SA_FIELDS" not in resp.text:
             logger.error("missing SA_FIELDS in response")
@@ -1011,18 +1020,15 @@ class SJClient:
         device_unique_id = base64.b64encode(secrets.token_bytes(24)).decode()
         unique_id = str(secrets.token_urlsafe(16))
 
-        # Use verified device IDs from _confirm_login_stage if available
-        verified_id = getattr(self, "_verified_device_id", "") or ""
-        verified_unique_id = getattr(self, "_verified_device_unique_id", "") or ""
-
         payload = {
             "deviceUniqueIdUserId": device_unique_id,
             "deviceUserId": device_user_id,
             "request_type": "RESPONSE",
             "uniqueId": unique_id,
             "userAgent": self.client.headers["User-Agent"],
-            "verifiedDeviceId": verified_id,
-            "verifiedDeviceUniqueId": verified_unique_id,
+            # Verified device IDs from _confirm_login_stage (empty on a new device)
+            "verifiedDeviceId": self._verified_device_id,
+            "verifiedDeviceUniqueId": self._verified_device_unique_id,
         }
 
         headers = {
