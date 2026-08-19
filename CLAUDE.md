@@ -13,17 +13,29 @@ See `SPEC.md` for the full specification (edge cases, error handling, CLI modes,
 ```bash
 source venv/bin/activate
 
-# Book tickets (default mode)
+# Dry run (default mode) — search and display what would be booked, no booking made
 python3 sj_tool.py
 
-# Dry run — search and display what would be booked
-python3 sj_tool.py --dry-run
+# Book tickets for real
+python3 sj_tool.py --book
 
-# List current bookings
-python3 sj_tool.py --list-current-bookings
+# List all active bookings
+python3 sj_tool.py --list-bookings
 
-# Cancel a specific date
+# List travel passes (validity, receipt details)
+python3 sj_tool.py --list-travelpasses
+
+# Cancel bookings for a specific date
 python3 sj_tool.py --cancel-date 2026-01-20
+
+# Cancel booking(s) by number, comma-separated
+python3 sj_tool.py --cancel-bookings 3HT2NEIL,ABCD1234
+
+# Authenticate and cache token only, then exit
+python3 sj_tool.py --login-only
+
+# Exit 0 if a valid cached token exists, 1 otherwise (for scripting)
+python3 sj_tool.py --test-if-already-logged-in
 
 # Verbose logging (logs go to stderr)
 LOG_LEVEL=DEBUG python3 sj_tool.py
@@ -33,6 +45,12 @@ LOG_LEVEL=TRACE python3 sj_tool.py   # includes httpx request/response details
 Log levels: TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL. Default: CRITICAL (silent).
 
 The tool requires interactive SMS input during first login (B2C MFA, 2-minute timeout). Subsequent runs use cached/refreshed tokens.
+
+If `venv/` breaks (e.g. Homebrew Python was upgraded and the interpreter symlink dangles), recreate it:
+
+```bash
+rm -rf venv && python3 -m venv venv && ./venv/bin/pip install httpx typing_extensions
+```
 
 ## Architecture
 

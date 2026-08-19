@@ -302,10 +302,14 @@ def find_offer_id(
         "FIRST": "1 class",
     }
 
-    target_classes = class_map.get(requested_class, [])
+    # Iterate in preference order, not API dict order — the API lists SECOND
+    # before SECOND_CALM, so walking offers.items() would always pick plain
+    # 2 class even when calm is available.
+    target_classes = class_map.get(requested_class, list(offers.keys()))
 
-    for comf_key, offer_data in offers.items():
-        if comf_key in target_classes or not target_classes:
+    for comf_key in target_classes:
+        offer_data = offers.get(comf_key)
+        if offer_data:
             flexibilities = offer_data.get("flexibilities", {})
 
             for flex_type, flex_data in flexibilities.items():
