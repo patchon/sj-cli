@@ -112,8 +112,16 @@ Token cache: `~/.cache/sj-api-client/token.json` (auto-created on first login)
 - Python 3.13+ (uses `tomllib` from stdlib, `type | None` union syntax)
 - `httpx` — HTTP client
 - `typing_extensions` — `@override` decorator
-- No requirements.txt/pyproject.toml; install manually: `pip install httpx typing_extensions`
+- No requirements.txt/pyproject.toml; install manually: `pip install httpx typing_extensions` (+ `pytest` for tests)
 
 ## Tests and CI
 
-There are no tests or CI configuration in this project.
+```bash
+./venv/bin/pip install pytest   # once
+./venv/bin/pytest               # ~60 tests, <1s, no network
+ruff check .                    # lint (ruff.toml selects ALL with documented ignores)
+```
+
+Tests live in `tests/` and never touch the network: `tests/conftest.py` provides a scripted `FakeClient`,
+departure/offer builders and a base config. `tests/test_booking_flow.py` pins the booking flow's API call
+sequence, return contract and user messages — run it after any change to `sj_booking.py`. There is no CI.

@@ -73,3 +73,12 @@ ignore = [
 "sj_client.py" = [
     "N806",     # Non-lowercase variable (STATION_MAP used locally)
 ]
+"tests/*" = [
+    "D",        # Docstrings: test names are the documentation
+    "E501",     # Long lines in fixtures/assertions
+    "PT018",    # Composite assertions read fine in characterisation tests
+    "SLF001",   # Tests exercise private helpers on purpose
+    "ARG001",   # Unused args in fake client signatures (interface compliance)
+    "DTZ001",   # Naive datetimes mirror the production code
+    "S105",     # "password": "x" in fixture config
+]

@@ -473,3 +473,4 @@ Color-coded by level in terminal.
 - `httpx` — HTTP client
 - `typing_extensions` — `@override` decorator
 - No `requirements.txt` or `pyproject.toml`. Manual install: `pip install httpx typing_extensions`
+- `pytest` (dev only) — unit tests in `tests/`, no network; `pytest.ini` sets `pythonpath = .`
