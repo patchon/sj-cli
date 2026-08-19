@@ -8,6 +8,7 @@ from pathlib import Path
 
 import tomllib
 
+from sj_calendar import sweden_now
 from sj_client import STATION_MAP
 from sj_errors import SJConfigError
 from sj_logger import log_json
@@ -116,7 +117,7 @@ class CfgManager:
             errors.append("date_end must be >= date_start")
 
         # date_start must be today or in the future
-        if date_start and date_start < date.today():
+        if date_start and date_start < sweden_now().date():
             errors.append("date_start must be today or in the future")
 
         # time_leave

@@ -8,6 +8,8 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
+from sj_calendar import parse_api_datetime, sweden_now, to_sweden
+
 logger = logging.getLogger(__name__)
 
 _BRAILLE_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -334,7 +336,7 @@ def print_bookings_table(bookings: list[dict], pass_name: str, summary: bool = T
 
 def _format_tp_date(iso_str: str | None, exclusive: bool = False) -> str:
     """
-    Format an ISO datetime string to YYYY-MM-DD in local time.
+    Format an ISO datetime string to YYYY-MM-DD in Swedish local time.
 
     Args:
         iso_str: ISO datetime string from the API.
@@ -344,13 +346,12 @@ def _format_tp_date(iso_str: str | None, exclusive: bool = False) -> str:
     if not iso_str:
         return "\u2014"
     try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        local_dt = dt.astimezone()
+        local_dt = to_sweden(iso_str)
         if exclusive:
             local_dt -= timedelta(days=1)
         return local_dt.strftime("%Y-%m-%d")
-    except (ValueError, AttributeError):
-        return iso_str[:10] if iso_str else "\u2014"
+    except (ValueError, TypeError):
+        return iso_str[:10]
 
 
 def _days_remaining(end_iso: str | None) -> str:
@@ -358,14 +359,12 @@ def _days_remaining(end_iso: str | None) -> str:
     if not end_iso:
         return "\u2014"
     try:
-        end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00")).astimezone()
-        # End date is exclusive, so last valid day ends at end_dt
-        delta = end_dt - datetime.now().astimezone()
-        days = delta.days
+        # End date is exclusive, so the last valid day ends at end_dt
+        days = (parse_api_datetime(end_iso) - sweden_now()).days
         if days < 0:
             return "expired"
         return str(days)
-    except (ValueError, AttributeError):
+    except (ValueError, TypeError):
         return "\u2014"
 
 

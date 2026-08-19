@@ -5,7 +5,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sj_auth import ensure_authenticated
 from sj_booking import (
@@ -17,6 +17,7 @@ from sj_booking import (
     handle_list_bookings,
     process_date_range,
 )
+from sj_calendar import parse_api_datetime, sweden_now, to_sweden
 from sj_client import SJClient
 from sj_config import SERVICE_TYPE_NAMES, CfgManager
 from sj_errors import SJAuthError, SJConfigError
@@ -90,8 +91,8 @@ def _is_expired(travel_pass: dict) -> bool:
     if not end:
         return False
     try:
-        return datetime.fromisoformat(end.replace("Z", "+00:00")) < datetime.now(UTC)
-    except ValueError:
+        return parse_api_datetime(end) < sweden_now()
+    except (ValueError, TypeError):
         return False
 
 
@@ -154,12 +155,9 @@ def validate_dates_against_pass(cfg: dict, travel_pass: dict) -> None:
     if not valid_start or not valid_end:
         return
 
-    vp_start = datetime.fromisoformat(
-        valid_start.replace("Z", "+00:00")
-    ).replace(tzinfo=None)
-    vp_end = datetime.fromisoformat(
-        valid_end.replace("Z", "+00:00")
-    ).replace(tzinfo=None)
+    # Compare Swedish wall-clock times: config dates are Swedish dates.
+    vp_start = to_sweden(valid_start).replace(tzinfo=None)
+    vp_end = to_sweden(valid_end).replace(tzinfo=None)
 
     params = cfg.get("search_parameters", {})
     s_start = datetime.strptime(params["date_start"], "%Y-%m-%d")

@@ -347,7 +347,15 @@ When a fallback occurs, **inform the user** which class was actually selected vs
 
 When `allow_class_fallback = false`, only match the exact requested class. If unavailable, skip that departure.
 
-### 7.3 Station resolution
+### 7.3 Timezones
+
+SJ API timestamps carry an explicit offset (`2026-09-01T06:59:00+02:00`). Rules, implemented once in `sj_calendar.py` (`parse_api_datetime`, `to_sweden`, `sweden_now`) and used everywhere:
+
+- Train times, pass validity dates and config times are **Swedish wall-clock** times. API timestamps are converted to `Europe/Stockholm` before display or comparison with config values — never to the machine's local zone, so the tool behaves the same when run from abroad.
+- "Is this in the past / expired / how many days left" comparisons use aware datetimes.
+- A naive API timestamp (no offset) is assumed to be Swedish local time.
+
+### 7.4 Station resolution
 
 Station names are resolved to UIC codes via a hardcoded map in `SJClient`. This is sufficient for now. Future improvement: dynamic station lookup via the SJ API.
 

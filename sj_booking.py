@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 
 from sj_auth import ensure_valid_token
-from sj_calendar import skip_reason
+from sj_calendar import skip_reason, sweden_now, to_sweden
 from sj_client import SJClient
 from sj_errors import SJAPIError
 from sj_output import (
@@ -38,12 +38,12 @@ def booking_date_range(
         Tuple of (start_date, end_date) as YYYY-MM-DD strings.
 
     """
-    now_date = datetime.now()
+    now_date = sweden_now()
     b_start = (now_date + timedelta(days=start_offset_days)).strftime("%Y-%m-%d")
 
     valid_end = travel_pass.get("endTravelValidityDateTime") if travel_pass else None
     if valid_end:
-        vp_end = datetime.fromisoformat(valid_end.replace("Z", "+00:00")).replace(tzinfo=None)
+        vp_end = to_sweden(valid_end)
         b_end = (vp_end + timedelta(days=1)).strftime("%Y-%m-%d")
     else:
         b_end = (now_date + timedelta(days=fallback_days)).strftime("%Y-%m-%d")
@@ -58,7 +58,7 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
     Args:
         segment: Segment dict from the API.
         booking_number: The parent booking number.
-        now: Current datetime for past-detection.
+        now: Current aware datetime for past-detection (e.g. sweden_now()).
 
     Returns:
         Display row dict with keys: date, direction, departure, arrival,
@@ -93,19 +93,17 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
 
     in_past = "N"
     try:
-        dep_parsed = datetime.fromisoformat(dep_dt.replace("Z", "+00:00")).replace(tzinfo=None)
-        if dep_parsed < now:
+        dep_local = to_sweden(dep_dt)
+        if dep_local < now:
             in_past = "Y"
-    except (ValueError, AttributeError):
-        pass
-
-    try:
-        date_str = dep_dt.split("T")[0]
-        dep_time = dep_dt.split("T")[1][:5]
-        arr_time = arr_dt.split("T")[1][:5]
-    except (IndexError, AttributeError):
+        date_str = dep_local.strftime("%Y-%m-%d")
+        dep_time = dep_local.strftime("%H:%M")
+    except (ValueError, TypeError):
         date_str = dep_dt
         dep_time = dep_dt
+    try:
+        arr_time = to_sweden(arr_dt).strftime("%H:%M")
+    except (ValueError, TypeError):
         arr_time = arr_dt
 
     return {
@@ -1319,7 +1317,7 @@ def handle_cancel_booking(
             pinfo("no action taken")
         return
 
-    now = datetime.now()
+    now = sweden_now()
 
     # Collect segments for display and cancellation
     display_rows = []
@@ -1467,7 +1465,7 @@ def handle_list_bookings(
         all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
 
     # Transform raw API items into display rows
-    now = datetime.now()
+    now = sweden_now()
     display_rows = []
     for item in all_bookings:
         booking = item.get("booking", {})

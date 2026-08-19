@@ -1,13 +1,48 @@
 """
-Swedish public holiday ("röda dagar") and weekend calendar.
+Swedish calendar and date helpers.
 
-No external dependency: every Swedish red day is either a fixed date or
-derived from Easter Sunday, which is computed with the anonymous Gregorian
-algorithm (Meeus/Jones/Butcher).
+- Red days ("röda dagar") and weekends, with no external dependency: every
+  Swedish red day is either a fixed date or derived from Easter Sunday
+  (anonymous Gregorian algorithm, Meeus/Jones/Butcher).
+- Timezone helpers: the SJ API returns timestamps with an explicit offset
+  (e.g. 2026-09-01T06:59:00+02:00). Train times and pass validity are
+  Swedish wall-clock times, config times are too, and "now" comparisons must
+  not depend on the machine's timezone. All API timestamp handling goes
+  through parse_api_datetime() / to_sweden() so those rules live in one place.
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import cache
+from zoneinfo import ZoneInfo
+
+SWEDEN = ZoneInfo("Europe/Stockholm")
+
+
+def parse_api_datetime(value: str) -> datetime:
+    """
+    Parse an SJ API timestamp into an aware datetime.
+
+    Accepts ISO 8601 with an offset or 'Z'. A naive value (no offset) is
+    assumed to be Swedish local time.
+
+    Raises:
+        ValueError: If the string is not an ISO 8601 datetime.
+
+    """
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=SWEDEN)
+    return dt
+
+
+def to_sweden(value: str) -> datetime:
+    """Parse an SJ API timestamp and express it in Swedish local time (aware)."""
+    return parse_api_datetime(value).astimezone(SWEDEN)
+
+
+def sweden_now() -> datetime:
+    """Current time in Sweden (aware)."""
+    return datetime.now(SWEDEN)
 
 
 def easter_sunday(year: int) -> date:
