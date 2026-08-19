@@ -207,8 +207,6 @@ class SJClient:
         self.code_challenge = self._generate_code_challenge(self.code_verifier)
         self.state = secrets.token_urlsafe(16)
         self.nonce = secrets.token_urlsafe(16)
-        self.email = None
-        self.password = None
 
         # B2C Context
         self.csrf_token = ""
@@ -314,8 +312,6 @@ class SJClient:
 
         """
         logger.info("starting login sequence ...")
-        self.email = email
-        self.password = password
 
         # 1. Fetch login page
         self._fetch_login_page()
@@ -529,10 +525,7 @@ class SJClient:
 
         url_phonefactor = f"{self.URL_AUTH_FLOW_BASE}/Phonefactor/verify"
 
-        tx_param = self._get_state_properties()
-        logger.debug(f"TransID before : {self.trans_id}")
-        logger.debug(f"TransID after : {tx_param}")
-
+        tx_param = self.trans_id
         url_sms = f"{url_phonefactor}?tx={tx_param}&p={self.PATH_B2C_POLICY}"
         payload = {
             "auth_type": "onewaysms",
@@ -594,10 +587,7 @@ class SJClient:
 
         url_phonefactor = f"{self.URL_AUTH_FLOW_BASE}/Phonefactor/verify"
 
-        tx_param = self._get_state_properties()
-        logger.debug(f"TransID before : {self.trans_id}")
-        logger.debug(f"TransID after : {tx_param}")
-
+        tx_param = self.trans_id
         url_sms = f"{url_phonefactor}?tx={tx_param}&p={self.PATH_B2C_POLICY}"
         payload = {"request_type": "VALIDATION_REQUEST", "verification_code": code}
 
@@ -636,7 +626,7 @@ class SJClient:
 
         # Call Phonefactor confirmed endpoint
         url_confirm_base = f"{self.URL_AUTH_FLOW_BASE}/api/Phonefactor/confirmed"
-        tx_param = self._get_state_properties()
+        tx_param = self.trans_id
         url_confirm_full = (
             f"{url_confirm_base}?csrf_token={urllib.parse.quote(self.csrf_token)}"
             f"&tx={tx_param}&p={self.PATH_B2C_POLICY}"
@@ -685,7 +675,7 @@ class SJClient:
                     return code
 
         # Case 2: Redirect was followed, check history
-        if hasattr(resp, "history") and resp.history:
+        if resp.history:
             for r in resp.history:
                 loc = r.headers.get("location", "")
                 if "code=" in loc:
@@ -790,7 +780,7 @@ class SJClient:
         subsequent device fingerprint step.
         """
         logger.info("fetching 'confirmed' endpoint ...")
-        tx_param = self._get_state_properties()
+        tx_param = self.trans_id
 
         params = {
             "csrf_token": self.csrf_token,
@@ -842,8 +832,6 @@ class SJClient:
             ValueError: If the settings blob is missing or contains invalid JSON.
 
         """
-        # logger.debug(f"extracting b2c settings from html content {html_content}")
-
         match = re.search(r"var SETTINGS = (\{.*?\});", html_content)
         if not match:
             logger.error("failed to find 'var SETTINGS' in response")
@@ -1108,21 +1096,6 @@ class SJClient:
 
         # Set / update csrf
         self._get_csrf_token(resp.headers)
-
-    def _get_state_properties(self) -> str:
-        """
-        Constructs the StateProperties token.
-
-        Returns:
-            The transaction ID string, ensuring it is properly formatted.
-
-        """
-        if self.trans_id.startswith("StateProperties="):
-            logger.debug("TransID already starts with StateProperties=")
-            return self.trans_id
-
-        logger.warning(f"transId missing StateProperties= prefix: {self.trans_id}")
-        return self.trans_id
 
     def _verify_attributes(self, attributes: list[str]) -> None:
         """
@@ -1908,58 +1881,3 @@ class SJClient:
     def close(self) -> None:
         """Closes the underlying HTTP client."""
         self.client.close()
-
-
-# page_trans_id = settings.get("transId")
-# page_view_id = settings.get("pageViewId")
-# url_base_confirm = f"{self.URL_AUTH_FLOW_BASE}/api/SelfAsserted/confirmed"
-# Fallback if for some reason it's missing (shouldn't happen in flow)
-# if not resp:
-#    logger.warning("Warning: No last_response found, attempting default URL...")
-#
-#    # Manually construct URL to ensure tx has unencoded '='
-#    url_full = (
-#        f"{url_base_confirm}?csrf_token={urllib.parse.quote(self.csrf_token)}"
-#        f"&tx={tx_param}&p={self.PATH_B2C_POLICY}"
-#    )
-#    resp = self.client.get(url_full)
-# else:
-# Use the URL from the Last Response or default confirmed endpoint for the POST
-# Usually it posts to api/SelfAsserted/confirmed
-# url_api_confirm = f"{self.URL_AUTH_FLOW_BASE}/api/SelfAsserted/confirmed"
-# Extract TransId and PageViewId
-# settings_match = re.search(r"var SETTINGS = (\{.*?\});", resp.text)
-# page_trans_id = tx_param
-# page_view_id = "test"
-# if settings_match:
-#    try:
-#        settings = json.loads(settings_match.group(1))
-#        if "transId" in settings:
-#            page_trans_id = settings["transId"]
-#        if "pageViewId" in settings:
-#            page_view_id = settings["pageViewId"]
-#    except:
-#        pass
-# Extract SA_FIELDS to see if we need to add anything else (e.g. hidden inputs)
-# sa_match = re.search(r"var SA_FIELDS = (\{.*?\});", resp.text)
-# if sa_match:
-#    try:
-#        sa_data = json.loads(sa_match.group(1))
-#        for field in sa_data.get("AttributeFields", []):
-#            val = field.get("Value", "") or field.get("PRE", "")
-#            if "ID" in field and field["ID"] not in fingerprint_payload:
-#                fingerprint_payload[field["ID"]] = val
-#    except:
-#        pass
-
-# This POST might return 200 OK
-# fp_resp = self.client.post(url_fingerprint, data=payload, headers=headers)
-# logger.debug(f"Fingerprint Response: {fp_resp.status_code}")
-# Fallback for raw UUIDs (though it seems we scrape the full thing)
-# try:
-#    data = json.dumps({"TID": self.trans_id}, separators=(",", ":"))
-#    encoded = base64.urlsafe_b64encode(data.encode()).decode().rstrip("=")
-#    return f"StateProperties={encoded}"
-# except:
-#    return f"StateProperties={self.trans_id}"
-# url_full = str(resp.url)

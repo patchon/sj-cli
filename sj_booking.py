@@ -191,8 +191,7 @@ def _find_departure_by_time(
 
     if select_closest:
         timed.sort(key=lambda x: abs(x[1]))
-        best_dep, diff = timed[0]
-        return best_dep
+        return timed[0][0]
 
     # Exact match only
     for dep, diff in timed:
@@ -283,7 +282,6 @@ def select_best_departure(
         "departure": dep,
         "class": valid_class,
         "diff": diff,
-        "abs_diff": abs(diff),
         "time_str": time_str,
         "id": dep.get("departureId"),
     }

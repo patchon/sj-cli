@@ -8,6 +8,7 @@ from pathlib import Path
 
 import tomllib
 
+from sj_client import STATION_MAP
 from sj_errors import SJConfigError
 from sj_logger import log_json
 
@@ -92,9 +93,6 @@ class CfgManager:
 
     def _validate_search_params(self, params: dict, errors: list[str]) -> None:
         """Validate the [search_parameters] section."""
-        # Import here to avoid circular import at module load time
-        from sj_client import STATION_MAP
-
         # date_start
         date_start = self._validate_date(params.get("date_start", ""), "date_start", errors)
 

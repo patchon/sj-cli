@@ -158,9 +158,7 @@ def validate_dates_against_pass(cfg: dict, travel_pass: dict) -> None:
         sys.exit(1)
 
 
-def handle_list_travelpasses(
-    client: SJClient, _access_token: str, travel_passes: list
-) -> None:
+def handle_list_travelpasses(client: SJClient, travel_passes: list) -> None:
     """Display travel passes with validity and receipt details."""
     receipt_info: dict[str, dict] = {}
 
@@ -272,7 +270,7 @@ def main():
     # 4. Mode dispatch
     try:
         if args.list_travelpasses:
-            handle_list_travelpasses(client, access_token, travel_passes)
+            handle_list_travelpasses(client, travel_passes)
 
         elif args.list_bookings:
             handle_list_bookings(client, access_token, active_pass)
