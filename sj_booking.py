@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from sj_auth import ensure_valid_token
 from sj_calendar import skip_reason
 from sj_client import SJClient
+from sj_errors import SJAPIError
 from sj_output import (
     format_class_name,
     format_duration,
@@ -487,12 +488,26 @@ def poll_and_select(
     )
 
 
+def is_stale_provisional(booking: dict) -> bool:
+    """
+    True for a leftover provisional booking from an interrupted run.
+
+    Such bookings have status NEW and can still be cancelled (CANCEL_JOURNEY).
+    cleanup_stale_provisionals() cancels them in --book mode; the duplicate
+    check ignores them in both modes so dry-run and --book agree.
+    """
+    status = booking.get("bookingStatus") or booking.get("status")
+    return status == "NEW" and "CANCEL_JOURNEY" in booking.get("possibleActions", [])
+
+
 def check_existing_booking(bookings: list, origin_id: str, dest_id: str, date_str: str) -> bool:
-    """Check if a booking already exists for the given route and date."""
+    """Check if a (non-cancelled, non-provisional) booking exists for the route and date."""
     for item in bookings:
         booking_details = item.get("booking", {})
 
-        if booking_details.get("bookingStatus") == "CANCELLED":
+        if booking_details.get("bookingStatus") == "CANCELLED" or is_stale_provisional(
+            booking_details
+        ):
             continue
 
         for journey in booking_details.get("journeys", []):
@@ -557,18 +572,21 @@ def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: li
     for item in bookings:
         booking = item.get("booking", {})
         b_id = booking.get("bookingId") or booking.get("id") or item.get("bookingId")
-        status = booking.get("bookingStatus") or booking.get("status")
-        possible_actions = booking.get("possibleActions", [])
+        b_num = booking.get("bookingNumber") or b_id
 
-        if status == "NEW" and "CANCEL_JOURNEY" in possible_actions:
+        if is_stale_provisional(booking):
+            # cancel_provisional_booking() swallows errors and returns False;
+            # raise inside the spinner so the trail shows ✗ and we can report it.
             try:
-                with spinner(f"cancelling stale provisional booking {b_id}"):
-                    client.cancel_provisional_booking(access_token, b_id)
-            except Exception as e:
+                with spinner(f"cancelling stale provisional booking {b_num}"):
+                    if not client.cancel_provisional_booking(access_token, b_id):
+                        raise SJAPIError(f"cancel request for {b_num} was not accepted")
+            except SJAPIError as e:
                 logger.warning(f"failed to cancel provisional booking {b_id}: {e}")
+                pinfo(f"could not cancel stale provisional booking {b_num}, continuing")
             continue
 
-        if status == "CANCELLED":
+        if booking.get("bookingStatus") == "CANCELLED":
             continue
 
         valid_bookings.append(item)
