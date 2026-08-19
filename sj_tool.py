@@ -182,7 +182,12 @@ def handle_list_travelpasses(client: SJClient, travel_passes: list) -> None:
 def handle_test_logged_in() -> None:
     """Test if a valid cached token exists and exit accordingly."""
     tm = TokenManager()
-    token_data = tm.load()
+    try:
+        token_data = tm.load()
+    except SJAuthError as e:
+        pinfo(str(e))
+        print()
+        sys.exit(1)
 
     if not token_data:
         pinfo("not logged in: no cached token found")

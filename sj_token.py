@@ -6,6 +6,8 @@ import time as _time
 from datetime import datetime
 from pathlib import Path
 
+from sj_errors import SJAuthError
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,7 +47,7 @@ class TokenManager:
                 exist.
 
         Raises:
-            Exception: If there is an error reading or parsing the json file.
+            SJAuthError: If there is an error reading or parsing the json file.
 
         """
         if not self.path.exists():
@@ -57,7 +59,10 @@ class TokenManager:
                 logger.debug(f"loading token data {self.token} from {self.path}")
             return self.token
         except Exception as e:
-            raise Exception(f"failed to parse token cache at {self.path}: {e}") from e
+            raise SJAuthError(
+                f"failed to parse token cache at {self.path}: {e} "
+                f"(delete the file to force a fresh login)"
+            ) from e
 
     def save(self, token_data):
         """
