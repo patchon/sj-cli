@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 _BRAILLE_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
+# Serialises stdout writes between the spinner thread and pinfo/pdim so a
+# message printed while a spinner is running does not interleave with a frame.
+_stdout_lock = threading.Lock()
+_spinner_active = False
+
 # ANSI SGR codes used for output styling
 BOLD = "1"
 DIM = "2"
@@ -79,14 +84,18 @@ def spinner(msg: str, interval: float = 0.08):
         i = 0
         while not stop.is_set():
             frame = _BRAILLE_FRAMES[i % len(_BRAILLE_FRAMES)]
-            sys.stdout.write(f"\r{frame} {text}")
-            sys.stdout.flush()
+            with _stdout_lock:
+                sys.stdout.write(f"\r{frame} {text}")
+                sys.stdout.flush()
             i += 1
             stop.wait(interval)
         # Erase the spinner line
-        sys.stdout.write("\r\033[2K")
-        sys.stdout.flush()
+        with _stdout_lock:
+            sys.stdout.write("\r\033[2K")
+            sys.stdout.flush()
 
+    global _spinner_active  # noqa: PLW0603
+    _spinner_active = True
     t = threading.Thread(target=_spin, daemon=True)
     t.start()
     mark = "\u2713"
@@ -98,17 +107,26 @@ def spinner(msg: str, interval: float = 0.08):
     finally:
         stop.set()
         t.join()
-        print(style(f"{mark} {text}", DIM), file=sys.stdout)
+        _spinner_active = False
+        _emit(style(f"{mark} {text}", DIM))
+
+
+def _emit(line: str) -> None:
+    """Print a line to stdout; if a spinner is drawing, erase its frame first."""
+    with _stdout_lock:
+        if _spinner_active:
+            sys.stdout.write("\r\033[2K")
+        print(line, file=sys.stdout)
 
 
 def pinfo(msg: str) -> None:
     """Print a status message to stdout."""
-    print(msg.lower(), file=sys.stdout)
+    _emit(msg.lower())
 
 
 def pdim(msg: str) -> None:
     """Print a low-emphasis context message (dimmed when colour is enabled)."""
-    print(style(msg.lower(), DIM), file=sys.stdout)
+    _emit(style(msg.lower(), DIM))
 
 
 def format_duration(iso_duration: str) -> str:

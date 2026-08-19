@@ -1548,14 +1548,13 @@ def handle_cancel_booking(
     ]
 
     with spinner(f"cancelling booking {booking_number}"):
-        # Step 1: Provisional cancel
+        # Step 1: Provisional cancel; Step 2: confirm the cancellation (checkout)
         success = client.cancel_booking_with_patch(access_token, b_id, payload)
-        if not success:
-            pinfo(f"failed to cancel booking {booking_number}")
-            return
+        confirmed = client.finalize_cancellation(access_token, b_id) if success else False
 
-        # Step 2: Confirm the cancellation (checkout)
-        confirmed = client.finalize_cancellation(access_token, b_id)
+    if not success:
+        pinfo(f"failed to cancel booking {booking_number}")
+        return
 
     n_selected = len(selected)
     n_total = len(segments_to_cancel)
