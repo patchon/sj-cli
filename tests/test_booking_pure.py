@@ -1,10 +1,14 @@
+from datetime import datetime
+
 from sj_booking import (
     _dry_run_note,
     _find_departure_by_time,
     _resolve_class_for_departure,
+    _span_label,
     booking_date_range,
     check_comfort_availability,
     check_existing_booking,
+    describe_run,
     find_offer_id,
     get_departure_time_minutes,
     is_stale_provisional,
@@ -110,3 +114,29 @@ def test_booking_date_range():
     start0, end0 = booking_date_range(None, fallback_days=10)
     assert start0 <= start
     assert end0 > start0
+
+
+def test_span_label():
+    d = datetime
+    assert _span_label(d(2026, 9, 18), d(2026, 9, 21)) == "18 – 21 sep 2026"
+    assert _span_label(d(2026, 9, 1), d(2026, 10, 30)) == "1 sep – 30 oct 2026"
+    assert _span_label(d(2026, 12, 29), d(2027, 1, 9)) == "29 dec 2026 – 9 jan 2027"
+    assert _span_label(d(2026, 9, 15), d(2026, 9, 15)) == "15 sep 2026"
+
+
+def test_describe_run():
+    from tests.conftest import base_cfg
+    p = base_cfg(date_start="2026-09-01", date_end="2026-10-30", service_types=["SJ_HIGH"])["search_parameters"]
+    assert describe_run(p) == [
+        "Linköping Central ⇄ Stockholm Central · 1 sep – 30 oct 2026 · weekdays",
+        "out 06:59 · back 17:22 · 2 class calm · FULLFLEX · SJ High-speed train",
+    ]
+    p = base_cfg(roundtrip=False, date_end="2026-09-01", select_closest_ticket_available=False,
+                 skip_weekends=False, allow_class_fallback=False, book_partial=True)["search_parameters"]
+    assert describe_run(p) == [
+        "Linköping Central → Stockholm Central · 1 sep 2026 · every day except red days",
+        "out 06:59 · 2 class calm · FULLFLEX · exact time only · no class fallback · partial ok",
+    ]
+    p = base_cfg(skip_holidays=False, service_types=["ALL"])["search_parameters"]
+    assert describe_run(p)[0].endswith("weekdays incl. red days")
+    assert describe_run(p)[1] == "out 06:59 · back 17:22 · 2 class calm · FULLFLEX"

@@ -164,6 +164,11 @@ def blank() -> None:
     _emit("")
 
 
+def print_title(text: str) -> None:
+    """Bold title line that opens a mode's output, e.g. '🚆 booking · sj årskort silver · …'."""
+    _emit(style(text, BOLD))
+
+
 def format_duration(iso_duration: str) -> str:
     """Format an ISO 8601 duration like PT4H37M into 4h 37m."""
     if not iso_duration:
@@ -380,7 +385,7 @@ def print_bookings_table(bookings: list[dict], pass_name: str | None, summary: b
 
     lines: list[str] = []
     if pass_name:
-        lines += ["", style(f"\U0001f3ab {pass_name.lower()}", BOLD)]
+        lines += [style(f"\U0001f3ab {pass_name.lower()}", BOLD)]
     lines.append("")
     past_legs = 0
     for date_str, legs in padded_groups.items():
@@ -484,9 +489,9 @@ def print_travelpasses_table(
 
         rows.append([name, card_number, holder, valid_from, valid_to, days_left, price])
 
-    table = format_table(headers, rows, title="\U0001f3ab travel passes")
+    table = format_table(headers, rows)
     print(f"\n{table}")
-    pinfo(f"{len(travel_passes)} travel pass(es) shown")
+    pdim(f"{len(travel_passes)} travel pass(es)")
 
 
 def _format_amount(raw_amount: str | float, currency: str = "SEK") -> str:

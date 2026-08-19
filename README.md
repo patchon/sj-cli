@@ -10,9 +10,9 @@ Dry run is the default; nothing is booked until you pass `--book`.
 
 ```
 $ python3 sj_tool.py --book
-first last · user@example.com · sj årskort silver
-✓ fetching existing bookings
-29 active bookings · filter: SJ High-speed train
+🚆 booking · sj årskort silver · first last
+Linköping Central ⇄ Stockholm Central · 1 sep – 30 oct 2026 · weekdays
+out 06:59 · back 17:22 · 2 class calm · FULLFLEX · SJ High-speed train
 
 tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
   ✓ searching outbound at 06:59
@@ -32,8 +32,9 @@ sat 19 sep 2026   weekend
 🚆 3 day(s) · 1 booked · 1 already booked · 1 skipped
 ```
 
-Every mode prints the same shape: a context line, a dim progress trail, one card per travel day
-(bold date + route, legs beneath), and a dim summary. Dry run shows the legs it *would* book in
+Every mode prints the same shape: a title line (book and dry run add two lines describing the
+run from your config), a dim progress trail, one card per travel day (bold date + route, legs
+beneath), and a dim summary. Dry run shows the legs it *would* book in
 the same cards; `--list-bookings` shows what is booked.
 
 ## Requirements

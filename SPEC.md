@@ -169,12 +169,12 @@ Report all validation errors at once (don't stop at the first one).
 python3 sj_tool.py --book
 ```
 
-Reads config, authenticates, and books tickets for every date in the configured range. No confirmation prompt — the config is the source of truth. Output is one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). A dim summary footer closes the run.
+Reads config, authenticates, and books tickets for every date in the configured range. No confirmation prompt — the config is the source of truth. Output opens with a **run header**: a bold title (`🚆 booking · <pass> · <name>`) and two dim lines describing the run from the config (route, date span, which days; times, class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). A dim summary footer closes the run.
 
 ```
-john doe · john@doe.com · sj årskort silver
-✓ fetching existing bookings
-29 active bookings · filter: SJ High-speed train
+🚆 booking · sj årskort silver · john doe
+Linköping Central ⇄ Stockholm Central · 1 sep – 30 oct 2026 · weekdays
+out 06:59 · back 17:22 · 2 class calm · FULLFLEX · SJ High-speed train
 
 tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
   ✓ searching outbound at 06:59
@@ -207,9 +207,13 @@ The booked legs are rendered from the booking object the API returns (train, car
 python3 sj_tool.py
 ```
 
-Performs the full search flow for each date but does **not** create bookings. Same day cards as §5.1; each leg line shows the departure that would be booked — time range, duration, train, class, flexibility — or, dimmed in place of the flexibility cell, why it cannot be booked (`no 0-price offer`, `no departure found`). The footer starts with `🔍 dry run` and counts bookable / partly bookable / unavailable days.
+Performs the full search flow for each date but does **not** create bookings. Same run header (titled `🔍 dry run · …`) and day cards as §5.1; each leg line shows the departure that would be booked — time range, duration, train, class, flexibility — or, dimmed in place of the flexibility cell, why it cannot be booked (`no 0-price offer`, `no departure found`). The footer starts with `🔍 dry run` and counts bookable / partly bookable / unavailable days.
 
 ```
+🔍 dry run · sj årskort silver · john doe
+Linköping Central ⇄ Stockholm Central · 18 – 21 sep 2026 · weekdays
+out 06:59 · back 17:22 · 2 class calm · FULLFLEX · SJ High-speed train
+
 fri 18 sep 2026   Linköping Central ⇄ Stockholm Central
   ✓ searching outbound at 06:59
   ✓ checking offers for outbound at 06:59
@@ -233,6 +237,7 @@ python3 sj_tool.py --cancel-bookings ERU0HWB2,8Y41N08J  # by booking number, any
 For each matching booking: show its day card (same shape as §5.4, no title), then confirm. `y`/`yes` (any case) confirms; anything else aborts.
 
 ```
+🎫 sj årskort silver · john doe
 ✓ searching for booking ERU0HWB2
 
 tue 15 sep 2026   Linköping Central → Stockholm Central
@@ -276,7 +281,7 @@ mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
 - Grouped by date rather than booking number: a return leg booked via the `book_partial` fallback (§6.5) is its own booking, so the booking number is shown per leg. Legs are sorted by departure time.
 - A day whose legs have all departed is dimmed; when colour is unavailable a `past` tag is appended instead.
 - Only shows non-cancelled bookings. Pagination: fetches all pages from the bookings API. Read-only.
-- Preamble: one dimmed context line (`name · email · travel pass`) instead of separate "logged in as"/"travel pass" lines. Progress steps show a spinner while running and leave a dimmed trail line when done — `✓ fetching bookings`, or `✗ …` if the step raised — so logs show where time went or where a step failed. When stdout is not a TTY only the trail line is printed.
+- Preamble: the bold title line only (`🎫 <pass> · <name>`); the bookings fetch is a silent spinner. Elsewhere, progress steps that matter leave a dimmed trail line when done — `✓ searching outbound at 06:59`, or `✗ …` if the step raised — so logs show where time went or where a step failed. When stdout is not a TTY only the trail line is printed.
 - Styling: bold header/booking numbers, dimmed past days, coloured arrows. ANSI colour is emitted only when stdout is a TTY and `NO_COLOR` is unset (`TERM=dumb` also disables it); piped output is plain text. Emoji appear only in the title and summary lines, never inside aligned rows.
 - The card renderer (`day_header`, `leg_lines` in `sj_output.py`) is shared by list, book, dry-run and cancel output; columns that are empty on every row of a card are omitted, so book/list cards show train · seat · class · number while dry-run cards show train · class · flexibility/note. The travel-pass table uses `format_table` (bold headers, dimmed separators).
 
@@ -460,7 +465,7 @@ Everything the user sees goes through `sj_output.py` and prints regardless of lo
 
 - `pinfo()` plain message, `pdim()` dimmed context, `spinner()` progress with a dim `✓`/`✗` trail line (or none with `trail=False`), `print_day_header()` / `print_day_note()` / `print_leg_lines()` for cards, `indented()` to nest everything printed inside a block under a day header.
 - **Casing convention**: prose is lowercase (`no departure found for outbound`, `✓ checking offers…`), identifiers keep their case — booking numbers upper-case (`ERU0HWB2`), station names as SJ writes them (`Linköping Central`), train names as given. Titles (`🎫 sj årskort silver`, the context line) are lowercase. Nothing is lowercased automatically any more; `pinfo` prints what it is given.
-- Structure is the same in every mode: context line (`name · email · pass`), dim progress trail, cards, dim summary footer. Emoji only in titles and footers, never inside aligned rows. Colour/bold/dim only on a TTY without `NO_COLOR`.
+- Structure is the same in every mode: bold title line (`🚆 booking` / `🔍 dry run` / `🎫 <pass>` / `🎫 travel passes`, each `· <pass> · <name>` or `· <name>`), for book/dry-run two dim run-description lines, dim progress trail (routine fetches are silent: spinner only), cards, dim summary footer. Emoji only in titles and footers, never inside aligned rows. Colour/bold/dim only on a TTY without `NO_COLOR`.
 - Prompts (`input()`) accept `y`/`yes` for confirmation, any case.
 
 ### 10.3 Log levels (stderr)

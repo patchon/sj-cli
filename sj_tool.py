@@ -11,6 +11,7 @@ from sj_auth import ensure_authenticated
 from sj_booking import (
     booking_date_range,
     cleanup_stale_provisionals,
+    describe_run,
     fetch_all_bookings,
     handle_cancel_booking,
     handle_cancel_mode,
@@ -19,10 +20,10 @@ from sj_booking import (
 )
 from sj_calendar import parse_api_datetime, sweden_now, to_sweden
 from sj_client import SJClient
-from sj_config import SERVICE_TYPE_NAMES, CfgManager
+from sj_config import CfgManager
 from sj_errors import SJAuthError, SJConfigError
 from sj_logger import setup_logging
-from sj_output import pdim, pinfo, print_travelpasses_table, spinner
+from sj_output import pdim, pinfo, print_title, print_travelpasses_table, spinner
 from sj_token import TokenManager
 
 setup_logging(os.getenv("LOG_LEVEL", ""))
@@ -285,9 +286,8 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             or tp_product_id
         )
 
-        # Context line: lowercase by convention (names/pass read as a title here)
-        pass_name = active_pass.get("name", "Unknown")
-        pdim(f"{user_name} \u00b7 {email} \u00b7 {pass_name}".lower())
+        # Title context, lowercase by convention: "sj årskort silver · john doe"
+        who = f"{active_pass.get('name', 'Unknown')} \u00b7 {user_name}".lower()
 
     except SystemExit:
         raise
@@ -296,19 +296,24 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         print()
         sys.exit(1)
 
-    # 4. Mode dispatch
+    # 4. Mode dispatch. Every mode opens with a bold title line; book/dry-run add
+    # two dim lines describing the run (route, dates, times, class, filter).
     try:
         if args.list_travelpasses:
+            print_title(f"\U0001f3ab travel passes \u00b7 {user_name.lower()}")
             handle_list_travelpasses(client, travel_passes)
 
         elif args.list_bookings:
+            print_title(f"\U0001f3ab {who}")
             handle_list_bookings(client, access_token, active_pass)
 
         elif args.cancel_date:
+            print_title(f"\U0001f3ab {who}")
             validate_dates_against_pass(cfg, active_pass)
             handle_cancel_mode(client, access_token, cfg, args.cancel_date)
 
         elif args.cancel_bookings:
+            print_title(f"\U0001f3ab {who}")
             booking_numbers = [
                 b.strip().upper() for b in args.cancel_bookings.split(",") if b.strip()
             ]
@@ -319,11 +324,15 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             # Default: dry-run. With --book: book for real.
             validate_dates_against_pass(cfg, active_pass)
 
-            # Fetch existing bookings for duplicate check
-            params = cfg["search_parameters"]
-            b_start, b_end = booking_date_range(active_pass, start_offset_days=1)
+            mode = "\U0001f686 booking" if args.book else "\U0001f50d dry run"
+            print_title(f"{mode} \u00b7 {who}")
+            for line in describe_run(cfg["search_parameters"]):
+                pdim(line)
 
-            with spinner("fetching existing bookings"):
+            # Fetch existing bookings for the duplicate check (quietly: a
+            # routine step, not part of the day-by-day trail)
+            b_start, b_end = booking_date_range(active_pass, start_offset_days=1)
+            with spinner("fetching existing bookings", trail=False):
                 bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)
 
             # Cleanup stale provisionals (only when booking)
@@ -331,13 +340,6 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 bookings_list = cleanup_stale_provisionals(
                     client, access_token, bookings_list
                 )
-
-            context = f"{len(bookings_list)} active bookings"
-            raw_types = params.get("service_types")
-            if raw_types and raw_types != ["ALL"]:
-                filter_str = ", ".join(SERVICE_TYPE_NAMES.get(t, t) for t in raw_types)
-                context += f" \u00b7 filter: {filter_str}"
-            pdim(context)
 
             # Process date range: one card per day, summary footer at the end
             process_date_range(

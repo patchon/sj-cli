@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from sj_auth import ensure_valid_token
 from sj_calendar import skip_reason, sweden_now, to_sweden
 from sj_client import SJClient
+from sj_config import SERVICE_TYPE_NAMES
 from sj_errors import SJAPIError
 from sj_output import (
     blank,
@@ -1157,6 +1158,61 @@ def _booked_rows(booking: dict, booking_number: str | None) -> list[dict]:
     return rows
 
 
+def _span_label(start: datetime, end: datetime) -> str:
+    """Span label: "18 - 21 sep 2026", "1 sep - 30 oct 2026", "29 dec 2026 - 9 jan 2027"."""
+    def day(d: datetime, with_year: bool) -> str:
+        txt = f"{d.day} {d.strftime('%b').lower()}"
+        return f"{txt} {d.year}" if with_year else txt
+
+    if start.date() == end.date():
+        return day(start, True)
+    if (start.year, start.month) == (end.year, end.month):
+        return f"{start.day} \u2013 {day(end, True)}"
+    return f"{day(start, start.year != end.year)} \u2013 {day(end, True)}"
+
+
+def describe_run(params: dict) -> list[str]:
+    """
+    Two detail lines for the run header, derived from the config.
+
+    Example:
+        Linköping Central ⇄ Stockholm Central · 1 sep - 30 oct 2026 · weekdays
+        out 06:59 · back 17:22 · 2 class calm · FULLFLEX · SJ High-speed train
+
+    """
+    roundtrip = params.get("roundtrip", False)
+    arrow = "\u21c4" if roundtrip else "\u2192"
+    start = datetime.strptime(params["date_start"], "%Y-%m-%d")
+    end = datetime.strptime(params["date_end"], "%Y-%m-%d")
+    skip_w, skip_h = params.get("skip_weekends", True), params.get("skip_holidays", True)
+    days = {
+        (True, True): "weekdays",
+        (True, False): "weekdays incl. red days",
+        (False, True): "every day except red days",
+        (False, False): "every day",
+    }[(skip_w, skip_h)]
+    line1 = (
+        f"{params['station_from']} {arrow} {params['station_to']} \u00b7 "
+        f"{_span_label(start, end)} \u00b7 {days}"
+    )
+
+    parts = [f"out {params.get('time_leave')}"]
+    if roundtrip:
+        parts.append(f"back {params.get('time_return')}")
+    parts += [params.get("comfort_class", ""), params.get("flexibility", "")]
+    service_types = params.get("service_types") or []
+    if service_types and service_types != ["ALL"]:
+        parts.append(", ".join(SERVICE_TYPE_NAMES.get(t, t) for t in service_types))
+    if not params.get("select_closest_ticket_available", False):
+        parts.append("exact time only")
+    if not params.get("allow_class_fallback", True):
+        parts.append("no class fallback")
+    if params.get("book_partial", False):
+        parts.append("partial ok")
+    line2 = " \u00b7 ".join(p for p in parts if p)
+    return [line1, line2]
+
+
 def _run_summary(counts: dict[str, int], dry_run: bool) -> str:
     """Footer line: '🚆 12 day(s) · 9 booked · 1 already booked · 2 skipped'."""
     parts = [f"{counts['days']} day(s)"]
@@ -1547,12 +1603,10 @@ def handle_list_bookings(
     access_token: str,
     travel_pass: dict,
 ) -> None:
-    """Fetch and display all active bookings per SPEC §5.4."""
-    pass_name = travel_pass.get("name", "Travel Pass")
-
+    """Fetch and display all active bookings per SPEC §5.4 (the caller prints the title)."""
     b_start, b_end = booking_date_range(travel_pass)
 
-    with spinner("fetching bookings"):
+    with spinner("fetching bookings", trail=False):
         all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
 
     # Transform raw API items into display rows
@@ -1577,7 +1631,7 @@ def handle_list_bookings(
     # Sort by date, then departure time
     display_rows.sort(key=lambda r: r.pop("_sort_key", ""))
 
-    print_bookings_table(display_rows, pass_name)
+    print_bookings_table(display_rows, None)
 
 
 def _get_arrival_time(departure: dict) -> str:
