@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sj_errors import SJAuthError
+from sj_logger import log_json
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class TokenManager:
         try:
             with self.path.open() as f:
                 self.token = json.load(f)
-                logger.debug(f"loading token data {self.token} from {self.path}")
+                logger.debug(f"loading token data {log_json(self.token)} from {self.path}")
             return self.token
         except Exception as e:
             raise SJAuthError(
@@ -84,7 +85,7 @@ class TokenManager:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("w") as f:
                 json.dump(token_data, f)
-                logger.debug(f"saved token data {token_data} to {self.path}")
+                logger.debug(f"saved token data {log_json(token_data)} to {self.path}")
             self.token = token_data
         except Exception as e:
             logger.error(f"failed to save token data to {self.path}: {e}")
@@ -105,7 +106,7 @@ class TokenManager:
             return False
 
         if "access_token" not in self.token:
-            logger.debug(f"no valid access token found in token data {self.token}")
+            logger.debug(f"no valid access token found in token data {log_json(self.token)}")
             return False
 
         # Check expiry

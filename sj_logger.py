@@ -29,16 +29,35 @@ def trace(self, message, *args, **kws):
 logging.Logger.trace = trace  # type: ignore[attr-defined]
 
 
-def log_json(data: dict) -> str:
+# Keys whose values must never reach the logs (matched case-insensitively).
+_SECRET_KEYS = frozenset(
+    {"password", "access_token", "refresh_token", "id_token", "code_verifier", "authorization"}
+)
+_REDACTED = "***redacted***"
+
+
+def redact(data):
+    """Return a copy of data with values of secret keys replaced (recursively)."""
+    if isinstance(data, dict):
+        return {
+            k: (_REDACTED if str(k).lower() in _SECRET_KEYS else redact(v))
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [redact(v) for v in data]
+    return data
+
+
+def log_json(data) -> str:
     """
-    Dumps given json object to a pretty string.
+    Dumps given json object to a pretty string, with secrets redacted.
 
     Returns:
         str: An indented json representation of given object.
 
     """
     try:
-        return json.dumps(data, indent=2, default=str)
+        return json.dumps(redact(data), indent=2, default=str)
     except Exception as e:
         return f"failed to serialize json: {e}"
 

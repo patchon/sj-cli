@@ -52,7 +52,7 @@ def parse_json_response(response: httpx.Response, url: str) -> None:
             code.
 
     """
-    logger.debug(f"trying to parse '{response.text}' as json from {url}")
+    logger.debug(f"parsing response ({response.status_code}) from {url} as json")
 
     try:
         resp_json = response.json()
@@ -670,7 +670,7 @@ class SJClient:
         # Case 1: 302 redirect with Location header containing the code
         if resp.status_code == 302:
             location = resp.headers.get("location", "")
-            logger.debug(f"got 302 redirect to: {location}")
+            logger.debug(f"got 302 redirect to: {re.sub(r'code=[^&]+', 'code=***', location)}")
             if "code=" in location:
                 parsed = urllib.parse.urlparse(location)
                 params = urllib.parse.parse_qs(parsed.query)
@@ -917,9 +917,7 @@ class SJClient:
             A URL-safe base64-encoded random string.
 
         """
-        token = secrets.token_urlsafe(32)
-        logger.debug(f"generated code verifier: {token}")
-        return token
+        return secrets.token_urlsafe(32)
 
     def _generate_code_challenge(self, verifier: str) -> str:
         """
