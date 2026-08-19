@@ -606,8 +606,10 @@ def handle_booking_process(
 
     Returns:
         Dry-run result dict in dry-run mode. In booking mode, a dict with
-        "booking_id" when a booking was created (possibly outbound-only),
-        None when nothing was booked.
+        "booking_id", "booking_number", "legs" (["outbound"], ["return"] or
+        both) and "checked_out" (False if the provisional booking was created
+        but checkout failed) when a booking was created; None when nothing
+        was booked.
 
     """
     params = cfg["search_parameters"]
@@ -618,6 +620,8 @@ def handle_booking_process(
     dest = params["station_to"]
 
     booking_id = None
+    booking_number = None
+    legs: list[str] = []
     dry_run_result = {}
 
     # 1. Outbound
@@ -703,6 +707,8 @@ def handle_booking_process(
                             access_token, offer_id, passenger_token
                         )
                     booking_id = b_resp.get("bookingId") or b_resp.get("id")
+                    booking_number = b_resp.get("bookingNumber")
+                    legs.append("outbound")
                 else:
                     pinfo(
                         f"no valid offer found for outbound {origin} → {dest}"
@@ -727,6 +733,8 @@ def handle_booking_process(
                                 access_token, alt["offer_id"], passenger_token
                             )
                         booking_id = b_resp.get("bookingId") or b_resp.get("id")
+                        booking_number = b_resp.get("bookingNumber")
+                        legs.append("outbound")
                     else:
                         # Nothing can be booked without an outbound offer; the
                         # caller handles the partial (return-leg-only) fallback.
@@ -826,6 +834,7 @@ def handle_booking_process(
                             client.add_offer_to_booking(
                                 access_token, booking_id, offer_id, passenger_token
                             )
+                        legs.append("return")
                     elif not do_out:
                         # Inbound-only search (one-way): API treats as outbound
                         with spinner(f"creating booking with inbound at {best_in['time_str']}"):
@@ -835,6 +844,8 @@ def handle_booking_process(
                                 passenger_token,
                             )
                         booking_id = b_resp.get("bookingId") or b_resp.get("id")
+                        booking_number = b_resp.get("bookingNumber")
+                        legs.append("return")
                 else:
                     pinfo(
                         f"no valid offer found for inbound {dest} → {origin}"
@@ -858,6 +869,7 @@ def handle_booking_process(
                                 client.add_offer_to_booking(
                                     access_token, booking_id, alt["offer_id"], passenger_token
                                 )
+                            legs.append("return")
                         elif not do_out:
                             alt_time = alt["time_str"]
                             with spinner(f"creating alternative inbound booking at {alt_time}"):
@@ -867,6 +879,8 @@ def handle_booking_process(
                                     passenger_token,
                                 )
                             booking_id = b_resp.get("bookingId") or b_resp.get("id")
+                            booking_number = b_resp.get("bookingNumber")
+                            legs.append("return")
                     elif booking_id:
                         pinfo("no alternative found, booking outbound only")
                     else:
@@ -879,7 +893,9 @@ def handle_booking_process(
                 "flexibility": "—",
                 "has_offer": False,
             }
-        elif not booking_id:
+        elif booking_id:
+            pinfo("no departure found for inbound, booking outbound only")
+        else:
             pinfo("no departure found for inbound")
             return None
 
@@ -891,17 +907,26 @@ def handle_booking_process(
         logger.error("failed to create booking")
         return None
 
+    checked_out = True
     try:
         email = cfg["auth"]["email"]
         phone = cfg["auth"].get("phone", "+46700000000")
-        with spinner(f"checking out booking {booking_id}"):
+        with spinner(f"checking out booking {booking_number or booking_id}"):
             client.update_booking_customer(access_token, booking_id, email, phone)
             client.checkout_booking(access_token, booking_id)
     except Exception as e:
+        # The provisional booking stays; it is cleaned up as stale on the next
+        # --book run (SPEC §6.2).
         logger.error(f"checkout failed for booking {booking_id}: {e}")
         pinfo(f"checkout failed: {e}")
+        checked_out = False
 
-    return {"booking_id": booking_id}
+    return {
+        "booking_id": booking_id,
+        "booking_number": booking_number,
+        "legs": legs,
+        "checked_out": checked_out,
+    }
 
 
 def _search_and_book_one_way(
@@ -1003,7 +1028,8 @@ def process_booking_flow(
     Process booking for a single date.
 
     Returns:
-        Dry-run result dict if in dry-run mode, None otherwise.
+        Dry-run result dict in dry-run mode; in booking mode the result of
+        handle_booking_process (None when nothing was booked).
 
     """
     params = cfg["search_parameters"]
@@ -1066,6 +1092,7 @@ def process_booking_flow(
 
         if not (out_id and in_id):
             logger.error("failed to get both outbound and inbound search IDs")
+            pinfo(f"{date_str}: search returned no result ids, skipping")
             return None
 
         result = handle_booking_process(
@@ -1255,6 +1282,13 @@ def process_date_range(
                             "note": _dry_run_note(inb),
                         }
                     )
+            elif result:
+                legs = " + ".join(result.get("legs") or []) or "booking"
+                ref = result.get("booking_number") or result.get("booking_id")
+                if result.get("checked_out"):
+                    pinfo(f"{date_str}: booked {legs} \u00b7 {ref}")
+                else:
+                    pinfo(f"{date_str}: {legs} {ref} created but checkout failed")
         except Exception as e:
             logger.error(f"error processing {date_str}: {e}")
             pinfo(f"error processing {date_str}: {e}")
