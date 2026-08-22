@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import threading
+from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
@@ -233,8 +234,8 @@ def print_header_box(rows: list[tuple[str, str]]) -> None:
 def print_status_card(
     ok: bool,
     verdict: str,
-    facts: list[tuple[str, str]] = (),
-    lines: list[str] = (),
+    facts: Sequence[tuple[str, str]] = (),
+    lines: Sequence[str] = (),
 ) -> None:
     """
     Status card, the result block of card-first modes and failures.
@@ -367,7 +368,13 @@ def leg_lines(rows: list[dict]) -> list[str]:
         return []
     cols = [c for c in _LEG_COLUMNS if any(_has(r, c) for r in rows)]
     widths = {c: max(visible_len(_cell(r, c)) for r in rows) for c in cols}
-    first_route = rows[0].get("route", "")
+    # Reference route: the first leg that is not an explicit return, so a
+    # subset that starts with the return (cancel choices, the selection
+    # echo) keeps outbound → / return ←.
+    first_route = next(
+        (r.get("route", "") for r in rows if r.get("direction") != "Return"),
+        "",
+    )
     lines = []
     for row in rows:
         is_past = row.get("past") == "Y"
@@ -514,12 +521,11 @@ def print_travelpasses(
             blank()
         _emit(f"{style(tp.get('name', '\u2014'), BOLD)}   {tp.get('code', '\u2014')}")
 
-        holder_data = tp.get("holder", {})
-        first = holder_data.get("firstName", "")
-        last = holder_data.get("lastName", "")
-        email = holder_data.get("email", "")
-        if first or last:
-            _emit(_fact_line("holder", f"{first} {last} ({email})".strip()))
+        holder_data = tp.get("holder") or {}
+        name = " ".join(p for p in (holder_data.get("firstName"), holder_data.get("lastName")) if p)
+        if name:
+            email = holder_data.get("email")
+            _emit(_fact_line("holder", f"{name} ({email})" if email else name))
 
         valid_from = _format_tp_date(tp.get("startTravelValidityDateTime"))
         valid_to = _format_tp_date(tp.get("endTravelValidityDateTime"), exclusive=True)
@@ -568,8 +574,8 @@ def _extract_price(receipt_data: dict) -> str:
         val = receipt_data.get(key)
         if val is not None:
             if isinstance(val, dict):
-                amt = val.get("amount", val.get("value", ""))
-                cur = val.get("currency", val.get("currencyCode", "SEK"))
+                amt = val.get("amount") or val.get("value")
+                cur = val.get("currency") or val.get("currencyCode") or "SEK"
                 if amt:
                     return _format_amount(amt, cur)
             elif isinstance(val, (int, float, str)) and val:

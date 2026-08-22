@@ -1,12 +1,13 @@
-"""This file contains the implementation of the logger."""
+"""Logging setup: TRACE level, colour formatter, httpx filtering and secret redaction."""
 
 import inspect
 import json
 import logging
 import os
+import re
 import sys
 import time
-from typing import ClassVar, override
+from typing import Any, ClassVar, override
 
 import httpx
 
@@ -18,7 +19,7 @@ TRACE_LEVEL_NUM = 5
 logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
 
 
-def trace(self, message, *args, **kws):
+def trace(self: logging.Logger, message: object, *args: object, **kws: Any) -> None:
     """Log 'message % args' with severity 'TRACE'."""
     if self.isEnabledFor(TRACE_LEVEL_NUM):
         # Yes, logger takes its '*args' as 'args'.
@@ -34,8 +35,26 @@ _SECRET_KEYS = frozenset(
 )
 _REDACTED = "***redacted***"
 
+# httpx/httpcore trace lines carry raw header tuples (Set-Cookie with the SSO
+# cookie, Cookie, Authorization) and URLs with the one-time auth code; they
+# never pass through redact(), so they are scrubbed by pattern.
+_HTTP_HEADER_RE = re.compile(
+    r"(?i)(b?['\"](?:set-cookie|cookie|authorization|x-csrf-token)['\"],\s*b?['\"])([^'\"]*)"
+)
+_URL_CODE_RE = re.compile(r"(?i)([?&]code=)[^&'\"\s]+")
 
-def redact(data):
+
+def redact_url(url: object) -> str:
+    """Return the URL as text with an OAuth ``code=`` query value hidden."""
+    return _URL_CODE_RE.sub(r"\1***", str(url))
+
+
+def redact_http_trace(message: str) -> str:
+    """Scrub secret header values and auth codes from an httpx/httpcore log line."""
+    return redact_url(_HTTP_HEADER_RE.sub(rf"\1{_REDACTED}", message))
+
+
+def redact(data: object) -> object:
     """Return a copy of data with values of secret keys replaced (recursively)."""
     if isinstance(data, dict):
         return {
@@ -46,7 +65,7 @@ def redact(data):
     return data
 
 
-def log_json(data) -> str:
+def log_json(data: object) -> str:
     """
     Dumps given json object to a pretty string, with secrets redacted.
 
@@ -62,7 +81,7 @@ def log_json(data) -> str:
 
 def log_request(request: httpx.Request) -> None:
     """Log an HTTP request."""
-    logging.getLogger(__name__).debug(f" -> {request.method} {request.url}")
+    logging.getLogger(__name__).debug(f" -> {request.method} {redact_url(request.url)}")
 
 
 def log_response(response: httpx.Response) -> None:
@@ -70,7 +89,7 @@ def log_response(response: httpx.Response) -> None:
     logger = logging.getLogger(__name__)
     try:
         response.read()  # Load content so we can print it
-        logger.debug(f" <- {response.status_code} {response.url}")
+        logger.debug(f" <- {response.status_code} {redact_url(response.url)}")
 
         if response.content:
             try:
@@ -89,9 +108,9 @@ def log_response(response: httpx.Response) -> None:
 
 
 class HttpxTraceLevelFilter(logging.Filter):
-    """A filter to downgrade httpx/httpcore DEBUG logs to TRACE."""
+    """A filter to downgrade httpx/httpcore DEBUG logs to TRACE and scrub secrets from them."""
 
-    def __init__(self, is_trace_level: bool, name=""):
+    def __init__(self, is_trace_level: bool, name: str = "") -> None:
         """Initializes the filter. is_trace_level: whether the global level is TRACE."""
         super().__init__(name)
         self.is_trace_level = is_trace_level
@@ -114,9 +133,14 @@ class HttpxTraceLevelFilter(logging.Filter):
         if not self.is_trace_level:
             return True
 
-        if record.name.startswith("httpx") or record.name.startswith("httpcore"):
+        if record.name.startswith(("httpx", "httpcore")):
             record.levelname = "TRACE"
             record.levelno = TRACE_LEVEL_NUM
+            message = record.getMessage()
+            scrubbed = redact_http_trace(message)
+            if scrubbed != message:
+                record.msg = scrubbed
+                record.args = ()
 
         return True
 

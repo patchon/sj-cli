@@ -271,3 +271,22 @@ def test_pstatus_dot_by_outcome(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "\x1b[32m●\x1b[0m \x1b[2mdone\x1b[0m" in out
     assert "\x1b[31m●\x1b[0m \x1b[2mfailed\x1b[0m" in out
+
+
+def test_travelpass_holder_without_email_has_no_empty_parentheses(capsys):
+    from sj_api_client.output import print_travelpasses
+
+    print_travelpasses(
+        [{"name": "P", "code": "1", "holder": {"firstName": "Anna", "lastName": "B"}}]
+    )
+    out = capsys.readouterr().out
+    assert "  holder    Anna B\n" in out and "()" not in out
+
+
+def test_leg_lines_keep_arrows_when_the_subset_starts_with_the_return():
+    from sj_api_client.output import leg_lines
+
+    ret = {"departure": "17:22", "arrival": "21:53", "route": "B → A", "direction": "Return"}
+    out_ = {"departure": "06:59", "arrival": "11:36", "route": "A → B", "direction": "Outbound"}
+    assert [line[0] for line in leg_lines([ret, out_])] == ["←", "→"]
+    assert leg_lines([ret])[0].startswith("←")

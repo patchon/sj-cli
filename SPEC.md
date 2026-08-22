@@ -14,22 +14,22 @@ Plain venv, no package manager or build system. Modules organized by separation 
 
 | Module | Role |
 |---|---|
-| `sj_tool.py` | Entry point. CLI argument parsing (see §5.6), top-level orchestration. |
-| `sj_auth.py` | Authentication orchestration. B2C login flow, token lifecycle (validate → refresh → full login), SMS input with timeout. |
-| `sj_client.py` | HTTP client. All SJ API communication via `httpx.Client`. Low-level request methods only — no business logic. Includes HTTP retry logic. |
-| `sj_booking.py` | Booking business logic. Search, departure selection, offer matching, provisional booking creation, checkout, cancellation, duplicate detection. |
-| `sj_config.py` | Configuration loading and validation (`CfgManager`). |
-| `sj_token.py` | Token cache management (`TokenManager`). Load, save, validate expiry, check refresh availability. |
-| `sj_logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. |
-| `sj_errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`). |
-| `sj_output.py` | User-facing output helpers. `pinfo()`/`pdim()`, ANSI styling, spinner, per-day booking cards, status cards (auth modes), travel-pass cards. |
-| `sj_calendar.py` | Swedish red-day calendar (Easter computed, no dependency). `skip_reason()` for weekend/holiday skipping. |
+| `cli.py` | Entry point. CLI argument parsing (see §5.6), top-level orchestration. |
+| `auth.py` | Authentication orchestration. B2C login flow, token lifecycle (validate → refresh → full login), SMS input with timeout. |
+| `client.py` | HTTP client. All SJ API communication via `httpx.Client`. Low-level request methods only — no business logic. Includes HTTP retry logic. |
+| `booking.py` | Booking business logic. Search, departure selection, offer matching, provisional booking creation, checkout, cancellation, duplicate detection. |
+| `config.py` | Configuration loading and validation (`CfgManager`). |
+| `tokens.py` | Token cache management (`TokenManager`). Load, save, validate expiry, check refresh availability. |
+| `logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. |
+| `errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`). |
+| `output.py` | User-facing output helpers. `pinfo()`/`pdim()`, ANSI styling, spinner, per-day booking cards, status cards (auth modes), travel-pass cards. |
+| `dates.py` | Swedish red-day calendar (Easter computed, no dependency). `skip_reason()` for weekend/holiday skipping. |
 
 ### Design principles
 
 - **Single responsibility**: each module has one job. The HTTP client doesn't decide what to book. The booking logic doesn't manage tokens.
-- **No business logic in the client**: `sj_client.py` exposes methods like `search_journey()`, `get_offers()`, `create_provisional_booking()`. It does not interpret results or make decisions.
-- **Thin entry point**: `sj_tool.py` parses CLI args, wires modules together, and delegates. The main loop body calls into `sj_booking.py`.
+- **No business logic in the client**: `client.py` exposes methods like `search_journey()`, `get_offers()`, `create_provisional_booking()`. It does not interpret results or make decisions.
+- **Thin entry point**: `cli.py` parses CLI args, wires modules together, and delegates. The main loop body calls into `booking.py`.
 - **Errors as exceptions**: use typed exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`) rather than return-code checking. Catch at the orchestration layer.
 
 ### Data flow
@@ -37,13 +37,13 @@ Plain venv, no package manager or build system. Modules organized by separation 
 ```
 CLI args (see §5.6)
   ↓
-config.toml → sj_config.CfgManager → validate all fields
+config.toml → config.CfgManager → validate all fields
   ↓
-token.json → sj_token.TokenManager → valid? → use access_token
+token.json → tokens.TokenManager → valid? → use access_token
   ↓ expired?                           ↓ no token?
-sj_auth: refresh_token                sj_auth: full B2C login (interactive SMS)
+auth: refresh_token                auth: full B2C login (interactive SMS)
   ↓ fail?                              ↓
-sj_auth: full B2C login → save tokens
+auth: full B2C login → save tokens
   ↓
 Mode dispatch:
   --list-bookings         → fetch & display per-day booking cards → exit
@@ -56,9 +56,9 @@ Mode dispatch:
   --book                  → booking loop:
                               clean up stale provisionals
                               for each date in range:
-                                sj_calendar: skip weekends / red days
-                                sj_booking: check duplicates
-                                sj_booking: search → select → offer → book → checkout
+                                dates: skip weekends / red days
+                                booking: check duplicates
+                                booking: search → select → offer → book → checkout
                                 per-day result line
                               exit
 ```
@@ -107,7 +107,7 @@ Email and password stored in plaintext in `config.toml`. Acceptable for this use
 
 `~/.config/sj-api-client/config.toml` (or `$XDG_CONFIG_HOME/sj-api-client/config.toml`)
 
-**First run**: when the file does not exist, `--login` (and only `--login` — every other operation presupposes a session) run in a terminal offers to create it — `? create it now? [y/n]`, then asks for the SJ email (validated, re-asked) and password (via `getpass`, never echoed, re-asked if empty), writes the documented template (`config.example.toml`) with the credentials filled in (TOML-escaped), chmods it to `0600`, and closes with a `● config created` card pointing at `[search_parameters]`; the run then **continues with the requested operation** (so `--login` logs in right away — only `--book`/`--cancel-date` still need the search parameters edited first). Declined, non-interactive, or any other operation: a `● no configuration` card names the expected path, points at `--login`, and exits 1. A missing file is reported as missing — `failed to parse` is reserved for real TOML errors.
+**First run**: when the file does not exist, `--login` (and only `--login` — every other operation presupposes a session) run in a terminal offers to create it — `? create it now? [y/n]`, then asks for the SJ email (validated, re-asked) and password (via `getpass`, never echoed, re-asked if empty), writes the documented template (`config.example.toml`) with the credentials filled in (TOML-escaped), chmods it to `0600`, and closes with a `● config created` card pointing at `[search_parameters]`; the run then **continues into the login**. The offer requires both stdin and stdout to be terminals (the prompts go to stdout). Declined: a `● no configuration` card that only points back at `--login` (the wizard already named the path); non-interactive or any other operation: the card names the expected path and points at `--login`; exit 1 in all cases. Ctrl-D at the password prompt counts as an empty answer and is re-asked; a write failure (permissions, a file where the directory should be) shows `● config not created` with the OS error, exit 1. A missing file is reported as missing, an unreadable one as `cannot read config` — `failed to parse` is reserved for real TOML errors.
 
 ### 4.2 Schema
 
@@ -169,7 +169,7 @@ Report all validation errors at once (don't stop at the first one).
 ### 5.1 Book mode
 
 ```bash
-python3 sj_tool.py --book
+sj-tool --book
 ```
 
 Reads config, authenticates, and books tickets for every date in the configured range. No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): green/red ● by outcome, dim summary text.
@@ -210,12 +210,12 @@ thu 24 sep 2026   Linköping Central ⇄ Stockholm Central
 ● 4 day(s) · 1 booked · 1 already booked · 1 not booked · 2 skipped
 ```
 
-The booked legs are rendered from the booking object the API returns (train, carriage/seat, class, booking number), so they are identical to what `--list-bookings` shows afterwards. A checkout failure prints `checkout failed, provisional left (cleaned up on next --book run)` and counts as `checkout failed` in the footer. The route in the header shows what the day needs: `A ⇄ B` both legs, `A → B` outbound only, `B → A` return only (with a `return already booked, searching outbound only` / `outbound already booked, searching return only` line beneath).
+The booked legs are rendered from the booking object the API returns (train, carriage/seat, class, booking number), so they are identical to what `--list-bookings` shows afterwards. A checkout failure prints `checkout failed, provisional left (cleaned up on next --book run)` and counts as `checkout failed` in the footer; an exception while processing a day prints `error: …` and counts as `error(s)`. Either turns the closing `●` red and makes the run exit 1 (§5.7); days without a 0-price offer are skips (`not booked`), not failures. The route in the header shows what the day needs: `A ⇄ B` both legs, `A → B` outbound only, `B → A` return only (with a `return already booked, searching outbound only` / `outbound already booked, searching return only` line beneath).
 
 ### 5.2 Dry-run mode
 
 ```bash
-python3 sj_tool.py --book --dry-run
+sj-tool --book --dry-run
 ```
 
 `--dry-run` is a **modifier**, not an operation: it composes with `--book`, `--cancel-date` and `--cancel-booking`, and means nothing real happens. Bare `--dry-run`, or `--dry-run` with any other flag, is a usage error. With `--book` it performs the full search flow for each date but does **not** create bookings (and skips the stale-provisional cleanup). Same run header and day cards as §5.1, with the operation prefixed `dry run · `; each leg line shows the departure that would be booked — time range, duration, train, class, flexibility — or, dimmed in place of the flexibility cell, why it cannot be booked (`no 0-price offer`, `no departure found`). The footer starts with `dry run` and counts bookable / partly bookable / unavailable days.
@@ -249,9 +249,9 @@ sat 19 sep 2026   weekend
 ### 5.3 Cancel mode
 
 ```bash
-python3 sj_tool.py --cancel-date 2026-01-20              # all bookings on the configured route that day
-python3 sj_tool.py --cancel-date 2026-01-20,2026-02-03..2026-02-05   # several dates, comma list + ranges
-python3 sj_tool.py --cancel-booking ERU0HWB2,8Y41N08J   # by booking number, any case
+sj-tool --cancel-date 2026-01-20              # all bookings on the configured route that day
+sj-tool --cancel-date 2026-01-20,2026-02-03..2026-02-05   # several dates, comma list + ranges
+sj-tool --cancel-booking ERU0HWB2,8Y41N08J   # by booking number, any case
 ```
 
 For each matching booking: show its day card (same shape as §5.4, no title), then confirm. `y`/`yes` (any case) confirms; anything else aborts.
@@ -275,12 +275,12 @@ tue 15 sep 2026   Linköping Central → Stockholm Central
 ● booking ERU0HWB2 cancelled
 ```
 
-If the booking has several future journeys, they are listed as numbered leg lines (`1.`, `2.`, … and `a.` for all); the selected legs are echoed as leg lines under `selected for cancellation:` before the final `? cancel selected journey(s)? [y/n]:`. All cancel prompts (`? select [1/2/a]:`, the `[y/n]` confirmations) use the shared inline `?`-marked prompt (`ask()` in `sj_output`). Past journeys are shown but cannot be selected. A booking with a pending cancellation offers confirm / revert / nothing. With `--dry-run`, the day cards are shown and the run stops there — no prompts, no cancellation calls — closing with `● dry run · N journey(s) would be cancelled from booking X` per booking (or `● dry run · booking X has a pending cancellation, nothing done`).
+If the booking has several future journeys, they are listed as numbered leg lines (`1.`, `2.`, … and `a.` for all); the selected legs are echoed as leg lines under `selected for cancellation:` before the final `? cancel selected journey(s)? [y/n]:`. All cancel prompts (`? select [1/2/a]:`, the `[y/n]` confirmations) use the shared inline `?`-marked prompt (`ask()` in `output`). Past journeys are shown but cannot be selected. A booking with a pending cancellation offers confirm / revert / nothing. With `--dry-run`, the day cards are shown and the run stops there — no prompts, no cancellation calls — closing with `● dry run · N journey(s) would be cancelled from booking X` per booking (or `● dry run · booking X has a pending cancellation, nothing done`).
 
 ### 5.4 List current bookings
 
 ```bash
-python3 sj_tool.py --list-bookings
+sj-tool --list-bookings
 ```
 
 Fetches all active bookings within the travel pass validity period and displays them as one card per travel day, legs indented beneath:
@@ -308,7 +308,7 @@ mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
 - Only shows non-cancelled bookings. Pagination: fetches all pages from the bookings API. Read-only.
 - Opens with the header box (`operation   listing bookings` + account/travelpass/holder), then the day cards; the bookings fetch is a silent spinner. The closing status line (green ●, dim text) counts days and bookings (leg count omitted — the legs are visible in the cards), plus `N in the past` when applicable. Elsewhere, progress steps that matter leave a dimmed trail line when done — `✓ searching outbound at 06:59`, or `✗ …` if the step raised — so logs show where time went or where a step failed. When stdout is not a TTY only the trail line is printed.
 - Styling: bold header/booking numbers, dimmed past days, coloured arrows. ANSI colour is emitted only when stdout is a TTY and `NO_COLOR` is unset (`TERM=dumb` also disables it); piped output is plain text. Emoji appear only in run-mode title lines, never in footers or aligned rows.
-- The card renderer (`day_header`, `leg_lines` in `sj_output.py`) is shared by list, book, dry-run and cancel output; columns that are empty on every row of a card are omitted, so book/list cards show train · seat · class · number while dry-run cards show train · class · flexibility/note. Travel passes render as cards in the same grammar (`print_travelpasses`): bold pass name + card number as the header, then dim-labelled facts (holder, valid with days left, price from the receipt); unknown facts are omitted, and a `● N travel pass(es)` status line closes the mode.
+- The card renderer (`day_header`, `leg_lines` in `output.py`) is shared by list, book, dry-run and cancel output; columns that are empty on every row of a card are omitted, so book/list cards show train · seat · class · number while dry-run cards show train · class · flexibility/note. Travel passes render as cards in the same grammar (`print_travelpasses`): bold pass name + card number as the header, then dim-labelled facts (holder, valid with days left, price from the receipt); unknown facts are omitted, and a `● N travel pass(es)` status line closes the mode.
 
 ### 5.5 Environment variables
 
@@ -358,7 +358,7 @@ Flags are mutually exclusive, and one mode flag is required — there is no impl
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Any failure (config error, auth error, booking error, partial failure). |
+| 1 | Any failure: config or auth error; a `--book` run in which any day's checkout failed or errored; a `--cancel-*` run in which any cancellation was refused by the API, declined at a prompt, or (`--cancel-booking`) the number was not found. A day with no offer, or a `--cancel-date` date with nothing to cancel, is not a failure. |
 
 ## 6. Booking Workflow
 
@@ -367,7 +367,7 @@ Flags are mutually exclusive, and one mode flag is required — there is no impl
 For each date in `[date_start, date_end]`:
 
 0. **Calendar filter**: if the date is a weekend (`skip_weekends`) or a Swedish red day (`skip_holidays`), print `skipping YYYY-MM-DD (reason)` and continue to the next date without any API calls (see §6.4).
-1. **Duplicate check**: fetch existing bookings and check if a booking already exists for this (route, date). If fully booked (both legs for roundtrip, or single leg for one-way), skip with an info message.
+1. **Duplicate check**: fetch existing bookings (from today to the end of the pass, so a `date_start` of today is covered) and check whether an active booking — not cancelled, not a stale provisional — already has a journey with this route's end points on this Swedish date (a journey with a change matches by its end points, not per segment). If fully booked (both legs for roundtrip, or single leg for one-way), skip with an info message.
 2. **Determine what to book**: outbound only, return only, or both — based on which legs are missing.
 3. **Search**: call `search_journey` with the appropriate parameters. For roundtrip where both legs are needed, use a single roundtrip search. For single missing legs, use a one-way search.
 4. **Poll results**: poll `get_search_results` up to 5 times with 1-second intervals until departures appear.
@@ -381,7 +381,7 @@ For each date in `[date_start, date_end]`:
 
 ### 6.2 Provisional booking cleanup
 
-On startup (after auth, before the booking loop), fetch all existing bookings in the date range. Any booking with status `"NEW"` and `"CANCEL_JOURNEY"` in `possibleActions` is a stale provisional booking from a previous interrupted run. Cancel these automatically. This never runs under `--dry-run` (a dry run must not mutate anything); the duplicate check ignores such stale provisionals in both modes so dry-run and book agree on what is already booked.
+On startup (after auth, before the booking loop), fetch all existing bookings in the date range. Any booking with status `"NEW"` and `"CANCEL_JOURNEY"` in `possibleActions` is a stale provisional booking from a previous interrupted run. Cancel these automatically. This never runs under `--dry-run` (a dry run must not mutate anything); the duplicate check ignores such stale provisionals in both modes so dry-run and book agree on what is already booked, and `--list-bookings` / `--cancel-date` / `--cancel-booking` ignore them the same way (`is_active_booking`) — a leftover provisional is not a booking.
 
 ### 6.3 Timing between dates
 
@@ -389,7 +389,7 @@ On startup (after auth, before the booking loop), fetch all existing bookings in
 
 ### 6.4 Weekend and holiday skipping
 
-Implemented in `sj_calendar.py` with no external dependency. `skip_reason(date, skip_weekends, skip_holidays)` returns `"weekend"`, the holiday name, or `None`.
+Implemented in `dates.py` with no external dependency. `skip_reason(date, skip_weekends, skip_holidays)` returns `"weekend"`, the holiday name, or `None`.
 
 Swedish red days are computed per year: fixed dates (Nyårsdagen, Trettondedag jul, Första maj, Nationaldagen, Juldagen, Annandag jul), Easter-derived (Långfredagen, Påskdagen, Annandag påsk, Kristi himmelsfärdsdag, Pingstdagen; Easter via the Meeus/Jones/Butcher algorithm) and window-based Saturdays (Midsommardagen = Saturday in June 20–26, Alla helgons dag = Saturday in Oct 31–Nov 6). The three eves — Midsommarafton, Julafton, Nyårsafton — are also included: they are not formal public holidays but are legally treated as Sundays and are de facto non-working days for commuters.
 
@@ -407,9 +407,9 @@ A round trip is always attempted the way the SJ app does it: one roundtrip searc
 
 ### 7.1 Time matching
 
-When `select_closest_ticket_available = true` (the expected default), select the departure with the smallest absolute time difference from the target time, regardless of direction (earlier or later).
+When `select_closest_ticket_available = true` (the expected default), walk the departures by absolute time difference from the target time, regardless of direction (earlier or later), and take the first one that carries the requested class (or a fallback class, §7.2): a closest departure without the class (a bus, a regional without calm) is skipped with a warning, not the end of the leg. If the chosen departure has no 0-price offer, one alternative is tried (§8.1).
 
-When `false`, require an exact time match. If no exact match, skip that leg.
+When `false`, require an exact time match (the first exact match with the class). If there is no exact match, or the exact match has no 0-price offer, skip that leg — no other departure is ever booked; the run header says `exact time only`.
 
 ### 7.2 Class selection with fallback
 
@@ -427,7 +427,7 @@ When `allow_class_fallback = false`, only match the exact requested class — at
 
 ### 7.3 Timezones
 
-SJ API timestamps carry an explicit offset (`2026-09-01T06:59:00+02:00`). Rules, implemented once in `sj_calendar.py` (`parse_api_datetime`, `to_sweden`, `sweden_now`) and used everywhere:
+SJ API timestamps carry an explicit offset (`2026-09-01T06:59:00+02:00`). Rules, implemented once in `dates.py` (`parse_api_datetime`, `to_sweden`, `sweden_now`) and used everywhere:
 
 - Train times, pass validity dates and config times are **Swedish wall-clock** times. API timestamps are converted to `Europe/Stockholm` before display or comparison with config values — never to the machine's local zone, so the tool behaves the same when run from abroad.
 - "Is this in the past / expired / how many days left" comparisons use aware datetimes.
@@ -442,13 +442,14 @@ Station names are resolved to UIC codes via a hardcoded map in `SJClient`. This 
 ### 8.1 No 0-price offer available
 
 If no 0-price offer exists for any class in the fallback chain (§7.2) — every candidate is priced > 0, unavailable, or absent:
+- With `select_closest_ticket_available = true`, try **one** alternative departure with the class: the closest one not later than the target for the outbound, not earlier than the target for the return (a second train at the exact target minute qualifies). With `false`, no alternative is tried.
 - Log a warning with the date and direction.
 - If this is the outbound leg, skip the entire date (no point booking a return without an outbound).
 - If this is the return leg, keep the outbound booking and proceed to checkout as a one-way trip. Inform the user that only the outbound was booked.
 
 ### 8.2 Partial roundtrip
 
-If the outbound books successfully but the return leg fails (no offer, API error, sold out):
+If the outbound books successfully but the return leg fails (no offer, sold out, or an API error while searching or adding it — caught and reported as `return leg failed (…), booking outbound only`):
 - Keep the one-leg booking.
 - Proceed to checkout with just the outbound.
 - Inform the user clearly: `"Booked outbound only for 2026-01-20 (return leg unavailable)."`.
@@ -461,7 +462,7 @@ If the SJ API returns an error indicating an existing booking conflicts with the
 
 ### 8.4 Network failures & retries
 
-For transient HTTP errors (timeouts, 502, 503, connection resets), in `RetryTransport`:
+For transient HTTP errors (timeouts, 502, 503, connection errors, and transport errors such as a reset or a pooled connection closed by the server — `httpx.NetworkError` / `RemoteProtocolError`), in `RetryTransport`:
 - Idempotent requests (GET/HEAD/OPTIONS): retry up to 3 times with delays of 1s, 2s, 4s (exponential backoff).
 - Non-idempotent requests (POST/PATCH — provisional booking, add leg, checkout, cancel): retry only when the request provably never reached the server (connection error / connect timeout). A 502/503 or read timeout *after* sending is not retried — the server may already have acted on it, and a retry could create a duplicate provisional booking (which would only be cleaned up on the next `--book` run, §6.2).
 - After the retries are exhausted, the current operation fails and is logged; the date loop continues with the next date.
@@ -490,7 +491,7 @@ On startup, fetch all travel passes and drop expired ones (`endTravelValidityDat
 
 ### 9.2 Date range validation
 
-If the travel pass has validity dates (`startTravelValidityDateTime`, `endTravelValidityDateTime`), validate that the configured `date_start` and `date_end` fall within the pass validity period. Exit with an error if not.
+If the travel pass has validity dates (`startTravelValidityDateTime`, `endTravelValidityDateTime`), validate that the configured `date_start` and `date_end` fall within the pass validity period, compared as **Swedish calendar dates**: the API's validity instants are midnight UTC (01:00/02:00 Swedish), and `endTravelValidityDateTime` is exclusive — the day after the last valid day, which is what `--list-travelpasses` shows as the end. Exit 1 with both ranges printed if not.
 
 ### 9.3 IDs
 
@@ -509,12 +510,12 @@ The search response may also return a `passengerListId` which takes precedence o
 
 ### 10.2 User-facing output (stdout)
 
-Everything the user sees goes through `sj_output.py` and prints regardless of log level:
+Everything the user sees goes through `output.py` and prints regardless of log level:
 
 - `pinfo()` plain message, `pdim()` dimmed context, `spinner()` progress with a dim `✓`/`✗` trail line (or none with `trail=False`), `print_day_header()` / `print_day_note()` / `print_leg_lines()` for cards, `indented()` to nest everything printed inside a block under a day header.
 - **Casing convention**: prose is lowercase (`no departure found for outbound`, `✓ checking offers…`), identifiers keep their case — booking numbers upper-case (`ERU0HWB2`), station names as SJ writes them (`Linköping Central`), train names as given. Operation values (`booking tickets`, `listing bookings`) are lowercase; the header box's travelpass/holder values keep their real casing. Nothing is lowercased automatically any more; `pinfo` prints what it is given.
-- Two output families share one vocabulary. **Pass-scoped modes** (book, dry-run, cancel, list-bookings, list-travelpasses): open with the header box (`print_header_box`, rounded dim borders): `operation` (bold: `booking tickets` / `dry run · booking tickets` / `cancelling bookings` / `listing bookings` / `listing travel passes`), `account` (the configured login email — always the second row, app-wide), `travelpass`, `holder` (account+owner only for travel passes — the passes are the content). Book/dry-run follow with the `describe_run` facts block (`route`/`days`/`times`/`ticket`, card grammar), then dim progress trail (routine fetches are silent: spinner only), cards, and a closing ● status line (`pstatus`: green done / red failed-or-aborted, dim text — cancel outcomes like `● booking X cancelled` / `● cancellation aborted` use the same line). **Auth modes** (login, logout, login-status): session-scoped and offline-capable, so no pass header — they open with a session-scoped header box instead (`operation` + `account`: config email for `--login`, cached profile_info email for `--logout`/`--login-status`), then any trail steps, then the status card (`print_status_card`: green/red dot + bold verdict, blank line, dim 7-char-padded labels with plain values, §5.6; `--login` ends by rendering the same card `--login-status` shows); travel passes render pass cards in the same fact grammar. No emoji anywhere in the output. Colour/bold/dim only on a TTY without `NO_COLOR`. Every printed line starts with a one-space left margin (`_MARGIN` in `sj_output`) so output sits off the terminal edge; blank lines stay empty.
-- Prompts accept `y`/`yes` for confirmation, any case. Every input prompt is inline (answer typed on the same line) and marked with a cyan `?` — the SMS prompt via `prompt()`, all interactive choices/confirmations via `ask()` (both in `sj_output`). A `?` question that asks about a block above it (a card or numbered list) is separated from that block by a blank line; a prompt that is itself a trail step (the SMS code) stays attached to its trail. Trail lines use human step names (`✓ performing login`, `✓ sending sms code`, `✓ completing login` — not OAuth plumbing terms) with the mark coloured — green `✓` on success, red `✗` on failure — and the step text dim. Glyph colours form one quartet: cyan `?` input needed, green `✓` step succeeded, red `✗` step failed, yellow `!` deviation worth noticing (`pwarn`: class fallbacks, time deviations, alternative-departure attempts, rejected SMS codes, checkout failures, missing departures) — plus the green/red `●` on verdict cards and on every operation's closing status line (`pstatus`). Marks are coloured, message text stays dim. A blank line separates a login trail from the card or title that follows.
+- Two output families share one vocabulary. **Pass-scoped modes** (book, dry-run, cancel, list-bookings, list-travelpasses): open with the header box (`print_header_box`, rounded dim borders): `operation` (bold: `booking tickets` / `dry run · booking tickets` / `cancelling bookings` / `listing bookings` / `listing travel passes`), `account` (the configured login email — always the second row, app-wide), `travelpass`, `holder` (account+owner only for travel passes — the passes are the content). Book/dry-run follow with the `describe_run` facts block (`route`/`days`/`times`/`ticket`, card grammar), then dim progress trail (routine fetches are silent: spinner only), cards, and a closing ● status line (`pstatus`: green done / red failed-or-aborted, dim text — cancel outcomes like `● booking X cancelled` / `● cancellation aborted` use the same line). **Auth modes** (login, logout, login-status): session-scoped and offline-capable, so no pass header — they open with a session-scoped header box instead (`operation` + `account`: config email for `--login`, cached profile_info email for `--logout`/`--login-status`), then any trail steps, then the status card (`print_status_card`: green/red dot + bold verdict, blank line, dim 7-char-padded labels with plain values, §5.6; `--login` ends by rendering the same card `--login-status` shows); travel passes render pass cards in the same fact grammar. No emoji anywhere in the output. Colour/bold/dim only on a TTY without `NO_COLOR`. Every printed line starts with a one-space left margin (`_MARGIN` in `output`) so output sits off the terminal edge; blank lines stay empty.
+- Prompts accept `y`/`yes` for confirmation, any case. Every input prompt is inline (answer typed on the same line) and marked with a cyan `?` — the SMS prompt via `prompt()`, all interactive choices/confirmations via `ask()` (both in `output`). A `?` question that asks about a block above it (a card or numbered list) is separated from that block by a blank line; a prompt that is itself a trail step (the SMS code) stays attached to its trail. Trail lines use human step names (`✓ performing login`, `✓ sending sms code`, `✓ completing login` — not OAuth plumbing terms) with the mark coloured — green `✓` on success, red `✗` on failure — and the step text dim. Glyph colours form one quartet: cyan `?` input needed, green `✓` step succeeded, red `✗` step failed, yellow `!` deviation worth noticing (`pwarn`: class fallbacks, time deviations, alternative-departure attempts, rejected SMS codes, checkout failures, missing departures) — plus the green/red `●` on verdict cards and on every operation's closing status line (`pstatus`). Marks are coloured, message text stays dim. A blank line separates a login trail from the card or title that follows.
 
 ### 10.3 Log levels (stderr)
 
@@ -525,13 +526,13 @@ Everything the user sees goes through `sj_output.py` and prints regardless of lo
 | WARNING | Skipped dates, class fallbacks, unknown response shapes. |
 | INFO | Per-date progress, selected departures, offer details. |
 | DEBUG | HTTP request/response summaries, config values, token state. |
-| TRACE | Full httpx/httpcore internals (request headers, response bodies). |
+| TRACE | Full httpx/httpcore internals (request headers, response bodies). Cookie / Set-Cookie / Authorization / X-CSRF-TOKEN header values and `code=` query values are scrubbed from these lines too. |
 
 ### 10.4 Log format
 
 Structured key-value format on stderr:
 ```
-time=2026-01-19T08:30:15.123+01:00 level=INFO     file=sj_tool.py          class=SJTool              function=process_booking    msg="Selected outbound: 05:29 (diff: 0m)"
+time=2026-01-19T08:30:15.123+01:00 level=INFO     file=cli.py          class=SJTool              function=process_booking    msg="Selected outbound: 05:29 (diff: 0m)"
 ```
 
 Color-coded by level in terminal.
@@ -548,7 +549,7 @@ Color-coded by level in terminal.
 ## 12. Dependencies
 
 - Python 3.13+
-- `httpx` — HTTP client
-- `typing_extensions` — `@override` decorator
-- No `requirements.txt` or `pyproject.toml`. Manual install: `pip install httpx typing_extensions`
-- `pytest` (dev only) — unit tests in `tests/`, no network; `pytest.ini` sets `pythonpath = .`
+- `httpx` — HTTP client (the only runtime dependency)
+- Declared in `pyproject.toml` (PEP 621) together with the `sj-tool` console script and the
+  ruff/pytest/mypy configuration; install with `pip install -e .` (`--group dev` adds the dev tools)
+- `pytest`, `ruff`, `mypy` (dev group only) — unit tests in `tests/`, no network

@@ -1,7 +1,14 @@
 """Custom exceptions for the SJ API client."""
 
+from collections.abc import Iterable
+from typing import Any
 
-class SJAPIError(Exception):
+
+class SJError(Exception):
+    """Base class for every error raised by the SJ API client."""
+
+
+class SJAPIError(SJError):
     """
     Exception raised when the SJ API returns an error in the JSON body.
 
@@ -11,10 +18,10 @@ class SJAPIError(Exception):
     the raw dict; the full dict stays available as .payload.
     """
 
-    def __init__(self, payload):
-        self.payload = payload if isinstance(payload, dict) else None
-        self.code = None
-        self.message = None
+    def __init__(self, payload: dict[str, Any] | str) -> None:
+        self.payload: dict[str, Any] | None = payload if isinstance(payload, dict) else None
+        self.code: str | None = None
+        self.message: str | None = None
         if self.payload:
             code = self.payload.get("errorCode") or self.payload.get("error")
             self.code = str(code) if code else None
@@ -24,11 +31,11 @@ class SJAPIError(Exception):
         super().__init__(text or str(payload))
 
 
-class SJAuthError(Exception):
+class SJAuthError(SJError):
     """Exception raised when authentication fails."""
 
 
-class SJConfigError(Exception):
+class SJConfigError(SJError):
     """
     Exception raised when configuration validation fails.
 
@@ -36,6 +43,6 @@ class SJConfigError(Exception):
     file-level failures like a missing or unparsable config).
     """
 
-    def __init__(self, message, errors=None):
+    def __init__(self, message: str, errors: Iterable[str] | None = None) -> None:
         self.errors = list(errors) if errors else []
         super().__init__(message)

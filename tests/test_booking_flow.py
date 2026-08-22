@@ -276,12 +276,59 @@ def test_dry_run_reports_missing_offer_and_alternative():
         None,
         False,
     )
+    # book mode books nothing from this search without book_partial, so the
+    # preview must not call the return "bookable" either
     assert (inb["departure"], inb["arrival"], inb["flexibility"], inb["has_offer"]) == (
         "18:00",
         "19:40",
-        "FULLFLEX",
-        True,
+        None,
+        False,
     )
+    assert inb["blocked"] == "needs book_partial"
+
+
+def test_dry_run_return_stays_bookable_with_book_partial():
+    c = FakeClient(
+        {"OUT": OUT, "IN": IN}, {"o-best": NO_OFFER, "o-early": NO_OFFER, "i-best": NO_OFFER}
+    )
+    inb = flow(c, base_cfg(book_partial=True), dry_run=True)["inbound"]
+    assert (inb["flexibility"], inb["has_offer"]) == ("FULLFLEX", True)
+
+
+def test_return_leg_api_error_still_checks_out_the_outbound(capsys):
+    # SPEC §8.2: the outbound provisional is already held — keep it and check
+    # it out alone instead of leaving it for the stale cleanup
+    class AddFails(FakeClient):
+        def add_offer_to_booking(self, *a, **k):
+            raise RuntimeError("PATCH 500")
+
+    c = AddFails({"OUT": OUT, "IN": IN})
+    result = flow(c)
+    assert booked(result) == {
+        "booking_id": "UUID-1",
+        "booking_number": "NUM1",
+        "legs": ["outbound"],
+        "checked_out": True,
+    }
+    assert ("checkout", "UUID-1") in c.calls
+    assert "! return leg failed (PATCH 500), booking outbound only" in capsys.readouterr().out
+
+
+def test_exact_time_only_never_books_another_departure(capsys):
+    # select_closest_ticket_available=false: an offer-less exact match ends
+    # the leg; the alternative-departure fallback must not run (SPEC §7.1)
+    c = FakeClient({"OUT": OUT, "IN": IN}, {"o-best": NO_OFFER})
+    assert flow(c, base_cfg(select_closest_ticket_available=False)) is None
+    assert ("offers", "o-early") not in c.calls and ("create", "OFF-calm") not in c.calls
+    assert "no valid offer for outbound at 06:59 (exact time only)" in capsys.readouterr().out
+
+
+def test_second_train_at_the_exact_minute_is_tried_as_alternative():
+    twins = [dep("o-twin", D, "06:59", "08:40"), dep("o-best", D, "06:59", "11:36")]
+    c = FakeClient({"OUT": twins, "IN": IN}, {"o-twin": NO_OFFER})
+    result = flow(c)
+    assert result["legs"] == ["outbound", "return"]
+    assert ("offers", "o-twin") in c.calls and ("offers", "o-best") in c.calls
 
 
 def test_dry_run_no_departures_gives_dashes():
@@ -320,7 +367,12 @@ def test_book_mode_prints_day_cards_notes_and_summary(capsys):
         return item
 
     existing_mon = [on_monday(existing(LKP, STH)), on_monday(existing(STH, LKP))]
-    assert run_range(c, cfg, dry_run=False, existing=existing_mon) == []
+    assert run_range(c, cfg, dry_run=False, existing=existing_mon) == {
+        "days": 5,
+        "booked": 2,
+        "already": 1,
+        "skipped": 2,
+    }
     out = capsys.readouterr().out
     # day card: header, indented progress, indented legs with number
     assert "fri 04 sep 2026   Linköping Central ⇄ Stockholm Central\n" in out
@@ -357,21 +409,20 @@ def test_book_mode_card_for_failed_day(capsys):
 
 def test_book_mode_checkout_failure_is_counted(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN}, checkout_ok=False)
-    run_range(c, base_cfg(), dry_run=False)
+    assert run_range(c, base_cfg(), dry_run=False) == {"days": 1, "failed": 1}
     out = capsys.readouterr().out
     assert "  ! checkout failed, provisional left (cleaned up on next --book run)\n" in out
     assert "\n ● 1 day(s) · 1 checkout failed" in out
 
 
-def test_dry_run_prints_cards_with_notes_and_returns_rows(capsys):
+def test_dry_run_prints_cards_with_notes_and_returns_counts(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN}, {"i-best": NO_OFFER, "i-late": NO_OFFER})
-    rows = run_range(c, base_cfg(), dry_run=True)
+    counts = run_range(c, base_cfg(), dry_run=True)
     out = capsys.readouterr().out
     # the blank before the first card is the caller's (printed before the
     # bookings fetch); process_date_range starts with the card itself
     assert not out.startswith("\n")
-    assert [r["direction"] for r in rows] == ["Outbound", "Return"]
-    assert rows[0]["note"] == "" and rows[1]["note"] == "no 0-price offer"
+    assert counts == {"days": 1, "partial": 1}
     assert "  → 06:59 – 11:36   4h 37m   X 2000 O-BEST   2 class calm   FULLFLEX\n" in out
     assert "  ← 17:22 – 21:53   4h 37m   X 2000 I-BEST   2 class calm   no 0-price offer\n" in out
     assert "\n ● dry run · 1 day(s) · 1 partly bookable" in out
@@ -383,8 +434,8 @@ def test_process_date_range_survives_per_date_exception(capsys):
         def search_journey(self, *a, **k):
             raise RuntimeError("api down")
 
-    rows = run_range(Boom(), base_cfg(), dry_run=True)
-    assert rows == []
+    counts = run_range(Boom(), base_cfg(), dry_run=True)
+    assert counts == {"days": 1, "error": 1}  # an error is not "unavailable"
     out = capsys.readouterr().out
     assert "  error: api down\n" in out
-    assert "\n ● dry run · 1 day(s) · 1 unavailable" in out
+    assert "\n ● dry run · 1 day(s) · 1 error(s)" in out
