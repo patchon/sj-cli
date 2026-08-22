@@ -495,9 +495,17 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             sys.exit(1)
         sys.exit(0)
 
-    # 1. Load and validate config
+    # 1. Load and validate config; offer first-run setup when it is missing
     try:
         cm = CfgManager()
+        if not cm.path.exists():
+            if sys.stdin.isatty() and cm.create_interactive():
+                sys.exit(0)
+            print_status_card(False, "no configuration", lines=[
+                f"expected a config file at {cm.path}",
+                "run any command in a terminal to create it, or copy config.example.toml",
+            ])
+            sys.exit(1)
         cfg = cm.load()
         cm.verify_cfg(cfg)
     except SJConfigError as e:

@@ -1,5 +1,6 @@
 """Configuration loading and validation for the SJ API client."""
 
+import getpass
 import logging
 import os
 import re
@@ -13,6 +14,7 @@ from sj_calendar import sweden_now
 from sj_client import STATION_MAP
 from sj_errors import SJConfigError
 from sj_logger import log_json
+from sj_output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,8 @@ class CfgManager:
             SJConfigError: If there is an error reading or parsing the file.
 
         """
+        if not self.path.exists():
+            raise SJConfigError(f"no config file found at {self.path}")
         try:
             with self.path.open("rb") as f:
                 self.cfg = tomllib.load(f)
@@ -69,6 +73,55 @@ class CfgManager:
             return self.cfg
         except Exception as e:
             raise SJConfigError(f"failed to parse toml config at {self.path}: {e}") from e
+
+    EXAMPLE_PATH = Path(__file__).parent / "config.example.toml"
+
+    def create_interactive(self) -> bool:
+        """
+        First-run setup: offer to create the config file interactively.
+
+        Asks for the SJ credentials (password never echoed), writes the
+        documented template with them filled in, and chmods the file to
+        0600 — it holds the password. The user still edits the search
+        parameters by hand before the first run.
+
+        Returns:
+            True when the config was created, False when declined.
+
+        """
+        pinfo(f"no config found at {self.path}")
+        if ask("create it now? [y/n]: ").strip().lower() not in ("y", "yes"):
+            return False
+
+        while True:
+            email = ask("sj account email: ").strip()
+            if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+                break
+            pwarn(f"'{email}' is not an email address")
+        while True:
+            prompt("sj account password: ")
+            password = getpass.getpass("")
+            if password:
+                break
+            pwarn("password must not be empty")
+
+        def toml_str(value: str) -> str:
+            return value.replace("\\", "\\\\").replace('"', '\\"')
+
+        template = self.EXAMPLE_PATH.read_text()
+        content = re.sub(r'(?m)^email = ".*"$', f'email = "{toml_str(email)}"', template)
+        content = re.sub(r'(?m)^password = ".*"$', f'password = "{toml_str(password)}"', content)
+        with spinner("writing config"):
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(content)
+            self.path.chmod(0o600)
+
+        blank()
+        print_status_card(True, "config created", [
+            ("file", str(self.path)),
+            ("next", "edit [search_parameters] (route, dates, times), then re-run"),
+        ])
+        return True
 
     def verify_cfg(self, cfg: dict) -> None:
         """

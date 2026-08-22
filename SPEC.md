@@ -107,6 +107,8 @@ Email and password stored in plaintext in `config.toml`. Acceptable for this use
 
 `~/.config/sj-api-client/config.toml` (or `$XDG_CONFIG_HOME/sj-api-client/config.toml`)
 
+**First run**: when the file does not exist and stdin is a terminal, the tool offers to create it — `? create it now? [y/n]`, then asks for the SJ email (validated, re-asked) and password (via `getpass`, never echoed, re-asked if empty), writes the documented template (`config.example.toml`) with the credentials filled in (TOML-escaped), chmods it to `0600`, and closes with a `● config created` card pointing at `[search_parameters]`; the run then exits 0. Declined, or in a non-interactive run, a `● no configuration` card names the expected path and exits 1. A missing file is reported as missing — `failed to parse` is reserved for real TOML errors.
+
 ### 4.2 Schema
 
 ```toml

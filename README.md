@@ -67,6 +67,11 @@ cp config.example.toml ~/.config/sj-api-client/config.toml
 $EDITOR ~/.config/sj-api-client/config.toml      # credentials, route, dates, times
 ```
 
+Or skip the copy: on first run (in a terminal) the tool offers to create the config for you —
+it asks for your SJ credentials (password never echoed), writes the documented template with
+them filled in (file mode 0600), and points you at `[search_parameters]` to set route, dates
+and times.
+
 The config lives **outside** the repo on purpose — it contains your SJ password. `config.toml` in
 the repo root is gitignored; only `config.example.toml` is tracked.
 
