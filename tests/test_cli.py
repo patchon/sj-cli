@@ -6,7 +6,7 @@ not an implicit default.
 
 import pytest
 
-from sj_tool import parse_args
+from sj_api_client.cli import parse_args
 
 
 def test_no_args_prints_help_and_exits_1(capsys):
@@ -71,8 +71,11 @@ def test_book_flag_parses():
 
 def test_removed_flag_spellings_are_rejected(capsys):
     # only documented flags are accepted — no hidden aliases (his rule)
-    for argv in (["--cancel-bookings", "3HT2NEIL"], ["--login-only"],
-                 ["--test-if-already-logged-in"]):
+    for argv in (
+        ["--cancel-bookings", "3HT2NEIL"],
+        ["--login-only"],
+        ["--test-if-already-logged-in"],
+    ):
         with pytest.raises(SystemExit) as exc_info:
             parse_args(argv)
         assert exc_info.value.code == 1
@@ -93,7 +96,7 @@ def test_other_modes_still_parse_alone():
 
 
 def test_parse_cancel_dates_single_list_and_ranges():
-    from sj_tool import parse_cancel_dates
+    from sj_api_client.cli import parse_cancel_dates
 
     assert parse_cancel_dates("2026-09-16") == (["2026-09-16"], [])
     # comma list: deduped and sorted
@@ -101,16 +104,20 @@ def test_parse_cancel_dates_single_list_and_ranges():
     assert (dates, errors) == (["2026-09-16", "2026-09-18"], [])
     # inclusive range
     assert parse_cancel_dates("2026-09-16..2026-09-18") == (
-        ["2026-09-16", "2026-09-17", "2026-09-18"], [])
+        ["2026-09-16", "2026-09-17", "2026-09-18"],
+        [],
+    )
     # single-day range and mixing commas with ranges
     dates, errors = parse_cancel_dates("2026-09-21,2026-09-16..2026-09-17,2026-09-21..2026-09-21")
     assert (dates, errors) == (["2026-09-16", "2026-09-17", "2026-09-21"], [])
 
 
 def test_parse_cancel_dates_collects_all_errors_before_anything_runs():
-    from sj_tool import parse_cancel_dates
+    from sj_api_client.cli import parse_cancel_dates
 
-    dates, errors = parse_cancel_dates("2026-09-31,2026/09/16,2026-09-20..2026-09-18,,2026-09-16..2026-09-17..2026-09-18")
+    dates, errors = parse_cancel_dates(
+        "2026-09-31,2026/09/16,2026-09-20..2026-09-18,,2026-09-16..2026-09-17..2026-09-18"
+    )
     assert dates == []
     assert "'2026-09-31' is not a real calendar date" in errors
     assert "'2026/09/16' must be a date formatted YYYY-MM-DD" in errors
@@ -120,7 +127,7 @@ def test_parse_cancel_dates_collects_all_errors_before_anything_runs():
 
 
 def test_parse_cancel_dates_refuses_ranges_over_a_year():
-    from sj_tool import parse_cancel_dates
+    from sj_api_client.cli import parse_cancel_dates
 
     dates, errors = parse_cancel_dates("2026-01-01..2027-06-01")
     assert dates == []

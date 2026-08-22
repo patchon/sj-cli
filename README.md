@@ -10,7 +10,7 @@ Nothing real happens with `--dry-run` present: it previews `--book` and both can
 A mode flag is always required — running the tool bare just prints the help.
 
 ```
-$ python3 sj_tool.py --book
+$ sj-tool --book
 ╭──────────────────────────────────╮
 │  operation    booking tickets    │
 │  account      user@example.com   │
@@ -52,7 +52,7 @@ a green/red dot + verdict, then labelled facts (account, session horizon, token 
 ## Requirements
 
 - Python 3.13+
-- `httpx`, `typing_extensions` (runtime); `pytest` (tests only)
+- `httpx` (the only runtime dependency; `pytest`, `ruff` and `mypy` for development)
 - An SJ account with a travel pass, and a phone for the one-time SMS verification
 
 ## Setup
@@ -60,21 +60,20 @@ a green/red dot + verdict, then labelled facts (account, session horizon, token 
 ```bash
 git clone <this repo> && cd sj-api-client
 python3 -m venv venv
-./venv/bin/pip install httpx typing_extensions pytest
+./venv/bin/pip install -e .                 # runtime only; add `--group dev` for the dev tools
 
 mkdir -p ~/.config/sj-api-client
-cp config.example.toml ~/.config/sj-api-client/config.toml
+cp src/sj_api_client/config.example.toml ~/.config/sj-api-client/config.toml
 $EDITOR ~/.config/sj-api-client/config.toml      # credentials, route, dates, times
 ```
 
 Or skip the copy: run `--login` in a terminal and the tool offers to create the config for you —
 it asks for your SJ credentials (password never echoed), writes the documented template with
-them filled in (file mode 0600), and carries straight on with whatever you asked — `--login`
-logs in right away. Only booking and date-based cancelling need `[search_parameters]` (route,
-dates, times) edited first.
+them filled in (file mode 0600), and logs you in right away. Only booking and date-based
+cancelling need `[search_parameters]` (route, dates, times) edited first.
 
 The config lives **outside** the repo on purpose — it contains your SJ password. `config.toml` in
-the repo root is gitignored; only `config.example.toml` is tracked.
+the repo root is gitignored; only the template `src/sj_api_client/config.example.toml` is tracked.
 
 ### Configuration
 
@@ -102,7 +101,7 @@ service_types = ["SJ_HIGH", "SJ_IC"] # optional train-type filter; omit or ["ALL
 ```
 
 Every field is validated before any network call, and all problems are reported at once. Valid
-stations are the ones in `STATION_MAP` in `sj_client.py` (Stockholm, Linköping, Göteborg, Malmö,
+stations are the ones in `STATION_MAP` in `src/sj_api_client/client.py` (Stockholm, Linköping, Göteborg, Malmö,
 Uppsala, Lund — "Central"/"C" spellings, case-insensitive).
 
 ## Usage
@@ -110,20 +109,20 @@ Uppsala, Lund — "Central"/"C" spellings, case-insensitive).
 ```bash
 source venv/bin/activate
 
-python3 sj_tool.py --book --dry-run        # preview: show what would be booked, without booking
-python3 sj_tool.py --book                  # book for real
-python3 sj_tool.py --list-bookings         # active bookings as one card per travel day
-python3 sj_tool.py --list-travelpasses     # passes with validity, days left and price
-python3 sj_tool.py --cancel-date 2026-09-16                # cancel that day's bookings on the configured route
-python3 sj_tool.py --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
-python3 sj_tool.py --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what would be cancelled, no prompts
-python3 sj_tool.py --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
-python3 sj_tool.py --login                 # authenticate, cache the token, exit
-python3 sj_tool.py --logout                # end the sj.se session, delete cached token + cookies
-python3 sj_tool.py --login-status          # exit 0 if logged in — valid or refreshable token (scripting)
+sj-tool --book --dry-run        # preview: show what would be booked, without booking
+sj-tool --book                  # book for real
+sj-tool --list-bookings         # active bookings as one card per travel day
+sj-tool --list-travelpasses     # passes with validity, days left and price
+sj-tool --cancel-date 2026-09-16                # cancel that day's bookings on the configured route
+sj-tool --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
+sj-tool --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what would be cancelled, no prompts
+sj-tool --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
+sj-tool --login                 # authenticate, cache the token, exit
+sj-tool --logout                # end the sj.se session, delete cached token + cookies
+sj-tool --login-status          # exit 0 if logged in — valid or refreshable token (scripting)
 
-LOG_LEVEL=DEBUG python3 sj_tool.py --book --dry-run   # diagnostics on stderr (TRACE adds httpx wire logs)
-NO_COLOR=1 python3 sj_tool.py --book --dry-run        # plain output (also automatic when piped)
+LOG_LEVEL=DEBUG sj-tool --book --dry-run   # diagnostics on stderr (TRACE adds httpx wire logs)
+NO_COLOR=1 sj-tool --book --dry-run        # plain output (also automatic when piped)
 ```
 
 Flags are mutually exclusive and one mode flag is required (a bare run prints the help and
@@ -159,15 +158,22 @@ duplicate booking. Full details, edge cases and message catalogue: [`SPEC.md`](S
 ## Development
 
 ```bash
-./venv/bin/pytest      # ~140 tests, <1 s, no network (scripted fake client)
-ruff check .           # lint; ruff.toml selects ALL with documented ignores
+./venv/bin/pip install -e . --group dev   # once: project + pytest, ruff, mypy
+./venv/bin/pytest                         # ~150 tests, <1 s, no network (scripted fake client)
+./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatting
+./venv/bin/mypy                           # type check
 ```
 
-Layout: one module per concern (`sj_tool` entry point, `sj_auth`, `sj_client` HTTP only,
-`sj_booking` business logic, `sj_config`, `sj_token`, `sj_logger`, `sj_output`, `sj_calendar`,
-`sj_errors`) — see the architecture table in [`CLAUDE.md`](CLAUDE.md). `tests/test_booking_flow.py`
-pins the booking flow's API call sequence and return contract; run it after touching
-`sj_booking.py`. Secrets (password, tokens, auth codes) are redacted from logs at every level.
+Everything is configured in `pyproject.toml` (ruff selects ALL with documented ignores). The
+editable install puts the `sj-tool` console script on the venv's path; `python -m sj_api_client`
+is equivalent.
+
+Layout: standard src layout — the package is `src/sj_api_client/`, one module per concern (`cli`
+entry point, `auth`, `client` HTTP only, `booking` business logic, `config`, `tokens`, `logger`,
+`output`, `dates`, `errors`) — see the architecture table in [`CLAUDE.md`](CLAUDE.md).
+`tests/test_booking_flow.py` pins the booking flow's API call sequence and return contract; run it
+after touching `booking.py`. Secrets (password, tokens, auth codes) are redacted from logs at every
+level.
 
 ## Disclaimer
 

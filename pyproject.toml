@@ -1,6 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sj-api-client"
+version = "0.1.0"
+description = "Book SJ (Swedish Railways) commuter trips on a travel pass from the command line."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28",
+]
+
+[project.scripts]
+sj-tool = "sj_api_client.cli:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.14",
+    "pytest>=8",
+    "ruff>=0.14",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sj_api_client = ["config.example.toml"]
+
+# --- ruff: lint + format (target version follows requires-python) ---------
+
+[tool.ruff]
 line-length = 100
 
-[lint]
+[tool.ruff.lint]
 select = ["ALL"]
 ignore = [
     # --- Style preferences inappropriate for this project ---
@@ -9,16 +42,13 @@ ignore = [
     "D102",     # Undocumented public method
     "D107",     # Undocumented public __init__
     "D200",     # Unnecessary multiline docstring
-    "D203",     # Blank line before class docstring (conflicts with D211)
-    "D401",     # Non-imperative mood in docstring
-    "D404",     # Docstring starts with "this"
+    "D212",     # Summary on the first line — docstrings put it on the second (D213)
 
     # --- CLI tool: printing is expected ---
     "T201",     # print() usage
 
     # --- Exception message style (too pedantic) ---
     "TRY003",   # Long messages outside exception class
-    "TRY002",   # Raise vanilla class
     "TRY301",   # Abstract raise to inner function
     "EM101",    # String literal in exception
     "EM102",    # f-string literal in exception
@@ -34,6 +64,10 @@ ignore = [
     "PLR0912",  # Too many branches
     "PLR0913",  # Too many arguments
     "PLR0915",  # Too many statements
+    "PLR0917",  # Too many positional arguments
+
+    # --- No copyright headers in this project ---
+    "CPY001",   # Missing copyright notice
 
     # --- Datetime timezone: intentionally naive (local Swedish times) ---
     "DTZ005",   # call-datetime-now-without-tzinfo
@@ -54,7 +88,7 @@ ignore = [
     "G004",     # Logging uses f-string
 
     # --- Style micro-rules not worth enforcing ---
-    "COM812",   # Trailing comma missing
+    "COM812",   # Trailing comma missing (conflicts with the formatter)
     "TRY300",   # Consider moving to else block
     "TRY400",   # error() instead of exception() in logging
     "S110",     # try-except-pass
@@ -65,12 +99,13 @@ ignore = [
     "SIM116",   # if-else instead of dict lookup
     "PLC0415",  # Import outside top level
     "LOG015",   # Root logger call
-    "EXE002",   # Shebang missing executable
-    "D212",     # Multi-line summary first line (conflicts with D213)
 ]
 
-[lint.per-file-ignores]
-"sj_client.py" = [
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"src/sj_api_client/client.py" = [
     "N806",     # Non-lowercase variable (STATION_MAP used locally)
 ]
 "tests/*" = [
@@ -82,3 +117,25 @@ ignore = [
     "DTZ001",   # Naive datetimes mirror the production code
     "S105",     # "password": "x" in fixture config
 ]
+
+# --- pytest ---------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+# --- mypy -----------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests"]
+mypy_path = "src"
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+# Tests drive the real code with duck-typed fakes (FakeClient for SJClient);
+# only their annotated parts are checked.
+module = "tests.*"
+check_untyped_defs = false

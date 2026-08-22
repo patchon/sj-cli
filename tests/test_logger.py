@@ -1,6 +1,6 @@
 import json
 
-from sj_logger import log_json, redact
+from sj_api_client.logger import log_json, redact
 
 
 def test_redact_masks_secret_keys_recursively():
@@ -14,7 +14,13 @@ def test_redact_masks_secret_keys_recursively():
     }
     out = redact(data)
     assert out["auth"] == {"email": "a@b", "password": "***redacted***"}
-    assert out["Authorization"] == out["ACCESS_TOKEN"] == out["id_token"] == out["code_verifier"] == "***redacted***"
+    assert (
+        out["Authorization"]
+        == out["ACCESS_TOKEN"]
+        == out["id_token"]
+        == out["code_verifier"]
+        == "***redacted***"
+    )
     assert out["items"] == [{"refresh_token": "***redacted***", "ok": 1}]
     # original untouched
     assert data["auth"]["password"] == "hunter2"

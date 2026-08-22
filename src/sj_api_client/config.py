@@ -4,17 +4,16 @@ import getpass
 import logging
 import os
 import re
+import tomllib
 from datetime import date, datetime
 from datetime import time as dt_time
 from pathlib import Path
 
-import tomllib
-
-from sj_calendar import sweden_now
-from sj_client import STATION_MAP
-from sj_errors import SJConfigError
-from sj_logger import log_json
-from sj_output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
+from sj_api_client.client import STATION_MAP
+from sj_api_client.dates import sweden_now
+from sj_api_client.errors import SJConfigError
+from sj_api_client.logger import log_json
+from sj_api_client.output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +116,14 @@ class CfgManager:
             self.path.chmod(0o600)
 
         blank()
-        print_status_card(True, "config created", [
-            ("file", str(self.path)),
-            ("next", "edit [search_parameters] (route, dates, times) before booking"),
-        ])
+        print_status_card(
+            True,
+            "config created",
+            [
+                ("file", str(self.path)),
+                ("next", "edit [search_parameters] (route, dates, times) before booking"),
+            ],
+        )
         return True
 
     def verify_cfg(self, cfg: dict, require_search: bool = True) -> None:
@@ -217,17 +220,13 @@ class CfgManager:
         valid_classes = {"1 class", "2 class", "2 class calm"}
         cc = params.get("comfort_class", "")
         if cc not in valid_classes:
-            errors.append(
-                f"comfort_class must be one of: {', '.join(sorted(valid_classes))}"
-            )
+            errors.append(f"comfort_class must be one of: {', '.join(sorted(valid_classes))}")
 
         # flexibility
         valid_flex = {"FULLFLEX", "SEMIFLEX", "NOFLEX"}
         flex = params.get("flexibility", "")
         if flex not in valid_flex:
-            errors.append(
-                f"flexibility must be one of: {', '.join(sorted(valid_flex))}"
-            )
+            errors.append(f"flexibility must be one of: {', '.join(sorted(valid_flex))}")
 
         # select_closest_ticket_available
         sct = params.get("select_closest_ticket_available")
@@ -264,9 +263,7 @@ class CfgManager:
                         f"Valid values: {', '.join(sorted(valid_service_types))}"
                     )
                 if "ALL" in st and len(st) > 1:
-                    errors.append(
-                        "service_types: 'ALL' cannot be combined with other values"
-                    )
+                    errors.append("service_types: 'ALL' cannot be combined with other values")
 
     def _validate_date(
         self, value: "str | date", field_name: str, errors: list[str]

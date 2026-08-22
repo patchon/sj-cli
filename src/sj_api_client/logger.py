@@ -6,10 +6,9 @@ import logging
 import os
 import sys
 import time
-from typing import ClassVar
+from typing import ClassVar, override
 
 import httpx
-from typing_extensions import override
 
 _this_file = os.path.normcase(__file__)
 _logging_file = os.path.normcase(logging.__file__ or "")
@@ -40,8 +39,7 @@ def redact(data):
     """Return a copy of data with values of secret keys replaced (recursively)."""
     if isinstance(data, dict):
         return {
-            k: (_REDACTED if str(k).lower() in _SECRET_KEYS else redact(v))
-            for k, v in data.items()
+            k: (_REDACTED if str(k).lower() in _SECRET_KEYS else redact(v)) for k, v in data.items()
         }
     if isinstance(data, list):
         return [redact(v) for v in data]
@@ -87,9 +85,7 @@ def log_response(response: httpx.Response) -> None:
                 logger.debug(f" body [binary]: {len(response.content)} bytes")
 
     except Exception as e:
-        logger.warning(
-            f"{response.status_code} < {response.url} (failed to read body: {e})"
-        )
+        logger.warning(f"{response.status_code} < {response.url} (failed to read body: {e})")
 
 
 class HttpxTraceLevelFilter(logging.Filter):
@@ -213,9 +209,7 @@ class CliLogFormatter(logging.Formatter):
         log_message = super().format(record)
 
         if record.levelname.strip() in self.COLORS:
-            log_message = (
-                f"{self.COLORS[record.levelname.strip()]}{log_message}{self.RESET}"
-            )
+            log_message = f"{self.COLORS[record.levelname.strip()]}{log_message}{self.RESET}"
 
         record.filename = filename
         record.funcName = func_name

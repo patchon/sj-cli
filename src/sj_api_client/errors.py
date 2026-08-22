@@ -24,10 +24,8 @@ class SJAPIError(Exception):
         super().__init__(text or str(payload))
 
 
-
 class SJAuthError(Exception):
     """Exception raised when authentication fails."""
-
 
 
 class SJConfigError(Exception):
@@ -41,4 +39,3 @@ class SJConfigError(Exception):
     def __init__(self, message, errors=None):
         self.errors = list(errors) if errors else []
         super().__init__(message)
-

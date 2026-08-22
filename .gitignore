@@ -1,6 +1,20 @@
-.claude/
-.ruff_cache/
+# Python
 __pycache__/
-curl-traces/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Environments
 venv/
+.venv/
+
+# Local, never committed
+.claude/
 config.toml
+curl-traces/

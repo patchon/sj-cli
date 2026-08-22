@@ -1,9 +1,10 @@
+import time
+
 import httpx
 import pytest
 
-import sj_client
-from sj_client import STATION_MAP, RetryTransport, SJClient, parse_json_response
-from sj_errors import SJAPIError
+from sj_api_client.client import STATION_MAP, RetryTransport, SJClient, parse_json_response
+from sj_api_client.errors import SJAPIError
 
 
 class ScriptedTransport(httpx.BaseTransport):
@@ -26,7 +27,7 @@ class ScriptedTransport(httpx.BaseTransport):
 
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
-    monkeypatch.setattr(sj_client.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(time, "sleep", lambda *_: None)
 
 
 def send(method, outcomes):
@@ -83,7 +84,9 @@ def test_post_is_not_retried_on_read_timeout():
 
 
 def test_post_is_retried_when_never_sent():
-    resp, attempts = send("POST", [httpx.ConnectError("refused"), httpx.ConnectTimeout("slow"), 201])
+    resp, attempts = send(
+        "POST", [httpx.ConnectError("refused"), httpx.ConnectTimeout("slow"), 201]
+    )
     assert resp.status_code == 201
     assert attempts == 3
 
@@ -98,7 +101,9 @@ def test_parse_json_response_paths():
     req = httpx.Request("GET", "https://x")
     parse_json_response(httpx.Response(200, json={"ok": 1}, request=req), "u")
     with pytest.raises(SJAPIError):
-        parse_json_response(httpx.Response(200, json={"status": "400", "message": "bad"}, request=req), "u")
+        parse_json_response(
+            httpx.Response(200, json={"status": "400", "message": "bad"}, request=req), "u"
+        )
     with pytest.raises(SJAPIError):
         parse_json_response(httpx.Response(200, json={"error": "invalid_grant"}, request=req), "u")
     with pytest.raises(httpx.HTTPStatusError):
@@ -118,7 +123,9 @@ def test_resolve_station_case_insensitive_and_passthrough():
 def test_extract_auth_code_from_302_and_history():
     c = SJClient()
     req = httpx.Request("GET", "https://id.sj.se/auth")
-    r302 = httpx.Response(302, headers={"location": "https://www.sj.se/cb?code=ABC&state=s"}, request=req)
+    r302 = httpx.Response(
+        302, headers={"location": "https://www.sj.se/cb?code=ABC&state=s"}, request=req
+    )
     assert c._extract_auth_code(r302) == "ABC"
     followed = httpx.Response(200, request=httpx.Request("GET", "https://www.sj.se/cb"))
     followed.history = [r302]

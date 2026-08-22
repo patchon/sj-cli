@@ -8,7 +8,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
-from sj_calendar import parse_api_datetime, sweden_now, to_sweden
+from sj_api_client.dates import parse_api_datetime, sweden_now, to_sweden
 
 logger = logging.getLogger(__name__)
 
@@ -285,8 +285,6 @@ def format_class_name(raw_name: str) -> str:
     if not raw_name or raw_name == "\u2014":
         return raw_name or "\u2014"
     return raw_name.split(",", maxsplit=1)[0].strip()
-
-
 
 
 def _format_date_label(date_str: str) -> str:

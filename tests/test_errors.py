@@ -1,15 +1,17 @@
 """SJAPIError turns API error bodies into readable messages (code · message),
 keeping the raw payload and parsed fields as attributes."""
 
-from sj_errors import SJAPIError
+from sj_api_client.errors import SJAPIError
 
 
 def test_b2c_error_dict_is_humanized():
-    e = SJAPIError({
-        "status": "400",
-        "errorCode": "AADB2C90054",
-        "message": "Inloggningsuppgifterna matchar inte.",
-    })
+    e = SJAPIError(
+        {
+            "status": "400",
+            "errorCode": "AADB2C90054",
+            "message": "Inloggningsuppgifterna matchar inte.",
+        }
+    )
     assert str(e) == "AADB2C90054 · Inloggningsuppgifterna matchar inte."
     assert e.code == "AADB2C90054"
     assert e.message == "Inloggningsuppgifterna matchar inte."

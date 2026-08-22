@@ -1,4 +1,4 @@
-from sj_output import (
+from sj_api_client.output import (
     _group_route,
     _reverse_route,
     day_header,
@@ -48,10 +48,26 @@ def test_routes():
 
 def test_leg_lines_omit_empty_columns_and_put_note_in_flexibility_cell():
     rows = [
-        {"departure": "06:59", "arrival": "11:36", "duration": "4h 37m", "train": "X 2000 520",
-         "route": "A → B", "comfort_class": "2 class calm", "flexibility": "FULLFLEX", "note": ""},
-        {"departure": "17:22", "arrival": "21:53", "duration": "4h 31m", "train": "X 2000 543",
-         "route": "B → A", "comfort_class": "2 class", "flexibility": "", "note": "no 0-price offer"},
+        {
+            "departure": "06:59",
+            "arrival": "11:36",
+            "duration": "4h 37m",
+            "train": "X 2000 520",
+            "route": "A → B",
+            "comfort_class": "2 class calm",
+            "flexibility": "FULLFLEX",
+            "note": "",
+        },
+        {
+            "departure": "17:22",
+            "arrival": "21:53",
+            "duration": "4h 31m",
+            "train": "X 2000 543",
+            "route": "B → A",
+            "comfort_class": "2 class",
+            "flexibility": "",
+            "note": "no 0-price offer",
+        },
     ]
     lines = leg_lines(rows)
     assert lines == [
@@ -64,7 +80,15 @@ def test_leg_lines_omit_empty_columns_and_put_note_in_flexibility_cell():
 
 
 def test_leg_lines_dim_past_and_bold_number_without_colour():
-    rows = [{"departure": "06:59", "arrival": "11:36", "route": "A → B", "booking_number": "NUM1", "past": "Y"}]
+    rows = [
+        {
+            "departure": "06:59",
+            "arrival": "11:36",
+            "route": "A → B",
+            "booking_number": "NUM1",
+            "past": "Y",
+        }
+    ]
     assert leg_lines(rows) == ["→ 06:59 – 11:36   NUM1"]
 
 
@@ -88,12 +112,30 @@ def test_day_header_and_note(capsys):
 
 def test_bookings_card_groups_by_day_and_infers_return_arrow(capsys):
     legs = [
-        {"date": "2026-09-01", "departure": "06:59", "arrival": "11:36", "duration": "4h 37m",
-         "route": "A → B", "booking_number": "NUM1", "past": "N", "train": "X 2000 520",
-         "seat": "carriage 3 seat 1", "comfort_class": "2 klass"},
-        {"date": "2026-09-01", "departure": "17:22", "arrival": "21:53", "duration": "4h 31m",
-         "route": "B → A", "booking_number": "NUM1", "past": "N", "train": "X 2000 543",
-         "seat": "carriage 3 seat 2", "comfort_class": "2 klass"},
+        {
+            "date": "2026-09-01",
+            "departure": "06:59",
+            "arrival": "11:36",
+            "duration": "4h 37m",
+            "route": "A → B",
+            "booking_number": "NUM1",
+            "past": "N",
+            "train": "X 2000 520",
+            "seat": "carriage 3 seat 1",
+            "comfort_class": "2 klass",
+        },
+        {
+            "date": "2026-09-01",
+            "departure": "17:22",
+            "arrival": "21:53",
+            "duration": "4h 31m",
+            "route": "B → A",
+            "booking_number": "NUM1",
+            "past": "N",
+            "train": "X 2000 543",
+            "seat": "carriage 3 seat 2",
+            "comfort_class": "2 klass",
+        },
     ]
     print_bookings_table(legs)
     out = capsys.readouterr().out
@@ -108,7 +150,7 @@ def test_bookings_card_groups_by_day_and_infers_return_arrow(capsys):
 
 
 def test_travelpass_cards(capsys):
-    from sj_output import print_travelpasses
+    from sj_api_client.output import print_travelpasses
 
     tp = {
         "name": "SJ Årskort Silver",
@@ -131,7 +173,7 @@ def test_travelpass_cards(capsys):
 
 
 def test_travelpass_card_omits_unknown_facts(capsys):
-    from sj_output import print_travelpasses
+    from sj_api_client.output import print_travelpasses
 
     print_travelpasses([{"name": "SJ Årskort", "code": "123"}], None)
     out = capsys.readouterr().out
@@ -141,17 +183,18 @@ def test_travelpass_card_omits_unknown_facts(capsys):
 
 
 def test_status_card_with_plain_lines(capsys):
-    from sj_output import print_status_card
+    from sj_api_client.output import print_status_card
 
-    print_status_card(False, "invalid configuration",
-                      lines=["time_leave must be a valid time (HH:MM, 24-hour)"])
+    print_status_card(
+        False, "invalid configuration", lines=["time_leave must be a valid time (HH:MM, 24-hour)"]
+    )
     out = capsys.readouterr().out
     assert "● invalid configuration" in out
     assert "\n   time_leave must be a valid time (HH:MM, 24-hour)\n" in out
 
 
 def test_ask_inline_prompt_reads_and_closes_line(monkeypatch, capsys):
-    from sj_output import ask
+    from sj_api_client.output import ask
 
     monkeypatch.setattr("builtins.input", lambda: "a")
     assert ask("select [1/2/a]: ") == "a"
@@ -160,7 +203,7 @@ def test_ask_inline_prompt_reads_and_closes_line(monkeypatch, capsys):
 
 
 def test_ask_returns_empty_on_eof(monkeypatch, capsys):
-    from sj_output import ask
+    from sj_api_client.output import ask
 
     def _raise_eof():
         raise EOFError
@@ -171,13 +214,15 @@ def test_ask_returns_empty_on_eof(monkeypatch, capsys):
 
 
 def test_header_box(capsys):
-    from sj_output import print_header_box
+    from sj_api_client.output import print_header_box
 
-    print_header_box([
-        ("operation", "dry run · booking tickets"),
-        ("travelpass", "SJ Årskort Silver"),
-        ("holder", "John Doe"),
-    ])
+    print_header_box(
+        [
+            ("operation", "dry run · booking tickets"),
+            ("travelpass", "SJ Årskort Silver"),
+            ("holder", "John Doe"),
+        ]
+    )
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].startswith(" ╭─") and lines[0].endswith("╮")
     assert lines[-1].startswith(" ╰─") and lines[-1].endswith("╯")
@@ -192,37 +237,37 @@ def test_header_box(capsys):
 def test_trail_marks_are_coloured(monkeypatch, capsys):
     import pytest
 
-    import sj_output
+    from sj_api_client import output
 
-    monkeypatch.setattr(sj_output, "color_enabled", lambda: True)
-    with sj_output.spinner("step"):
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    with output.spinner("step"):
         pass
     out = capsys.readouterr().out
     assert "\x1b[32m✓\x1b[0m \x1b[2mstep\x1b[0m" in out  # green mark, dim text
-    with pytest.raises(ValueError, match="boom"), sj_output.spinner("bad"):
+    with pytest.raises(ValueError, match="boom"), output.spinner("bad"):
         raise ValueError("boom")
     assert "\x1b[31m✗\x1b[0m \x1b[2mbad\x1b[0m" in capsys.readouterr().out
 
 
 def test_pwarn_yellow_mark_dim_text(monkeypatch, capsys):
-    import sj_output
+    from sj_api_client import output
 
-    sj_output.pwarn("outbound class fallback: 1 class → 2 class calm")
+    output.pwarn("outbound class fallback: 1 class → 2 class calm")
     assert capsys.readouterr().out == " ! outbound class fallback: 1 class → 2 class calm\n"
-    monkeypatch.setattr(sj_output, "color_enabled", lambda: True)
-    sj_output.pwarn("careful")
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    output.pwarn("careful")
     assert capsys.readouterr().out == " \x1b[33m!\x1b[0m \x1b[2mcareful\x1b[0m\n"
 
 
 def test_pstatus_dot_by_outcome(monkeypatch, capsys):
-    import sj_output
+    from sj_api_client import output
 
-    sj_output.pstatus(True, "22 day(s) · 34 booking(s)")
-    sj_output.pstatus(False, "cancellation aborted")
+    output.pstatus(True, "22 day(s) · 34 booking(s)")
+    output.pstatus(False, "cancellation aborted")
     assert capsys.readouterr().out == " ● 22 day(s) · 34 booking(s)\n ● cancellation aborted\n"
-    monkeypatch.setattr(sj_output, "color_enabled", lambda: True)
-    sj_output.pstatus(True, "done")
-    sj_output.pstatus(False, "failed")
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    output.pstatus(True, "done")
+    output.pstatus(False, "failed")
     out = capsys.readouterr().out
     assert "\x1b[32m●\x1b[0m \x1b[2mdone\x1b[0m" in out
     assert "\x1b[31m●\x1b[0m \x1b[2mfailed\x1b[0m" in out

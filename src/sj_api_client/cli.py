@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""Entry point for the SJ API client."""
+"""Command-line interface: argument parsing and top-level orchestration."""
 
 import argparse
 import contextlib
@@ -9,8 +8,8 @@ import re
 import sys
 from datetime import datetime, timedelta
 
-from sj_auth import ensure_authenticated, handle_logout
-from sj_booking import (
+from sj_api_client.auth import ensure_authenticated, handle_logout
+from sj_api_client.booking import (
     booking_date_range,
     cleanup_stale_provisionals,
     describe_run,
@@ -20,12 +19,12 @@ from sj_booking import (
     handle_list_bookings,
     process_date_range,
 )
-from sj_calendar import SWEDEN, parse_api_datetime, sweden_now, to_sweden
-from sj_client import SJClient
-from sj_config import CfgManager
-from sj_errors import SJAPIError, SJAuthError, SJConfigError
-from sj_logger import setup_logging
-from sj_output import (
+from sj_api_client.client import SJClient
+from sj_api_client.config import CfgManager
+from sj_api_client.dates import SWEDEN, parse_api_datetime, sweden_now, to_sweden
+from sj_api_client.errors import SJAPIError, SJAuthError, SJConfigError
+from sj_api_client.logger import setup_logging
+from sj_api_client.output import (
     DIM,
     RED,
     ask,
@@ -38,7 +37,7 @@ from sj_output import (
     spinner,
     style,
 )
-from sj_token import TokenManager
+from sj_api_client.tokens import TokenManager
 
 setup_logging(os.getenv("LOG_LEVEL", ""))
 
@@ -165,9 +164,7 @@ class SJArgumentParser(argparse.ArgumentParser):
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments. A mode flag is required; bare invocation prints help."""
-    parser = SJArgumentParser(
-        description="SJ API client for automated train ticket booking."
-    )
+    parser = SJArgumentParser(description="SJ API client for automated train ticket booking.")
 
     parser.add_argument(
         "--dry-run",
@@ -504,10 +501,14 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         if not cm.path.exists() and not (
             args.login and sys.stdin.isatty() and cm.create_interactive()
         ):
-            print_status_card(False, "no configuration", lines=[
-                f"expected a config file at {cm.path}",
-                "run --login in a terminal to create it, or copy config.example.toml",
-            ])
+            print_status_card(
+                False,
+                "no configuration",
+                lines=[
+                    f"expected a config file at {cm.path}",
+                    "run --login in a terminal to create it, or copy config.example.toml",
+                ],
+            )
             sys.exit(1)
         cfg = cm.load()
         # Route/dates are only needed by the booking-shaped operations
@@ -548,9 +549,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         user_name = f"{membership.get('firstName')} {membership.get('lastName')}"
 
         tp_resp = client.get_travel_passes(access_token)
-        travel_passes = (
-            tp_resp if isinstance(tp_resp, list) else tp_resp.get("travelPasses", [])
-        )
+        travel_passes = tp_resp if isinstance(tp_resp, list) else tp_resp.get("travelPasses", [])
 
         active_pass = resolve_travel_pass(travel_passes)
         tp_product_id: str = active_pass.get("travelPassId", "")
@@ -581,9 +580,13 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     # (operation / travelpass / holder); auth modes lead with their cards.
     try:
         if args.list_travelpasses:
-            print_header_box([
-                ("operation", "listing travel passes"), ("account", email), ("holder", user_name),
-            ])
+            print_header_box(
+                [
+                    ("operation", "listing travel passes"),
+                    ("account", email),
+                    ("holder", user_name),
+                ]
+            )
             blank()
             handle_list_travelpasses(client, travel_passes)
 
@@ -609,8 +612,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             for i, bn in enumerate(args.cancel_booking_numbers):
                 if i:
                     blank()
-                handle_cancel_booking(client, access_token, active_pass, bn,
-                                      dry_run=args.dry_run)
+                handle_cancel_booking(client, access_token, active_pass, bn, dry_run=args.dry_run)
 
         else:
             # --book, with --dry-run as the preview modifier.
@@ -631,14 +633,17 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
 
             # Cleanup stale provisionals (never in a dry run: no mutations)
             if not args.dry_run:
-                bookings_list = cleanup_stale_provisionals(
-                    client, access_token, bookings_list
-                )
+                bookings_list = cleanup_stale_provisionals(client, access_token, bookings_list)
 
             # Process date range: one card per day, summary footer at the end
             process_date_range(
-                client, access_token, tm, cfg,
-                tp_product_id, tp_token_id, bookings_list,
+                client,
+                access_token,
+                tm,
+                cfg,
+                tp_product_id,
+                tp_token_id,
+                bookings_list,
                 dry_run=args.dry_run,
             )
 
