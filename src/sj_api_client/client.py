@@ -11,8 +11,8 @@ from typing import Any
 
 import httpx
 
-from sj_errors import SJAPIError
-from sj_logger import log_json, log_request, log_response
+from sj_api_client.errors import SJAPIError
+from sj_api_client.logger import log_json, log_request, log_response
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +168,7 @@ class SJClient:
 
     CLIENT_ID = "9e44e5be-8c3b-4446-a007-4d0734fdf762"
     H_ACCEPT_BROWSER = (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,*/*;q=0.8"
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     )
     H_ACCEPT_JSON = "application/json"
     H_CONTENT_TYPE_JSON = "application/json"
@@ -214,9 +213,7 @@ class SJClient:
                 "Accept": self.H_ACCEPT_BROWSER,
             }
         )
-        logger.debug(
-            f"initialized client headers with {log_json(dict(self.client.headers))}"
-        )
+        logger.debug(f"initialized client headers with {log_json(dict(self.client.headers))}")
 
         # Initialize client credentials
         self.code_verifier = self._generate_code_verifier()
@@ -294,9 +291,7 @@ class SJClient:
             "prompt": "none",
         }
 
-        resp = self.client.get(
-            self.AUTH_BASE, params=params, follow_redirects=False
-        )
+        resp = self.client.get(self.AUTH_BASE, params=params, follow_redirects=False)
         logger.info(f"silent login response code: {resp.status_code}")
 
         if resp.status_code in (301, 302, 303):
@@ -411,25 +406,20 @@ class SJClient:
 
         # --- STEP 1: POST device fingerprint to /SelfAsserted ---
         url_fingerprint = (
-            f"{self.URL_AUTH_FLOW_BASE}/SelfAsserted"
-            f"?tx={self.trans_id}&p={self.PATH_B2C_POLICY}"
+            f"{self.URL_AUTH_FLOW_BASE}/SelfAsserted?tx={self.trans_id}&p={self.PATH_B2C_POLICY}"
         )
 
         # Extract pre-filled device values from the SA_FIELDS if available,
         # otherwise generate random ones
         device_user_id = self._extract_sa_field(resp.text, "deviceUserId")
         device_id = self._extract_sa_field(resp.text, "deviceId")
-        device_unique_id_user = self._extract_sa_field(
-            resp.text, "deviceUniqueIdUserId"
-        )
+        device_unique_id_user = self._extract_sa_field(resp.text, "deviceUniqueIdUserId")
         device_unique_id = self._extract_sa_field(resp.text, "deviceUniqueId")
 
         payload = {
             "request_type": "RESPONSE",
-            "deviceUserId": device_user_id
-            or base64.b64encode(secrets.token_bytes(24)).decode(),
-            "deviceId": device_id
-            or base64.b64encode(secrets.token_bytes(24)).decode(),
+            "deviceUserId": device_user_id or base64.b64encode(secrets.token_bytes(24)).decode(),
+            "deviceId": device_id or base64.b64encode(secrets.token_bytes(24)).decode(),
             "deviceUniqueIdUserId": device_unique_id_user
             or base64.b64encode(secrets.token_bytes(24)).decode(),
             "deviceUniqueId": device_unique_id
@@ -467,10 +457,7 @@ class SJClient:
         # We must NOT follow the redirect, so we can extract the code.
         logger.debug("advancing to final confirmation step ...")
 
-        diags = (
-            f'{{"pageViewId":"{self.page_view_id}",'
-            f'"pageId":"SelfAsserted","trace":[]}}'
-        )
+        diags = f'{{"pageViewId":"{self.page_view_id}","pageId":"SelfAsserted","trace":[]}}'
         encoded_diags = urllib.parse.quote(diags)
         encoded_csrf_token = urllib.parse.quote(self.csrf_token)
 
@@ -481,9 +468,7 @@ class SJClient:
         )
 
         logger.info(f"requesting confirmation from: {url_confirm} ...")
-        confirm_resp = self.client.get(
-            url_confirm, headers=headers, follow_redirects=False
-        )
+        confirm_resp = self.client.get(url_confirm, headers=headers, follow_redirects=False)
         logger.info(f"confirmation response code: {confirm_resp.status_code}")
 
         # Extract the authorization code from the redirect
@@ -535,9 +520,7 @@ class SJClient:
                                 f"token refresh failed, grant is expired,"
                                 f"issued at {iss_dt} and expired: {exp_dt}"
                             )
-                            logger.info(
-                                "token refresh grant is expired, will do full login"
-                            )
+                            logger.info("token refresh grant is expired, will do full login")
                             return None
             except Exception:
                 pass
@@ -591,8 +574,7 @@ class SJClient:
         }
 
         logger.debug(
-            f"posting payload {log_json(payload)} and headers "
-            f"{log_json(headers)} to {url_sms}"
+            f"posting payload {log_json(payload)} and headers {log_json(headers)} to {url_sms}"
         )
 
         # Post the payload and headers to the url_credentials endpoint
@@ -649,8 +631,7 @@ class SJClient:
         }
 
         logger.debug(
-            f"posting payload {log_json(payload)} and headers "
-            f"{log_json(headers)} to {url_sms}"
+            f"posting payload {log_json(payload)} and headers {log_json(headers)} to {url_sms}"
         )
 
         # Post the payload and headers to the url_credentials endpoint
@@ -674,9 +655,7 @@ class SJClient:
         )
 
         confirmed_resp = self.client.get(url_confirm_full)
-        logger.info(
-            f"phonefactor verification response code: {confirmed_resp.status_code}"
-        )
+        logger.info(f"phonefactor verification response code: {confirmed_resp.status_code}")
         confirmed_resp.raise_for_status()
 
         # Save for the next step (finalize_login reads this)
@@ -738,8 +717,7 @@ class SJClient:
                 return code
 
         logger.error(
-            f"no authorization code found in response "
-            f"(status={resp.status_code}, url={resp.url})"
+            f"no authorization code found in response (status={resp.status_code}, url={resp.url})"
         )
         return None
 
@@ -851,12 +829,10 @@ class SJClient:
         # Extract verified device IDs from SA_FIELDS — the server populates
         # these when it recognizes the device via SSO cookies. They must be
         # forwarded in the device fingerprint step to skip MFA.
-        self._verified_device_id = self._extract_sa_field(
-            resp.text, "verifiedDeviceId"
-        ) or ""
-        self._verified_device_unique_id = self._extract_sa_field(
-            resp.text, "verifiedDeviceUniqueId"
-        ) or ""
+        self._verified_device_id = self._extract_sa_field(resp.text, "verifiedDeviceId") or ""
+        self._verified_device_unique_id = (
+            self._extract_sa_field(resp.text, "verifiedDeviceUniqueId") or ""
+        )
         if self._verified_device_id:
             logger.info("found verified device IDs from server (device is trusted)")
         else:
@@ -1067,8 +1043,7 @@ class SJClient:
         }
 
         url_fingerprint = (
-            f"{self.URL_AUTH_FLOW_BASE}/SelfAsserted"
-            f"?tx={self.trans_id}&p={self.PATH_B2C_POLICY}"
+            f"{self.URL_AUTH_FLOW_BASE}/SelfAsserted?tx={self.trans_id}&p={self.PATH_B2C_POLICY}"
         )
 
         logger.debug(
@@ -1114,8 +1089,7 @@ class SJClient:
         }
 
         url_credentials = (
-            f"{self.URL_AUTH_FLOW_BASE}/SelfAsserted"
-            f"?tx={self.trans_id}&p={self.PATH_B2C_POLICY}"
+            f"{self.URL_AUTH_FLOW_BASE}/SelfAsserted?tx={self.trans_id}&p={self.PATH_B2C_POLICY}"
         )
 
         logger.debug(
@@ -1250,9 +1224,7 @@ class SJClient:
             "ocp-apim-trace": "false",
         }
 
-        logger.info(
-            f"fetching bookings (page {page}) from {start_date} to {end_date} ..."
-        )
+        logger.info(f"fetching bookings (page {page}) from {start_date} to {end_date} ...")
         resp = self.client.get(url_api, params=params, headers=headers)
 
         if resp.status_code != 200:
@@ -1281,9 +1253,7 @@ class SJClient:
             if k.lower() == norm_name.lower():
                 return v
 
-        logger.warning(
-            f"station '{station_name}' not found in station map, using as-is"
-        )
+        logger.warning(f"station '{station_name}' not found in station map, using as-is")
         return station_name
 
     def get_travel_passes(self, access_token: str) -> dict[str, Any]:

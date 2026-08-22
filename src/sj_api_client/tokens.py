@@ -7,8 +7,8 @@ import time as _time
 from datetime import datetime
 from pathlib import Path
 
-from sj_errors import SJAuthError
-from sj_logger import log_json
+from sj_api_client.errors import SJAuthError
+from sj_api_client.logger import log_json
 
 logger = logging.getLogger(__name__)
 
@@ -148,10 +148,7 @@ class TokenManager:
         if rt_expires_on and isinstance(rt_expires_on, (int, float)):
             now = _time.time()
             if now >= rt_expires_on:
-                logger.debug(
-                    f"refresh token expired at "
-                    f"{datetime.fromtimestamp(rt_expires_on)}"
-                )
+                logger.debug(f"refresh token expired at {datetime.fromtimestamp(rt_expires_on)}")
                 return False
             remaining = int(rt_expires_on - now)
             logger.debug(
@@ -186,8 +183,7 @@ class TokenManager:
         remaining = rt_expires_on - _time.time()
         if 0 < remaining < threshold_seconds:
             logger.info(
-                f"refresh token expires in {int(remaining)}s, "
-                f"proactive renewal recommended"
+                f"refresh token expires in {int(remaining)}s, proactive renewal recommended"
             )
             return True
 

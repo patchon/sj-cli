@@ -4,10 +4,10 @@ import logging
 import select
 import sys
 
-from sj_client import SJClient
-from sj_errors import SJAPIError, SJAuthError
-from sj_output import blank, print_status_card, prompt, pwarn, spinner
-from sj_token import TokenManager
+from sj_api_client.client import SJClient
+from sj_api_client.errors import SJAPIError, SJAuthError
+from sj_api_client.output import blank, print_status_card, prompt, pwarn, spinner
+from sj_api_client.tokens import TokenManager
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +113,7 @@ def perform_full_login(
                         raise
                     if attempt == SMS_CODE_ATTEMPTS:
                         raise SJAuthError(
-                            f"sms code rejected {SMS_CODE_ATTEMPTS} times, "
-                            f"re-run to try again"
+                            f"sms code rejected {SMS_CODE_ATTEMPTS} times, re-run to try again"
                         ) from e
                     pwarn(f"sms code rejected, {SMS_CODE_ATTEMPTS - attempt} attempt(s) left")
         else:
@@ -310,6 +309,5 @@ def ensure_valid_token(
         logger.warning(f"mid-run token refresh failed: {e}")
 
     raise SJAuthError(
-        "access token expired and refresh failed. "
-        "please re-run the tool to re-authenticate."
+        "access token expired and refresh failed. please re-run the tool to re-authenticate."
     )

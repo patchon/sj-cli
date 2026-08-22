@@ -4,12 +4,12 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from sj_auth import ensure_valid_token
-from sj_calendar import skip_reason, sweden_now, to_sweden
-from sj_client import SJClient
-from sj_config import SERVICE_TYPE_NAMES
-from sj_errors import SJAPIError
-from sj_output import (
+from sj_api_client.auth import ensure_valid_token
+from sj_api_client.client import SJClient
+from sj_api_client.config import SERVICE_TYPE_NAMES
+from sj_api_client.dates import skip_reason, sweden_now, to_sweden
+from sj_api_client.errors import SJAPIError
+from sj_api_client.output import (
     ask,
     blank,
     format_class_name,
@@ -26,7 +26,7 @@ from sj_output import (
     pwarn,
     spinner,
 )
-from sj_token import TokenManager
+from sj_api_client.tokens import TokenManager
 
 logger = logging.getLogger(__name__)
 
@@ -751,7 +751,11 @@ def _dry_run_leg(resolved: dict, flexibility: str) -> dict:
     """Dry-run row for a resolved leg (see _resolve_leg)."""
     if not resolved["found"]:
         return {
-            "departure": "—", "arrival": "—", "class": "—", "flexibility": "—", "has_offer": False
+            "departure": "—",
+            "arrival": "—",
+            "class": "—",
+            "flexibility": "—",
+            "has_offer": False,
         }
     return {
         "departure": resolved["departure"],
@@ -1182,6 +1186,7 @@ def _booked_rows(booking: dict, booking_number: str | None) -> list[dict]:
 
 def _span_label(start: datetime, end: datetime) -> str:
     """Span label: "18 - 21 sep 2026", "1 sep - 30 oct 2026", "29 dec 2026 - 9 jan 2027"."""
+
     def day(d: datetime, with_year: bool) -> str:
         txt = f"{d.day} {d.strftime('%b').lower()}"
         return f"{txt} {d.year}" if with_year else txt
@@ -1437,8 +1442,9 @@ def handle_cancel_mode(
     # (it only needs endTravelValidityDateTime for date range, but we already
     # fetched bookings so we pass dates that cover our cancel_date)
     for b_num in sorted(matched_numbers):
-        handle_cancel_booking(client, access_token, None, b_num,
-                              prefetched_bookings=bookings, dry_run=dry_run)
+        handle_cancel_booking(
+            client, access_token, None, b_num, prefetched_bookings=bookings, dry_run=dry_run
+        )
 
 
 def handle_cancel_booking(

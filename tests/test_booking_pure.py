@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sj_booking import (
+from sj_api_client.booking import (
     _dry_run_note,
     _find_departure_by_time,
     _resolve_class_for_departure,
@@ -15,7 +15,7 @@ from sj_booking import (
     select_best_departure,
     time_str_to_minutes,
 )
-from tests.conftest import dep, offers
+from tests.fakes import dep, offers
 
 D = "2026-09-01"
 
@@ -31,7 +31,9 @@ def test_comfort_availability():
     d_ab = dep("x", D, "06:00", "07:00", props=("COMFORT-AB",))
     d_b = dep("x", D, "06:00", "07:00", props=("COMFORT-B",))
     d_calm = dep("x", D, "06:00", "07:00", props=("COMFORT-B", "COMFORT-CALM"))
-    assert check_comfort_availability(d_ab, "1 class") and check_comfort_availability(d_ab, "2 class")
+    assert check_comfort_availability(d_ab, "1 class") and check_comfort_availability(
+        d_ab, "2 class"
+    )
     assert not check_comfort_availability(d_b, "1 class")
     assert not check_comfort_availability(d_b, "2 class calm")
     assert check_comfort_availability(d_calm, "2 class calm")
@@ -39,7 +41,11 @@ def test_comfort_availability():
 
 
 def test_find_departure_by_time_closest_vs_exact():
-    deps = [dep("a", D, "06:30", "08:00"), dep("b", D, "07:10", "08:40"), dep("c", D, "07:00", "08:30")]
+    deps = [
+        dep("a", D, "06:30", "08:00"),
+        dep("b", D, "07:10", "08:40"),
+        dep("c", D, "07:00", "08:30"),
+    ]
     assert _find_departure_by_time(deps, "06:59", select_closest=True)["departureId"] == "c"
     assert _find_departure_by_time(deps, "06:59", select_closest=False) is None
     assert _find_departure_by_time(deps, "07:10", select_closest=False)["departureId"] == "b"
@@ -66,27 +72,50 @@ def test_select_best_departure_shape(capsys):
     best = select_best_departure(deps, "06:35", "2 class calm", select_closest=True)
     assert best["id"] == "a" and best["class"] == "2 class"
     assert "2 class calm unavailable, using 2 class" in capsys.readouterr().out
-    assert select_best_departure(deps, "06:35", "2 class calm", select_closest=True,
-                                 allow_fallback=False) is None
+    assert (
+        select_best_departure(
+            deps, "06:35", "2 class calm", select_closest=True, allow_fallback=False
+        )
+        is None
+    )
 
 
 def test_find_offer_id_prefers_calm_then_second():
     assert find_offer_id(offers(), "2 class calm", "FULLFLEX") == ("OFF-calm", "2 class calm")
-    assert find_offer_id(offers(calm_price=None), "2 class calm", "FULLFLEX") == ("OFF-second", "2 class")
+    assert find_offer_id(offers(calm_price=None), "2 class calm", "FULLFLEX") == (
+        "OFF-second",
+        "2 class",
+    )
     assert find_offer_id(offers(), "2 class", "FULLFLEX") == ("OFF-second", "2 class")
     assert find_offer_id(offers(first_price=0), "1 class", "FULLFLEX") == ("OFF-first", "1 class")
-    assert find_offer_id(offers(calm_price=295, second_price=195), "2 class calm", "FULLFLEX") is None
+    assert (
+        find_offer_id(offers(calm_price=295, second_price=195), "2 class calm", "FULLFLEX") is None
+    )
     assert find_offer_id(offers(flex="SEMIFLEX"), "2 class calm", "FULLFLEX") is None
     assert find_offer_id(offers(available=False), "2 class calm", "FULLFLEX") is None
     assert find_offer_id({}, "2 class calm", "FULLFLEX") is None
 
 
 def _booking(status, origin, dest, date, actions=()):
-    return {"bookingId": "U", "booking": {
-        "bookingNumber": "N", "bookingStatus": status, "possibleActions": list(actions),
-        "journeys": [{"segments": [{"departureStation": {"uicStationCode": origin},
-                                     "arrivalStation": {"uicStationCode": dest},
-                                     "departureDateTime": f"{date}T06:59:00+02:00"}]}]}}
+    return {
+        "bookingId": "U",
+        "booking": {
+            "bookingNumber": "N",
+            "bookingStatus": status,
+            "possibleActions": list(actions),
+            "journeys": [
+                {
+                    "segments": [
+                        {
+                            "departureStation": {"uicStationCode": origin},
+                            "arrivalStation": {"uicStationCode": dest},
+                            "departureDateTime": f"{date}T06:59:00+02:00",
+                        }
+                    ]
+                }
+            ],
+        },
+    }
 
 
 def test_check_existing_booking_ignores_cancelled_and_stale():
@@ -108,8 +137,9 @@ def test_dry_run_note():
 
 
 def test_booking_date_range():
-    start, end = booking_date_range({"endTravelValidityDateTime": "2027-03-18T01:00:00+01:00"},
-                                    start_offset_days=1)
+    start, end = booking_date_range(
+        {"endTravelValidityDateTime": "2027-03-18T01:00:00+01:00"}, start_offset_days=1
+    )
     assert end == "2027-03-19"
     start0, end0 = booking_date_range(None, fallback_days=10)
     assert start0 <= start
@@ -125,16 +155,25 @@ def test_span_label():
 
 
 def test_describe_run():
-    from tests.conftest import base_cfg
-    p = base_cfg(date_start="2026-09-01", date_end="2026-10-30", service_types=["SJ_HIGH"])["search_parameters"]
+    from tests.fakes import base_cfg
+
+    p = base_cfg(date_start="2026-09-01", date_end="2026-10-30", service_types=["SJ_HIGH"])[
+        "search_parameters"
+    ]
     assert describe_run(p) == [
         ("route", "Linköping Central ⇄ Stockholm Central"),
         ("days", "1 sep – 30 oct 2026 · weekdays only"),
         ("times", "out 06:59 · back 17:22"),
         ("ticket", "2 class calm · FULLFLEX · SJ High-speed train"),
     ]
-    p = base_cfg(roundtrip=False, date_end="2026-09-01", select_closest_ticket_available=False,
-                 skip_weekends=False, allow_class_fallback=False, book_partial=True)["search_parameters"]
+    p = base_cfg(
+        roundtrip=False,
+        date_end="2026-09-01",
+        select_closest_ticket_available=False,
+        skip_weekends=False,
+        allow_class_fallback=False,
+        book_partial=True,
+    )["search_parameters"]
     assert describe_run(p) == [
         ("route", "Linköping Central → Stockholm Central"),
         ("days", "1 sep 2026 · every day except red days"),
@@ -149,7 +188,7 @@ def test_describe_run():
 
 
 def test_confirm_uses_question_prompt(monkeypatch, capsys):
-    from sj_booking import _confirm
+    from sj_api_client.booking import _confirm
 
     monkeypatch.setattr("builtins.input", lambda: "Y")
     assert _confirm("cancel booking ERU0HWB2? [y/n]: ") is True
@@ -166,13 +205,17 @@ def test_find_offer_id_falls_through_class_chain_on_same_departure():
     assert find_offer_id(o, "1 class", "FULLFLEX") == ("OFF-calm", "2 class calm")
     # 2 class falls up to calm when plain second has no 0-price offer
     assert find_offer_id(offers(second_price=195), "2 class", "FULLFLEX") == (
-        "OFF-calm", "2 class calm",
+        "OFF-calm",
+        "2 class calm",
     )
 
 
 def test_find_offer_id_honours_allow_fallback_flag():
     # exact class only when the flag is off — at the offer level too (SPEC §7.2)
-    assert find_offer_id(offers(first_price=295), "1 class", "FULLFLEX",
-                         allow_fallback=False) is None
-    assert find_offer_id(offers(calm_price=None), "2 class calm", "FULLFLEX",
-                         allow_fallback=False) is None
+    assert (
+        find_offer_id(offers(first_price=295), "1 class", "FULLFLEX", allow_fallback=False) is None
+    )
+    assert (
+        find_offer_id(offers(calm_price=None), "2 class calm", "FULLFLEX", allow_fallback=False)
+        is None
+    )

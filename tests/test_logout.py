@@ -1,13 +1,13 @@
 """--logout orchestration (SPEC §5.6): best-effort server-side end-session,
 local caches always cleared, server failure raises SJAuthError (exit 1).
 Output: trail steps (ending session, removing caches), then a bare verdict
-card — the header box is printed by sj_tool before handle_logout runs."""
+card — the header box is printed by the cli before handle_logout runs."""
 
 import pytest
 
-from sj_auth import handle_logout
-from sj_errors import SJAPIError, SJAuthError
-from sj_token import TokenManager
+from sj_api_client.auth import handle_logout
+from sj_api_client.errors import SJAPIError, SJAuthError
+from sj_api_client.tokens import TokenManager
 
 
 class FakeAuthClient:
@@ -84,4 +84,4 @@ def test_logout_server_failure_still_clears_and_raises(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "✗ ending sj.se session" in out
     assert "✓ removing cached token and cookies" in out
-    assert "● logged out" not in out  # sj_tool renders the failure card instead
+    assert "● logged out" not in out  # the cli renders the failure card instead

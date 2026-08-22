@@ -1,8 +1,8 @@
 import pytest
 
-from sj_config import SERVICE_TYPE_NAMES, CfgManager
-from sj_errors import SJConfigError
-from tests.conftest import base_cfg
+from sj_api_client.config import SERVICE_TYPE_NAMES, CfgManager
+from sj_api_client.errors import SJConfigError
+from tests.fakes import base_cfg
 
 
 def verify(cfg):
@@ -28,21 +28,36 @@ def test_missing_sections():
 
 
 def test_collects_all_errors():
-    cfg = base_cfg(date_start="2020-01-01", date_end="2019-01-01", time_leave="25:00",
-                   comfort_class="business", flexibility="FLEX", roundtrip="yes",
-                   station_to="Nowhere", service_types=["ALL", "SJ_IC"])
+    cfg = base_cfg(
+        date_start="2020-01-01",
+        date_end="2019-01-01",
+        time_leave="25:00",
+        comfort_class="business",
+        flexibility="FLEX",
+        roundtrip="yes",
+        station_to="Nowhere",
+        service_types=["ALL", "SJ_IC"],
+    )
     msg = errors_of(cfg)
-    for frag in ("date_end must be >= date_start", "date_start must be today or in the future",
-                 "time_leave '25:00' is not a real time of day", "comfort_class must be one of",
-                 "flexibility must be one of", "roundtrip must be a boolean",
-                 "station_to 'Nowhere' not found", "'ALL' cannot be combined"):
+    for frag in (
+        "date_end must be >= date_start",
+        "date_start must be today or in the future",
+        "time_leave '25:00' is not a real time of day",
+        "comfort_class must be one of",
+        "flexibility must be one of",
+        "roundtrip must be a boolean",
+        "station_to 'Nowhere' not found",
+        "'ALL' cannot be combined",
+    ):
         assert frag in msg, frag
 
 
 def test_time_return_required_only_for_roundtrip():
     assert "time_return is required" in errors_of(base_cfg(time_return=""))
     verify(base_cfg(roundtrip=False, time_return=""))
-    assert "time_return '9:00' must be a time formatted HH:MM" in errors_of(base_cfg(roundtrip=False, time_return="9:00"))
+    assert "time_return '9:00' must be a time formatted HH:MM" in errors_of(
+        base_cfg(roundtrip=False, time_return="9:00")
+    )
 
 
 def test_station_lookup_is_case_insensitive():
@@ -50,9 +65,19 @@ def test_station_lookup_is_case_insensitive():
 
 
 def test_service_type_names_cover_validation_set():
-    assert set(SERVICE_TYPE_NAMES) == {"ALL", "SJ_HIGH", "SJ_IC", "SJ_REG", "SJ_NT",
-                                       "X_TRAINOPS", "X_PTA", "X_EXPBUS"}
-    assert "service_types contains invalid values: SJ_BUS" in errors_of(base_cfg(service_types=["SJ_BUS"]))
+    assert set(SERVICE_TYPE_NAMES) == {
+        "ALL",
+        "SJ_HIGH",
+        "SJ_IC",
+        "SJ_REG",
+        "SJ_NT",
+        "X_TRAINOPS",
+        "X_PTA",
+        "X_EXPBUS",
+    }
+    assert "service_types contains invalid values: SJ_BUS" in errors_of(
+        base_cfg(service_types=["SJ_BUS"])
+    )
 
 
 def test_config_error_carries_error_list():
@@ -83,7 +108,9 @@ def test_date_errors_echo_the_value_and_distinguish_causes():
     assert "date_start '2026-09-16 ' must be a date formatted YYYY-MM-DD" in msg
     cfg = base_cfg()
     cfg["search_parameters"]["date_start"] = datetime.datetime(2026, 9, 16, 8, 0)
-    with pytest.raises(SJConfigError, match=r"date_start must be a date .YYYY-MM-DD., not a date-time"):
+    with pytest.raises(
+        SJConfigError, match=r"date_start must be a date .YYYY-MM-DD., not a date-time"
+    ):
         verify(cfg)
 
 
@@ -104,7 +131,7 @@ def test_load_missing_file_says_so_not_parse_error(tmp_path):
 
 
 def test_create_interactive_writes_template_with_credentials(tmp_path, monkeypatch, capsys):
-    import sj_config as m
+    from sj_api_client import config as m
 
     answers = iter(["y", "not-an-email", "user@example.com"])
     monkeypatch.setattr(m, "ask", lambda _t: next(answers))
@@ -125,7 +152,7 @@ def test_create_interactive_writes_template_with_credentials(tmp_path, monkeypat
 
 
 def test_create_interactive_declined_leaves_nothing(tmp_path, monkeypatch):
-    import sj_config as m
+    from sj_api_client import config as m
 
     monkeypatch.setattr(m, "ask", lambda _t: "n")
     cm = CfgManager(tmp_path / "config.toml")

@@ -1,6 +1,6 @@
 from datetime import date
 
-from sj_calendar import easter_sunday, skip_reason, swedish_holidays
+from sj_api_client.dates import easter_sunday, skip_reason, swedish_holidays
 
 
 def test_easter_known_years():
