@@ -308,6 +308,22 @@ class SJClient:
         logger.info("silent login failed — SSO cookie expired or missing")
         return None
 
+    def b2c_logout(self) -> None:
+        """
+        End the B2C SSO session via the OIDC end-session endpoint.
+
+        The session to end is identified by the SSO cookies on the client;
+        import them before calling.
+
+        Raises:
+            httpx.HTTPStatusError: If the endpoint responds with an error.
+
+        """
+        url = f"{self.URL_AUTH_FLOW_BASE}/oauth2/v2.0/logout"
+        resp = self.client.get(url)
+        resp.raise_for_status()
+        logger.info("b2c session ended")
+
     def initiate_login(self, email: str, password: str) -> bool:
         """
         Orchestrates the initial login sequence for SJ B2C authentication.
