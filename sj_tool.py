@@ -181,7 +181,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     group.add_argument(
         "--book",
         action="store_true",
-        help="Book tickets for real.",
+        help="Book tickets.",
     )
     group.add_argument(
         "--cancel-date",
