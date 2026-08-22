@@ -115,3 +115,60 @@ def test_cancel_date_with_nothing_to_cancel_is_not_a_failure(monkeypatch, capsys
     monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: [])
     assert handle_cancel_mode(FakeClient(), "tok", base_cfg(), "2026-10-05") is True
     assert "no bookings found for 2026-10-05" in capsys.readouterr().out
+
+
+class RefusingCancelClient:
+    """The API refuses the PATCH (or the confirmation) with a typed error."""
+
+    def __init__(self, *, refuse_patch=True):
+        self.refuse_patch = refuse_patch
+
+    def cancel_booking_with_patch(self, token, booking_id, payload):
+        if self.refuse_patch:
+            from sj_api_client.errors import SJAPIError
+
+            raise SJAPIError({"errorCode": "E42", "message": "segment already departed"})
+
+    def finalize_cancellation(self, token, booking_id):
+        from sj_api_client.errors import SJAPIError
+
+        raise SJAPIError({"errorCode": "E43", "message": "checkout refused"})
+
+
+def test_cancel_failures_name_the_cause(monkeypatch, capsys):
+    monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: _bookings())
+    _answers(monkeypatch, "a", "y")
+    assert handle_cancel_booking(RefusingCancelClient(), "tok", {}, "NUM1") is False
+    out = capsys.readouterr().out
+    assert "✗ cancelling booking NUM1" in out
+    assert "● failed to cancel booking NUM1: E42 · segment already departed" in out
+
+    _answers(monkeypatch, "a", "y")
+    assert (
+        handle_cancel_booking(RefusingCancelClient(refuse_patch=False), "tok", {}, "NUM1") is False
+    )
+    out = capsys.readouterr().out
+    assert (
+        "● cancellation initiated but confirmation failed for NUM1: E43 · checkout refused" in out
+    )
+
+
+def test_stale_provisional_cleanup_reports_the_cause_and_continues(capsys):
+    from sj_api_client.booking import cleanup_stale_provisionals
+
+    class RefusingProvisionalClient:
+        def cancel_provisional_booking(self, token, booking_id):
+            from sj_api_client.errors import SJAPIError
+
+            raise SJAPIError({"errorCode": "E7", "message": "not cancellable"})
+
+    stale = _bookings("PROV1")
+    stale[0]["booking"]["bookingStatus"] = "NEW"
+    kept = cleanup_stale_provisionals(RefusingProvisionalClient(), "tok", stale + _bookings("NUM2"))
+    assert [i["booking"]["bookingNumber"] for i in kept] == ["NUM2"]
+    out = capsys.readouterr().out
+    assert "✗ cancelling stale provisional booking PROV1" in out
+    assert (
+        "! could not cancel stale provisional booking PROV1 (E7 · not cancellable), continuing"
+        in out
+    )

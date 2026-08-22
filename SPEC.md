@@ -80,10 +80,10 @@ The tool must always attempt to use what it has before falling back to a more in
 
 Multi-step sequence against `id.sj.se` (Azure AD B2C):
 
-1. Fetch login page → extract CSRF token and transaction ID from HTML/cookies.
+1. Fetch login page → extract CSRF token and transaction ID from HTML/cookies. If B2C instead redirects straight back to the sj.se callback with an authorization code (a live SSO session, although the silent login of §3.1 did not succeed — e.g. its token exchange failed), steps 2–9 are skipped and that code goes to step 10.
 2. Submit email + password credentials.
 3. Confirm login stage with provider.
-4. Send device fingerprint.
+4. Send device fingerprint. B2C reports a rejected registration (stale CSRF token, bad transaction) as a JSON error with HTTP 200; it is raised as an `SJAPIError` with B2C's code and message here, not discovered one request later.
 5. Advance to MFA orchestration step.
 6. Trigger SMS MFA.
 7. Prompt user for SMS code (stdin). **Timeout: 2 minutes.** If no input within 2 minutes, print an error and exit.
