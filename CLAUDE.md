@@ -15,8 +15,8 @@ Python CLI tool for automated SJ (Swedish Railways) train ticket booking using t
 ```bash
 source venv/bin/activate
 
-# Dry run — search and display what would be booked, no booking made
-python3 sj_tool.py --dry-run
+# Preview a booking run — --dry-run modifies --book and the cancel flags (nothing real happens)
+python3 sj_tool.py --book --dry-run
 
 # Book tickets for real — prints one result line per day
 python3 sj_tool.py --book
@@ -30,6 +30,7 @@ python3 sj_tool.py --list-travelpasses
 # Cancel bookings on the configured route: one date, a comma list, and/or START..END ranges
 python3 sj_tool.py --cancel-date 2026-01-20
 python3 sj_tool.py --cancel-date 2026-01-20,2026-02-03..2026-02-05
+python3 sj_tool.py --cancel-date 2026-01-20 --dry-run   # preview: cards + would-cancel status, no prompts
 
 # Cancel booking(s) by number, comma-separated, any case
 python3 sj_tool.py --cancel-booking 3HT2NEIL,ABCD1234
@@ -44,15 +45,15 @@ python3 sj_tool.py --logout
 python3 sj_tool.py --login-status
 
 # Verbose logging (logs go to stderr; secrets are redacted)
-LOG_LEVEL=DEBUG python3 sj_tool.py --dry-run
-LOG_LEVEL=TRACE python3 sj_tool.py --dry-run   # includes httpx request/response details
+LOG_LEVEL=DEBUG python3 sj_tool.py --book --dry-run
+LOG_LEVEL=TRACE python3 sj_tool.py --book --dry-run   # includes httpx request/response details
 ```
 
 Log levels: TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL. Default: CRITICAL (silent). Flags are mutually exclusive and one mode flag is required — a bare `python3 sj_tool.py` prints the help and exits 1; exit 0 success, 1 any failure, 130 Ctrl-C.
 
 The tool requires interactive SMS input during first login (B2C MFA, 2-minute timeout). Subsequent runs use cached/refreshed tokens; cached SSO cookies let a later full login usually skip the SMS step.
 
-A read-only smoke test against the live API that cannot block on the SMS prompt: `LOG_LEVEL=WARNING ./venv/bin/python sj_tool.py --dry-run </dev/null`, likewise `--list-bookings` / `--list-travelpasses`.
+A read-only smoke test against the live API that cannot block on the SMS prompt: `LOG_LEVEL=WARNING ./venv/bin/python sj_tool.py --book --dry-run </dev/null`, likewise `--list-bookings` / `--list-travelpasses`.
 
 If `venv/` breaks (e.g. Homebrew Python was upgraded and the interpreter symlink dangles), recreate it:
 

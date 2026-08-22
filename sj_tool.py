@@ -169,12 +169,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="SJ API client for automated train ticket booking."
     )
 
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Search and show what would be booked, without booking anything.",
+        help=(
+            "Preview modifier for --book, --cancel-date and --cancel-booking: "
+            "show what would happen without doing any of it."
+        ),
     )
+    group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--book",
         action="store_true",
@@ -222,10 +225,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     args = parser.parse_args(argv)
 
-    # No implicit default mode: a bare invocation shows the help and fails,
-    # so nothing (not even a read-only search) runs without being asked for.
-    if not any(vars(args).values()):
+    # No implicit default mode: a bare invocation (or a bare --dry-run, which
+    # is only a modifier) shows the help and fails.
+    if not any(v for k, v in vars(args).items() if k != "dry_run"):
         parser.error("no operation given, choose one of the flags above")
+
+    if args.dry_run and not (args.book or args.cancel_date or args.cancel_booking):
+        parser.error("--dry-run only applies to --book, --cancel-date and --cancel-booking")
 
     # Validate-first: every cancel date is parsed and checked here, before
     # any auth or API work can start.
@@ -575,27 +581,30 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             handle_list_bookings(client, access_token, active_pass)
 
         elif args.cancel_date:
-            print_header_box([("operation", "cancelling bookings"), *pass_rows])
+            operation = ("dry run · " if args.dry_run else "") + "cancelling bookings"
+            print_header_box([("operation", operation), *pass_rows])
             blank()
             validate_dates_against_pass(cfg, active_pass)
             for i, cancel_date in enumerate(args.cancel_dates):
                 if i:
                     blank()
-                handle_cancel_mode(client, access_token, cfg, cancel_date)
+                handle_cancel_mode(client, access_token, cfg, cancel_date, dry_run=args.dry_run)
 
         elif args.cancel_booking:
-            print_header_box([("operation", "cancelling bookings"), *pass_rows])
+            operation = ("dry run · " if args.dry_run else "") + "cancelling bookings"
+            print_header_box([("operation", operation), *pass_rows])
             blank()
             for i, bn in enumerate(args.cancel_booking_numbers):
                 if i:
                     blank()
-                handle_cancel_booking(client, access_token, active_pass, bn)
+                handle_cancel_booking(client, access_token, active_pass, bn,
+                                      dry_run=args.dry_run)
 
         else:
-            # --dry-run or --book (parse_args guarantees one mode is set).
+            # --book, with --dry-run as the preview modifier.
             validate_dates_against_pass(cfg, active_pass)
 
-            operation = "booking tickets" if args.book else "dry run · booking tickets"
+            operation = ("dry run · " if args.dry_run else "") + "booking tickets"
             print_header_box([("operation", operation), *pass_rows])
             blank()
             for label, value in describe_run(cfg["search_parameters"]):
@@ -608,8 +617,8 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             with spinner("fetching existing bookings", trail=False):
                 bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)
 
-            # Cleanup stale provisionals (only when booking)
-            if args.book:
+            # Cleanup stale provisionals (never in a dry run: no mutations)
+            if not args.dry_run:
                 bookings_list = cleanup_stale_provisionals(
                     client, access_token, bookings_list
                 )
@@ -618,7 +627,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             process_date_range(
                 client, access_token, tm, cfg,
                 tp_product_id, tp_token_id, bookings_list,
-                dry_run=not args.book,
+                dry_run=args.dry_run,
             )
 
     except SystemExit:

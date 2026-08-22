@@ -52,7 +52,7 @@ Mode dispatch:
   --cancel-booking NUMS   → find bookings by number → interactive cancel → exit
   --login                 → exit after auth
   --logout                → end B2C session, delete caches → exit (skips config/auth)
-  --dry-run               → search loop → display results table → exit
+  (--dry-run modifies --book / --cancel-*: preview only, nothing mutated)
   --book                  → booking loop:
                               clean up stale provisionals
                               for each date in range:
@@ -213,10 +213,10 @@ The booked legs are rendered from the booking object the API returns (train, car
 ### 5.2 Dry-run mode
 
 ```bash
-python3 sj_tool.py --dry-run
+python3 sj_tool.py --book --dry-run
 ```
 
-Performs the full search flow for each date but does **not** create bookings. Same run header and day cards as §5.1, with the title prefixed `dry run · `; each leg line shows the departure that would be booked — time range, duration, train, class, flexibility — or, dimmed in place of the flexibility cell, why it cannot be booked (`no 0-price offer`, `no departure found`). The footer starts with `dry run` and counts bookable / partly bookable / unavailable days.
+`--dry-run` is a **modifier**, not an operation: it composes with `--book`, `--cancel-date` and `--cancel-booking`, and means nothing real happens. Bare `--dry-run`, or `--dry-run` with any other flag, is a usage error. With `--book` it performs the full search flow for each date but does **not** create bookings (and skips the stale-provisional cleanup). Same run header and day cards as §5.1, with the operation prefixed `dry run · `; each leg line shows the departure that would be booked — time range, duration, train, class, flexibility — or, dimmed in place of the flexibility cell, why it cannot be booked (`no 0-price offer`, `no departure found`). The footer starts with `dry run` and counts bookable / partly bookable / unavailable days.
 
 ```
 ╭──────────────────────────────────────────╮
@@ -273,7 +273,7 @@ tue 15 sep 2026   Linköping Central → Stockholm Central
 ● booking ERU0HWB2 cancelled
 ```
 
-If the booking has several future journeys, they are listed as numbered leg lines (`1.`, `2.`, … and `a.` for all); the selected legs are echoed as leg lines under `selected for cancellation:` before the final `? cancel selected journey(s)? [y/n]:`. All cancel prompts (`? select [1/2/a]:`, the `[y/n]` confirmations) use the shared inline `?`-marked prompt (`ask()` in `sj_output`). Past journeys are shown but cannot be selected. A booking with a pending cancellation offers confirm / revert / nothing.
+If the booking has several future journeys, they are listed as numbered leg lines (`1.`, `2.`, … and `a.` for all); the selected legs are echoed as leg lines under `selected for cancellation:` before the final `? cancel selected journey(s)? [y/n]:`. All cancel prompts (`? select [1/2/a]:`, the `[y/n]` confirmations) use the shared inline `?`-marked prompt (`ask()` in `sj_output`). Past journeys are shown but cannot be selected. A booking with a pending cancellation offers confirm / revert / nothing. With `--dry-run`, the day cards are shown and the run stops there — no prompts, no cancellation calls — closing with `● dry run · N journey(s) would be cancelled from booking X` per booking (or `● dry run · booking X has a pending cancellation, nothing done`).
 
 ### 5.4 List current bookings
 
@@ -319,7 +319,7 @@ mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
 
 | Flag | Description | Interactive? |
 |---|---|---|
-| `--dry-run` | Search and display what would be booked, without booking. | Only SMS on first login. |
+| `--dry-run` | Modifier for `--book`/`--cancel-date`/`--cancel-booking`: preview only, nothing booked or cancelled, no prompts. Usage error alone or with any other flag. | Only SMS on first login. |
 | `--book` | Book tickets for the configured date range. | Only SMS on first login. |
 | `--cancel-date DATES` | Cancel bookings on the configured route for one or more dates: a `YYYY-MM-DD` date, a comma-separated list, and/or inclusive `START..END` ranges, mixed freely. Every token is validated up front (real calendar dates, ranges must run forwards and span ≤ 1 year); any problem renders an `● invalid --cancel-date` card echoing each bad value and exits 1 before any API call. Dates are deduplicated and processed in order, one section per date. | Yes (journey choice + confirmation). |
 | `--cancel-booking NUM[,NUM…]` | Cancel booking(s) by booking number, comma-separated, any case (deduplicated, order kept). Validated up front: a value that cannot be a booking number (anything beyond letters and digits) renders an `● invalid --cancel-booking` card echoing each bad value — with a `did you mean --cancel-date?` hint when the values look like dates — and exits 1 before any API call. One output section per booking, blank-line separated. | Yes (journey choice + confirmation). |
@@ -379,7 +379,7 @@ For each date in `[date_start, date_end]`:
 
 ### 6.2 Provisional booking cleanup
 
-On startup (after auth, before the booking loop), fetch all existing bookings in the date range. Any booking with status `"NEW"` and `"CANCEL_JOURNEY"` in `possibleActions` is a stale provisional booking from a previous interrupted run. Cancel these automatically. This runs in `--book` mode only (dry-run must not mutate anything); the duplicate check ignores such stale provisionals in both modes so dry-run and book agree on what is already booked.
+On startup (after auth, before the booking loop), fetch all existing bookings in the date range. Any booking with status `"NEW"` and `"CANCEL_JOURNEY"` in `possibleActions` is a stale provisional booking from a previous interrupted run. Cancel these automatically. This never runs under `--dry-run` (a dry run must not mutate anything); the duplicate check ignores such stale provisionals in both modes so dry-run and book agree on what is already booked.
 
 ### 6.3 Timing between dates
 
@@ -540,7 +540,7 @@ Color-coded by level in terminal.
 - **Multi-passenger booking**: always single passenger (the pass holder).
 - **Dynamic station lookup**: use hardcoded map for now.
 - **SMS re-trigger**: user re-runs the tool if the SMS doesn't arrive (a mistyped code *is* retried, §3.2 step 8).
-- **`dry_run` config key**: removed from config. Dry-run is its own CLI mode (`--dry-run`); `--book` books for real.
+- **`dry_run` config key**: removed from config. `--dry-run` is a CLI modifier on `--book`/`--cancel-*`; the bare flags act for real.
 - **Interactive confirmation before booking**: the config is the contract. The tool books what's configured.
 
 ## 12. Dependencies
