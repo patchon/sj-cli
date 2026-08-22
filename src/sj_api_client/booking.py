@@ -8,7 +8,6 @@ from sj_api_client.auth import ensure_valid_token
 from sj_api_client.client import SJClient
 from sj_api_client.config import SERVICE_TYPE_NAMES
 from sj_api_client.dates import skip_reason, sweden_now, to_sweden
-from sj_api_client.errors import SJAPIError
 from sj_api_client.output import (
     ask,
     blank,
@@ -631,16 +630,15 @@ def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: li
         b_num = booking.get("bookingNumber") or b_id
 
         if is_stale_provisional(booking):
-            # cancel_provisional_booking() swallows errors and returns False;
-            # raise inside the spinner so the trail shows ✗ and we can report it.
+            # A failure shows as ✗ on the trail and a warning with the cause;
+            # the run goes on (the provisional is retried next time).
             printed_trail = True
             try:
                 with spinner(f"cancelling stale provisional booking {b_num}"):
-                    if not client.cancel_provisional_booking(access_token, b_id):
-                        raise SJAPIError(f"cancel request for {b_num} was not accepted")
-            except SJAPIError as e:
+                    client.cancel_provisional_booking(access_token, b_id)
+            except Exception as e:
                 logger.warning(f"failed to cancel provisional booking {b_id}: {e}")
-                pwarn(f"could not cancel stale provisional booking {b_num}, continuing")
+                pwarn(f"could not cancel stale provisional booking {b_num} ({e}), continuing")
             continue
 
         if booking.get("bookingStatus") == "CANCELLED":
@@ -1588,19 +1586,21 @@ def handle_cancel_booking(
         choice = ask("select action [1/2/3]: ").strip()
 
         if choice == "1":
-            confirmed = client.finalize_cancellation(access_token, b_id)
-            if confirmed:
-                pinfo(f"booking {booking_number} cancellation confirmed")
-            else:
-                pinfo(f"failed to confirm cancellation for {booking_number}")
-            return confirmed
+            try:
+                client.finalize_cancellation(access_token, b_id)
+            except Exception as e:
+                pinfo(f"failed to confirm cancellation for {booking_number}: {e}")
+                return False
+            pinfo(f"booking {booking_number} cancellation confirmed")
+            return True
         if choice == "2":
-            reverted = client.revert_booking(access_token, b_id)
-            if reverted:
-                pinfo(f"booking {booking_number} reverted to original state")
-            else:
-                pinfo(f"failed to revert booking {booking_number}")
-            return reverted
+            try:
+                client.revert_booking(access_token, b_id)
+            except Exception as e:
+                pinfo(f"failed to revert booking {booking_number}: {e}")
+                return False
+            pinfo(f"booking {booking_number} reverted to original state")
+            return True
         pinfo("no action taken")
         return False
 
@@ -1707,32 +1707,36 @@ def handle_cancel_booking(
         for s in selected
     ]
 
-    with spinner(f"cancelling booking {booking_number}"):
-        # Step 1: Provisional cancel; Step 2: confirm the cancellation (checkout)
-        success = client.cancel_booking_with_patch(access_token, b_id, payload)
-        confirmed = client.finalize_cancellation(access_token, b_id) if success else False
-
-    if not success:
+    # Step 1: cancel the journeys (PATCH); step 2: confirm the cancellation
+    # (checkout). Either failure shows ✗ on the trail and names the cause;
+    # after a failed step 2 the booking is left in pending cancellation,
+    # which the next --cancel-booking offers to confirm or revert.
+    initiated = False
+    try:
+        with spinner(f"cancelling booking {booking_number}"):
+            client.cancel_booking_with_patch(access_token, b_id, payload)
+            initiated = True
+            client.finalize_cancellation(access_token, b_id)
+    except Exception as e:
         blank()
-        pstatus(False, f"failed to cancel booking {booking_number}")
+        if initiated:
+            pstatus(
+                False, f"cancellation initiated but confirmation failed for {booking_number}: {e}"
+            )
+        else:
+            pstatus(False, f"failed to cancel booking {booking_number}: {e}")
         return False
 
     n_selected = len(selected)
     n_total = len(segments_to_cancel)
-    if confirmed:
-        if n_selected == n_total:
-            blank()
-            pstatus(True, f"booking {booking_number} cancelled")
-        else:
-            blank()
-            pstatus(
-                True,
-                f"{n_selected} of {n_total} journey(s) cancelled from booking {booking_number}",
-            )
+    blank()
+    if n_selected == n_total:
+        pstatus(True, f"booking {booking_number} cancelled")
     else:
-        blank()
-        pstatus(False, f"cancellation initiated but confirmation failed for {booking_number}")
-    return confirmed
+        pstatus(
+            True, f"{n_selected} of {n_total} journey(s) cancelled from booking {booking_number}"
+        )
+    return True
 
 
 def handle_list_bookings(

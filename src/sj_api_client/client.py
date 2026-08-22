@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import hashlib
 import json
 import logging
@@ -91,6 +92,33 @@ def parse_json_response(response: httpx.Response, url: str) -> None:
 
     # If we get here, we have a a valid 2xx http response with a json that
     # we consider is a success.
+
+
+def _raise_for_failure(response: httpx.Response) -> None:
+    """
+    Raise for a failed request, preferring the API's own error over the status.
+
+    Unlike parse_json_response this accepts an empty or non-JSON body on
+    success (cancel/revert answer 204; the B2C fingerprint step may answer
+    HTML), but a JSON body that reports an error — a non-200 ``status`` or
+    an ``errorCode``/``error`` key, which B2C sends with HTTP 200 — is an
+    SJAPIError even on a 2xx, so the real code and message reach the user.
+
+    Raises:
+        SJAPIError: If the body reports an error.
+        httpx.HTTPStatusError: If the status is non-2xx without such a body.
+
+    """
+    body = None
+    if response.content:
+        with contextlib.suppress(ValueError):
+            body = response.json()
+    if isinstance(body, dict):
+        status = body.get("status")
+        if (status is not None and str(status) != "200") or "errorCode" in body or "error" in body:
+            logger.warning(log_json(body))
+            raise SJAPIError(body)
+    response.raise_for_status()
 
 
 class RetryTransport(httpx.BaseTransport):
@@ -237,6 +265,9 @@ class SJClient:
         self._confirmed_url = ""
         self._verified_device_id = ""
         self._verified_device_unique_id = ""
+        # Set when the authorize request is answered straight away with a code
+        # (live SSO session): the credential/SMS/device steps are then skipped.
+        self._sso_auth_code = ""
 
     def reset(self) -> None:
         """Reset for a fresh login attempt: new HTTP client, new PKCE codes, empty context."""
@@ -355,6 +386,9 @@ class SJClient:
 
         # 1. Fetch login page
         self._fetch_login_page()
+        if self._sso_auth_code:
+            logger.info("sso session still valid, skipping credentials, sms and device steps")
+            return False
 
         # 2. Submit credentials
         self._submit_credentials(email, password)
@@ -387,6 +421,10 @@ class SJClient:
 
         """
         logger.info("finalizing login flow")
+
+        if self._sso_auth_code:
+            logger.info("authorize already answered with a code (sso), nothing to finalize")
+            return self._sso_auth_code
 
         # Ensure session state is present before proceeding
         self._verify_attributes(["csrf_token", "trans_id", "page_view_id"])
@@ -455,6 +493,7 @@ class SJClient:
         fp_resp = self.client.post(url_fingerprint, data=payload, headers=headers)
         logger.info(f"fingerprint response http code: {fp_resp.status_code}")
         logger.debug(f"fingerprint response content: {fp_resp.text[:1200]}")
+        _raise_for_failure(fp_resp)  # B2C reports a rejected registration with HTTP 200
 
         # Update csrf token from response
         self._get_csrf_token(fp_resp.headers)
@@ -670,7 +709,7 @@ class SJClient:
     # PRIVATE
     #
 
-    def _extract_auth_code(self, resp: httpx.Response) -> str | None:
+    def _extract_auth_code(self, resp: httpx.Response, log_missing: bool = True) -> str | None:
         """
         Extracts the authorization code from a B2C response.
 
@@ -679,6 +718,8 @@ class SJClient:
 
         Args:
             resp: The httpx response to extract the code from.
+            log_missing: Log an error when no code is found (off when the
+                caller merely probes for one).
 
         Returns:
             The authorization code string, or None if not found.
@@ -718,9 +759,11 @@ class SJClient:
                 logger.debug("extracted auth code from final url")
                 return code
 
-        logger.error(
-            f"no authorization code found in response (status={resp.status_code}, url={resp.url})"
-        )
+        if log_missing:
+            logger.error(
+                f"no authorization code found in response "
+                f"(status={resp.status_code}, url={resp.url})"
+            )
         return None
 
     def _extract_sa_field(self, html: str, field_id: str) -> str | None:
@@ -911,6 +954,16 @@ class SJClient:
         resp = self.client.get(self.AUTH_BASE, params=params)
         resp.raise_for_status()
 
+        # A live SSO session makes B2C skip the login page: the authorize
+        # request is redirected straight back to the callback with a code
+        # (silent login may still have failed, e.g. on the token exchange).
+        # Take the code instead of demanding a transId the page does not have.
+        code = self._extract_auth_code(resp, log_missing=False)
+        if code:
+            logger.info("sso session still valid, authorize answered with a code")
+            self._sso_auth_code = code
+            return
+
         # Extract transid
         content = resp.text
         trans_match = re.search(r'"transId":"([^"]+)"', content)
@@ -1056,8 +1109,10 @@ class SJClient:
         resp = self.client.post(url_fingerprint, data=payload, headers=headers)
         logger.info(f"fingerprint response code: {resp.status_code}")
 
-        # Raise exception if response is a non 2xx
-        resp.raise_for_status()
+        # B2C reports a rejected fingerprint (stale CSRF, bad transaction) as
+        # a JSON error with HTTP 200 — surface it here, not as a puzzling
+        # "failed to find var SETTINGS" one request later.
+        _raise_for_failure(resp)
 
         # Set / update csrf token
         self._get_csrf_token(resp.headers)
@@ -1692,7 +1747,7 @@ class SJClient:
 
         return resp.json()
 
-    def cancel_provisional_booking(self, access_token: str, booking_id: str) -> bool:
+    def cancel_provisional_booking(self, access_token: str, booking_id: str) -> None:
         """
         Cancels a provisional booking (status NEW).
 
@@ -1700,8 +1755,9 @@ class SJClient:
             access_token: The OAuth2 access token.
             booking_id: The ID of the provisional booking.
 
-        Returns:
-            True if cancellation was successful, False otherwise.
+        Raises:
+            SJAPIError: If the API reports an error.
+            httpx.HTTPError: On a non-2xx response or a network failure.
 
         """
         url_api = f"{self.URL_API_BOOKING}/bookings/provisional/{booking_id}/cancel"
@@ -1720,27 +1776,16 @@ class SJClient:
         logger.info(f"cancelling provisional booking {booking_id} with status NEW")
         logger.debug(f"cancellation headers:\n{log_json(headers)}")
 
-        try:
-            resp = self.client.patch(url_api, headers=headers)
-
-            if resp.status_code not in [200, 204]:
-                logger.error(f"cancel provisional booking failed: {resp.status_code}")
-                logger.debug(resp.text)
-                return False
-
-            logger.info("cancellation successful")
-            return True
-
-        except Exception as e:
-            logger.error(f"exception during cancellation: {e}")
-            return False
+        resp = self.client.patch(url_api, headers=headers)
+        _raise_for_failure(resp)
+        logger.info("cancellation successful")
 
     def cancel_booking_with_patch(
         self,
         access_token: str,
         booking_id: str,
         segments_and_passengers: list[dict],
-    ) -> bool:
+    ) -> None:
         """
         Cancel specific segments/passengers on a booking via PATCH.
 
@@ -1750,8 +1795,9 @@ class SJClient:
             segments_and_passengers: List of dicts with keys
                 ``serviceIdentifier`` and ``passengerIds``.
 
-        Returns:
-            True if cancellation was successful, False otherwise.
+        Raises:
+            SJAPIError: If the API reports an error.
+            httpx.HTTPError: On a non-2xx response or a network failure.
 
         """
         url_api = f"{self.URL_API_BOOKING}/bookings/{booking_id}/cancel"
@@ -1775,34 +1821,24 @@ class SJClient:
         logger.debug(f"cancellation headers:\n{log_json(headers)}")
         logger.debug(f"cancellation payload:\n{log_json(payload)}")
 
-        try:
-            resp = self.client.patch(url_api, headers=headers, json=payload)
+        resp = self.client.patch(url_api, headers=headers, json=payload)
+        _raise_for_failure(resp)
+        logger.info("cancellation successful")
 
-            if resp.status_code not in [200, 204]:
-                logger.error(f"cancel (patch) failed: {resp.status_code}")
-                logger.debug(resp.text)
-                return False
-
-            logger.info("cancellation successful")
-            return True
-
-        except Exception as e:
-            logger.error(f"exception during cancellation: {e}")
-            return False
-
-    def finalize_cancellation(self, access_token: str, booking_id: str) -> bool:
+    def finalize_cancellation(self, access_token: str, booking_id: str) -> None:
         """
         Finalizes the cancellation by confirming the refund (Checkout).
 
-        Step 1: Check refunds (GET /checkout/refunds)
-        Step 2: Confirm (POST /checkout with paymentMethod: PAY_0)
+        Step 1: Check refunds (GET /checkout/refunds) — logged, best effort.
+        Step 2: Confirm (POST /checkout with paymentMethod: PAY_0).
 
         Args:
             access_token: The OAuth2 access token.
             booking_id: The ID of the booking to checkout/finalize.
 
-        Returns:
-            True if successful, False otherwise.
+        Raises:
+            SJAPIError: If the API reports an error on the confirmation.
+            httpx.HTTPError: On a non-2xx response or a network failure.
 
         """
         headers = {
@@ -1835,19 +1871,12 @@ class SJClient:
         payload = {"paymentMethod": "PAY_0"}
 
         logger.info("finalizing cancellation (checkout) ...")
-        try:
-            res = self.client.post(url_checkout, json=payload, headers=headers)
-            if res.status_code in [200, 201, 204]:
-                logger.info("checkout/confirmation successful")
-                logger.debug(f"checkout response: {res.text}")
-                return True
-            logger.error(f"checkout failed: {res.status_code} - {res.text}")
-            return False
-        except Exception as e:
-            logger.error(f"error finalizing cancellation: {e}")
-            return False
+        res = self.client.post(url_checkout, json=payload, headers=headers)
+        _raise_for_failure(res)
+        logger.info("checkout/confirmation successful")
+        logger.debug(f"checkout response: {res.text}")
 
-    def revert_booking(self, access_token: str, booking_id: str) -> bool:
+    def revert_booking(self, access_token: str, booking_id: str) -> None:
         """
         Revert a booking to its previous state (undo a pending cancellation).
 
@@ -1855,8 +1884,9 @@ class SJClient:
             access_token: The OAuth2 access token.
             booking_id: The ID of the booking to revert.
 
-        Returns:
-            True if successful, False otherwise.
+        Raises:
+            SJAPIError: If the API reports an error.
+            httpx.HTTPError: On a non-2xx response or a network failure.
 
         """
         url_api = f"{self.URL_API_BOOKING}/bookings/{booking_id}/revert"
@@ -1875,17 +1905,9 @@ class SJClient:
         headers.update(self.generate_trace_headers())
 
         logger.info(f"reverting booking {booking_id} ...")
-        try:
-            resp = self.client.post(url_api, headers=headers, content=b"")
-            if resp.status_code in [200, 204]:
-                logger.info("revert successful")
-                return True
-            logger.error(f"revert failed: {resp.status_code}")
-            logger.debug(resp.text)
-            return False
-        except Exception as e:
-            logger.error(f"exception during revert: {e}")
-            return False
+        resp = self.client.post(url_api, headers=headers, content=b"")
+        _raise_for_failure(resp)
+        logger.info("revert successful")
 
     def close(self) -> None:
         """Closes the underlying HTTP client."""

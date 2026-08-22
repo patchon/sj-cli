@@ -156,3 +156,82 @@ def test_post_is_not_retried_on_connection_reset():
     # the request may have reached the server: a retry could double-book
     with pytest.raises(httpx.ReadError):
         send("POST", [httpx.ReadError("reset"), 200])
+
+
+# --- _raise_for_failure: the API's own error beats the status code ---------
+
+
+def _resp(status, body=b"", content_type="application/json"):
+    req = httpx.Request("POST", "https://example.test/x")
+    return httpx.Response(status, request=req, content=body, headers={"content-type": content_type})
+
+
+def test_raise_for_failure_accepts_empty_and_html_success_bodies():
+    from sj_api_client.client import _raise_for_failure
+
+    _raise_for_failure(_resp(204))
+    _raise_for_failure(_resp(200, b"<html>ok</html>", "text/html"))
+    _raise_for_failure(_resp(200, b'{"status":"200"}'))
+
+
+def test_raise_for_failure_surfaces_json_errors_even_with_http_200():
+    from sj_api_client.client import _raise_for_failure
+
+    with pytest.raises(SJAPIError, match="AADB2C90077 · stale"):
+        _raise_for_failure(
+            _resp(200, b'{"status":"400","errorCode":"AADB2C90077","message":"stale"}')
+        )
+    with pytest.raises(SJAPIError, match="31100"):
+        _raise_for_failure(_resp(400, b'{"errorCode":"31100","message":"trace disabled"}'))
+    with pytest.raises(httpx.HTTPStatusError):
+        _raise_for_failure(_resp(502, b"bad gateway", "text/plain"))
+
+
+def test_cancel_methods_raise_instead_of_returning_false():
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path))
+        if request.url.path.endswith("/revert"):
+            return httpx.Response(204, request=request)
+        return httpx.Response(
+            400, request=request, json={"errorCode": "E1", "message": "cannot cancel"}
+        )
+
+    sc = SJClient()
+    sc.client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(SJAPIError, match="E1 · cannot cancel"):
+        sc.cancel_booking_with_patch("tok", "B1", [])
+    with pytest.raises(SJAPIError, match="E1 · cannot cancel"):
+        sc.cancel_provisional_booking("tok", "B1")
+    assert sc.revert_booking("tok", "B1") is None  # 204, no body: fine
+    sc.close()
+
+
+# --- live SSO session answers the login page request with a code -----------
+
+
+def test_login_sequence_short_circuits_when_authorize_redirects_with_a_code():
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.host, request.url.path))
+        if request.url.host == "id.sj.se" and request.url.path.endswith("/authorize"):
+            return httpx.Response(
+                302,
+                request=request,
+                headers={"location": "https://www.sj.se/logga-in/hantera?code=SSO123&state=s"},
+            )
+        if request.url.host == "www.sj.se":
+            return httpx.Response(200, request=request, text="<html>callback, no SETTINGS</html>")
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    sc = SJClient()
+    sc.client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    assert sc.initiate_login("e@x.se", "pw") is False  # no SMS step
+    assert sc._sso_auth_code == "SSO123"
+    assert sc.finalize_login() == "SSO123"
+    assert [m for m, *_ in seen] == ["GET", "GET"]  # no credential/fingerprint POSTs
+    sc.reset()
+    assert sc._sso_auth_code == ""
+    sc.close()
