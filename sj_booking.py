@@ -1385,6 +1385,7 @@ def handle_cancel_mode(
     access_token: str,
     cfg: dict,
     cancel_date: str,
+    dry_run: bool = False,
 ) -> None:
     """
     Interactive cancellation for a specific date.
@@ -1436,7 +1437,8 @@ def handle_cancel_mode(
     # (it only needs endTravelValidityDateTime for date range, but we already
     # fetched bookings so we pass dates that cover our cancel_date)
     for b_num in sorted(matched_numbers):
-        handle_cancel_booking(client, access_token, None, b_num, prefetched_bookings=bookings)
+        handle_cancel_booking(client, access_token, None, b_num,
+                              prefetched_bookings=bookings, dry_run=dry_run)
 
 
 def handle_cancel_booking(
@@ -1445,12 +1447,15 @@ def handle_cancel_booking(
     travel_pass: dict | None,
     booking_number: str,
     prefetched_bookings: list | None = None,
+    dry_run: bool = False,
 ) -> None:
     """
     Cancel a booking by its booking number.
 
     Fetches all bookings, finds the one matching the given booking number,
     displays its details, and asks for confirmation before cancelling.
+    With dry_run, stops after the display: no prompts, no cancellation —
+    the status line says what would be cancelled.
 
     Args:
         client: The SJ HTTP client.
@@ -1458,6 +1463,7 @@ def handle_cancel_booking(
         travel_pass: Travel pass dict (used for date range), or None.
         booking_number: The booking number to cancel.
         prefetched_bookings: If provided, skip fetching and use these instead.
+        dry_run: Preview only — never prompt, never call a cancel API.
 
     """
     if prefetched_bookings is not None:
@@ -1491,6 +1497,13 @@ def handle_cancel_booking(
         "bookingPossibleActions", []
     )
     if booking_status == "CHANGED" and "REVERT" in possible_actions:
+        if dry_run:
+            blank()
+            pstatus(
+                True,
+                f"dry run · booking {booking_number} has a pending cancellation, nothing done",
+            )
+            return
         pinfo(f"booking {booking_number} has a pending cancellation in progress")
         pinfo("  1. confirm the pending cancellation")
         pinfo("  2. revert (undo) the pending cancellation")
@@ -1557,6 +1570,14 @@ def handle_cancel_booking(
             pstatus(False, "all segments are in the past, nothing to cancel")
         else:
             pinfo("no cancellable segments found")
+        return
+
+    if dry_run:
+        pstatus(
+            True,
+            f"dry run · {len(segments_to_cancel)} journey(s) "
+            f"would be cancelled from booking {booking_number}",
+        )
         return
 
     # Select which segments to cancel

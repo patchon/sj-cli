@@ -40,23 +40,33 @@ def test_help_flag_ends_with_blank_line(capsys):
     assert out.endswith("\n\n")
 
 
-def test_dry_run_flag_parses():
-    args = parse_args(["--dry-run"])
-    assert args.dry_run is True
-    assert args.book is False
+def test_dry_run_is_a_modifier_not_an_operation(capsys):
+    # bare --dry-run: no operation given
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--dry-run"])
+    assert exc_info.value.code == 1
+    assert "no operation given" in capsys.readouterr().err
+    # composes with --book and the cancel flags
+    args = parse_args(["--book", "--dry-run"])
+    assert args.book is True and args.dry_run is True
+    args = parse_args(["--cancel-date", "2026-09-16", "--dry-run"])
+    assert args.cancel_dates == ["2026-09-16"] and args.dry_run is True
+    args = parse_args(["--cancel-booking", "3HT2NEIL", "--dry-run"])
+    assert args.cancel_booking_numbers == ["3HT2NEIL"] and args.dry_run is True
+
+
+def test_dry_run_rejected_for_modes_with_nothing_to_preview(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--list-bookings", "--dry-run"])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "● --dry-run only applies to --book, --cancel-date and --cancel-booking" in err
 
 
 def test_book_flag_parses():
     args = parse_args(["--book"])
     assert args.book is True
     assert args.dry_run is False
-
-
-def test_dry_run_and_book_are_mutually_exclusive(capsys):
-    with pytest.raises(SystemExit) as exc_info:
-        parse_args(["--dry-run", "--book"])
-    assert exc_info.value.code == 1
-    assert "not allowed with" in capsys.readouterr().err
 
 
 def test_removed_flag_spellings_are_rejected(capsys):

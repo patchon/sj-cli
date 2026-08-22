@@ -6,8 +6,8 @@ API as the web app (reverse-engineered), so it can authenticate, search, pick th
 find the 0-price pass-holder offer and check out, day after day, skipping weekends and Swedish red
 days and never double-booking a day that is already covered.
 
-Nothing is booked until you pass `--book`; `--dry-run` shows what would be booked. A mode flag
-is always required — running the tool bare just prints the help.
+Nothing real happens with `--dry-run` present: it previews `--book` and both cancel flags.
+A mode flag is always required — running the tool bare just prints the help.
 
 ```
 $ python3 sj_tool.py --book
@@ -104,19 +104,20 @@ Uppsala, Lund — "Central"/"C" spellings, case-insensitive).
 ```bash
 source venv/bin/activate
 
-python3 sj_tool.py --dry-run               # show what would be booked, without booking
+python3 sj_tool.py --book --dry-run        # preview: show what would be booked, without booking
 python3 sj_tool.py --book                  # book for real
 python3 sj_tool.py --list-bookings         # active bookings as one card per travel day
 python3 sj_tool.py --list-travelpasses     # passes with validity, days left and price
 python3 sj_tool.py --cancel-date 2026-09-16                # cancel that day's bookings on the configured route
 python3 sj_tool.py --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
+python3 sj_tool.py --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what would be cancelled, no prompts
 python3 sj_tool.py --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
 python3 sj_tool.py --login                 # authenticate, cache the token, exit
 python3 sj_tool.py --logout                # end the sj.se session, delete cached token + cookies
 python3 sj_tool.py --login-status          # exit 0 if logged in — valid or refreshable token (scripting)
 
-LOG_LEVEL=DEBUG python3 sj_tool.py --dry-run   # diagnostics on stderr (TRACE adds httpx wire logs)
-NO_COLOR=1 python3 sj_tool.py --dry-run        # plain output (also automatic when piped)
+LOG_LEVEL=DEBUG python3 sj_tool.py --book --dry-run   # diagnostics on stderr (TRACE adds httpx wire logs)
+NO_COLOR=1 python3 sj_tool.py --book --dry-run        # plain output (also automatic when piped)
 ```
 
 Flags are mutually exclusive and one mode flag is required (a bare run prints the help and
