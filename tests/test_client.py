@@ -142,3 +142,17 @@ def test_reset_clears_flow_state():
     assert (c.trans_id, c.page_view_id, c.last_response) == ("", "", None)
     assert c.code_verifier != old_verifier  # fresh PKCE pair
     c.close()
+
+
+def test_get_retries_connection_reset_and_remote_protocol_error():
+    resp, attempts = send(
+        "GET", [httpx.ReadError("reset"), httpx.RemoteProtocolError("closed"), 200]
+    )
+    assert resp.status_code == 200
+    assert attempts == 3
+
+
+def test_post_is_not_retried_on_connection_reset():
+    # the request may have reached the server: a retry could double-book
+    with pytest.raises(httpx.ReadError):
+        send("POST", [httpx.ReadError("reset"), 200])

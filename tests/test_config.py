@@ -160,6 +160,60 @@ def test_create_interactive_declined_leaves_nothing(tmp_path, monkeypatch):
     assert not cm.path.exists()
 
 
+@pytest.mark.parametrize("secret", ["p\\ass", "x\\ny", "back\\\\slash", 'q"uo\\te', "tab\\there"])
+def test_create_interactive_round_trips_backslashes_and_quotes(tmp_path, monkeypatch, secret):
+    # re.sub with a string replacement would re-process the escaped backslashes
+    from sj_api_client import config as m
+
+    monkeypatch.setattr(m, "ask", lambda _t: "y" if "create" in _t else "user@example.com")
+    monkeypatch.setattr(m.getpass, "getpass", lambda _p="": secret)
+    cm = CfgManager(tmp_path / "config.toml")
+    assert cm.create_interactive() is True
+    assert cm.load()["auth"]["password"] == secret
+
+
+def test_create_interactive_ctrl_d_on_password_reasks(tmp_path, monkeypatch, capsys):
+    from sj_api_client import config as m
+
+    monkeypatch.setattr(m, "ask", lambda _t: "y" if "create" in _t else "user@example.com")
+    attempts = iter([EOFError(), "pw"])
+
+    def getpass(_p=""):
+        value = next(attempts)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(m.getpass, "getpass", getpass)
+    cm = CfgManager(tmp_path / "config.toml")
+    assert cm.create_interactive() is True
+    assert "! password must not be empty" in capsys.readouterr().out
+    assert cm.load()["auth"]["password"] == "pw"
+
+
+def test_create_interactive_write_failure_is_a_config_error(tmp_path, monkeypatch, capsys):
+    from sj_api_client import config as m
+
+    monkeypatch.setattr(m, "ask", lambda _t: "y" if "create" in _t else "user@example.com")
+    monkeypatch.setattr(m.getpass, "getpass", lambda _p="": "pw")
+    (tmp_path / "blocker").write_text("")  # a file where the config directory should be
+    cm = CfgManager(tmp_path / "blocker" / "config.toml")
+    with pytest.raises(SJConfigError, match="could not write config at"):
+        cm.create_interactive()
+    assert "✗ writing config" in capsys.readouterr().out
+
+
+def test_load_unreadable_file_is_not_reported_as_a_parse_error(tmp_path):
+    cfg_dir = tmp_path / "config.toml"
+    cfg_dir.mkdir()  # exists, but is a directory
+    with pytest.raises(SJConfigError, match="cannot read config at"):
+        CfgManager(cfg_dir).load()
+    bad = tmp_path / "bad.toml"
+    bad.write_text("[auth\n")
+    with pytest.raises(SJConfigError, match="failed to parse toml config at"):
+        CfgManager(bad).load()
+
+
 def test_verify_cfg_search_params_scoped_to_operations_that_use_them():
     # a fresh wizard config has valid [auth] but stale template search dates:
     # login/list/cancel-booking must still work
@@ -176,3 +230,17 @@ def test_verify_cfg_search_params_scoped_to_operations_that_use_them():
     bad["auth"]["email"] = "not-an-email"
     with pytest.raises(SJConfigError, match="email must be a valid email"):
         CfgManager().verify_cfg(bad, require_search=False)
+
+
+def test_wrong_typed_values_are_collected_not_crashed():
+    cfg = base_cfg(flexibility=["FULLFLEX"], station_from=740000009, comfort_class=2)
+    cfg["auth"] = {"email": 123, "password": ["x"]}
+    with pytest.raises(SJConfigError) as exc:
+        CfgManager().verify_cfg(cfg)
+    msgs = "\n".join(exc.value.errors)
+    assert "email must be a valid email address" in msgs
+    assert "password must be a non-empty string" in msgs
+    assert "station_from '740000009' not found in station map" in msgs
+    assert "comfort_class must be one of" in msgs and "flexibility must be one of" in msgs
+    with pytest.raises(SJConfigError, match=r"\[auth\] section is missing"):
+        CfgManager().verify_cfg({"auth": "x", "search_parameters": "y"})

@@ -6,7 +6,8 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING, NoReturn, override
 
 from sj_api_client.auth import ensure_authenticated, handle_logout
 from sj_api_client.booking import (
@@ -39,12 +40,13 @@ from sj_api_client.output import (
 )
 from sj_api_client.tokens import TokenManager
 
-setup_logging(os.getenv("LOG_LEVEL", ""))
+if TYPE_CHECKING:
+    from _typeshed import SupportsWrite
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_one_date(token: str, errors: list[str]):
+def _parse_one_date(token: str, errors: list[str]) -> date | None:
     """Parse one YYYY-MM-DD token; echo the value in the error like sj_config does."""
     try:
         return datetime.strptime(token, "%Y-%m-%d").date()
@@ -71,7 +73,7 @@ def parse_cancel_dates(value: str) -> tuple[list[str], list[str]]:
         when errors is empty.
 
     """
-    dates: set = set()
+    dates: set[date] = set()
     errors: list[str] = []
     for raw in value.split(","):
         token = raw.strip()
@@ -151,11 +153,13 @@ class SJArgumentParser(argparse.ArgumentParser):
     the problem, then exits 1.
     """
 
-    def print_help(self, file=None):
+    @override
+    def print_help(self, file: "SupportsWrite[str] | None" = None) -> None:
         super().print_help(file)
         print(file=file or sys.stdout)
 
-    def error(self, message):
+    @override
+    def error(self, message: str) -> NoReturn:
         self.print_help(sys.stderr)
         print(f" {style('●', RED)} {style(message, DIM)}", file=sys.stderr)
         print(file=sys.stderr)
@@ -287,8 +291,8 @@ def resolve_travel_pass(travel_passes: list) -> dict:
     pinfo("available travel passes:")
     for i, tp in enumerate(travel_passes, 1):
         name = tp.get("name", "Unknown")
-        valid_start = tp.get("startTravelValidityDateTime", "")[:10]
-        valid_end = tp.get("endTravelValidityDateTime", "")[:10]
+        valid_start = (tp.get("startTravelValidityDateTime") or "")[:10]
+        valid_end = (tp.get("endTravelValidityDateTime") or "")[:10]
         pinfo(f"  {i}. {name} ({valid_start} → {valid_end})")
 
     blank()
@@ -317,20 +321,22 @@ def validate_dates_against_pass(cfg: dict, travel_pass: dict) -> None:
     if not valid_start or not valid_end:
         return
 
-    # Compare Swedish wall-clock times: config dates are Swedish dates.
-    vp_start = to_sweden(valid_start).replace(tzinfo=None)
-    vp_end = to_sweden(valid_end).replace(tzinfo=None)
+    # Compare Swedish calendar dates: config dates are Swedish dates, and the
+    # API's validity instants are midnight UTC (01:00/02:00 Swedish), so a
+    # datetime comparison would reject the pass's first day. The end instant
+    # is exclusive — the day after the last valid day — exactly as
+    # --list-travelpasses shows it.
+    vp_start = to_sweden(valid_start).date()
+    vp_end = (to_sweden(valid_end) - timedelta(days=1)).date()
 
     params = cfg.get("search_parameters", {})
-    s_start = datetime.strptime(params["date_start"], "%Y-%m-%d")
-    s_end = datetime.strptime(params["date_end"], "%Y-%m-%d")
+    s_start = date.fromisoformat(params["date_start"])
+    s_end = date.fromisoformat(params["date_end"])
 
     if s_start < vp_start or s_end > vp_end:
         pinfo(
             f"search dates ({params['date_start']} – {params['date_end']}) "
-            f"are outside travel pass validity "
-            f"({vp_start.strftime('%Y-%m-%d')} – {vp_end.strftime('%Y-%m-%d')})"
-            f"\n"
+            f"are outside travel pass validity ({vp_start} – {vp_end})\n"
         )
         sys.exit(1)
 
@@ -356,7 +362,7 @@ def handle_list_travelpasses(client: SJClient, travel_passes: list) -> None:
     print_travelpasses(travel_passes, receipt_info)
 
 
-def _format_epoch(ts) -> str | None:
+def _format_epoch(ts: object) -> str | None:
     """Format a Unix timestamp as Swedish wall-clock ('fri 22 aug 18:04')."""
     if not isinstance(ts, (int, float)):
         return None
@@ -459,22 +465,28 @@ def handle_login_status(tm: TokenManager | None = None, verdict: str = "logged i
     sys.exit(1)
 
 
-def main():
-    """Main entry point."""
+def main() -> None:
+    """Entry point (script and console script): run the tool, exit 130 on Ctrl-C."""
+    setup_logging(os.getenv("LOG_LEVEL", ""))
     print()
-    args = parse_args()
-
-    # Handle --login-status early (no config or client needed)
-    if args.login_status:
-        tm = TokenManager()
-        _print_auth_header("checking login status", _cached_email(tm))
-        handle_login_status(tm)
-
-    client = SJClient()
     try:
-        _run(args, client)
-    finally:
-        client.close()
+        args = parse_args()
+
+        # Handle --login-status early (no config or client needed)
+        if args.login_status:
+            tm = TokenManager()
+            _print_auth_header("checking login status", _cached_email(tm))
+            handle_login_status(tm)
+
+        client = SJClient()
+        try:
+            _run(args, client)
+        finally:
+            client.close()
+    except KeyboardInterrupt:
+        pinfo("\ninterrupted by user")
+        print()
+        sys.exit(130)
 
 
 def _run(args: argparse.Namespace, client: SJClient) -> None:
@@ -493,23 +505,33 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         sys.exit(0)
 
     # 1. Load and validate config; offer first-run setup when it is missing
-    try:
-        cm = CfgManager()
-        # First-run setup on a missing config — offered only by --login, the
-        # one operation that makes sense without an existing session; on
-        # success fall through into the login itself.
-        if not cm.path.exists() and not (
-            args.login and sys.stdin.isatty() and cm.create_interactive()
-        ):
-            print_status_card(
-                False,
-                "no configuration",
-                lines=[
-                    f"expected a config file at {cm.path}",
-                    "run --login in a terminal to create it, or copy config.example.toml",
-                ],
-            )
+    cm = CfgManager()
+    if not cm.path.exists():
+        # First-run setup is offered only by --login (the one operation that
+        # makes sense without an existing session) and only on a terminal —
+        # the prompts go to stdout, so a redirected run must not wait on one.
+        # On success the run falls through into the login itself.
+        offered = args.login and sys.stdin.isatty() and sys.stdout.isatty()
+        try:
+            created = offered and cm.create_interactive()
+        except SJConfigError as e:
+            blank()
+            print_status_card(False, "config not created", lines=[str(e)])
             sys.exit(1)
+        if not created:
+            # Declined: the wizard already named the path, so only the hint.
+            lines = (
+                ["re-run --login when you want to create it"]
+                if offered
+                else [
+                    f"expected a config file at {cm.path}",
+                    "run --login in a terminal to create it",
+                ]
+            )
+            print_status_card(False, "no configuration", lines=lines)
+            sys.exit(1)
+
+    try:
         cfg = cm.load()
         # Route/dates are only needed by the booking-shaped operations
         cm.verify_cfg(cfg, require_search=args.book or bool(args.cancel_date))
@@ -600,19 +622,31 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             print_header_box([("operation", operation), *pass_rows])
             blank()
             validate_dates_against_pass(cfg, active_pass)
+            ok = True
             for i, cancel_date in enumerate(args.cancel_dates):
                 if i:
                     blank()
-                handle_cancel_mode(client, access_token, cfg, cancel_date, dry_run=args.dry_run)
+                ok &= handle_cancel_mode(
+                    client, access_token, cfg, cancel_date, dry_run=args.dry_run
+                )
+            if not ok:
+                print()
+                sys.exit(1)
 
         elif args.cancel_booking:
             operation = ("dry run · " if args.dry_run else "") + "cancelling bookings"
             print_header_box([("operation", operation), *pass_rows])
             blank()
+            ok = True
             for i, bn in enumerate(args.cancel_booking_numbers):
                 if i:
                     blank()
-                handle_cancel_booking(client, access_token, active_pass, bn, dry_run=args.dry_run)
+                ok &= handle_cancel_booking(
+                    client, access_token, active_pass, bn, dry_run=args.dry_run
+                )
+            if not ok:
+                print()
+                sys.exit(1)
 
         else:
             # --book, with --dry-run as the preview modifier.
@@ -626,8 +660,10 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             blank()
 
             # Fetch existing bookings for the duplicate check (quietly: a
-            # routine step, not part of the day-by-day trail)
-            b_start, b_end = booking_date_range(active_pass, start_offset_days=1)
+            # routine step, not part of the day-by-day trail). From today:
+            # date_start may be today, and today's stale provisional must be
+            # visible to the cleanup too.
+            b_start, b_end = booking_date_range(active_pass)
             with spinner("fetching existing bookings", trail=False):
                 bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)
 
@@ -636,7 +672,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 bookings_list = cleanup_stale_provisionals(client, access_token, bookings_list)
 
             # Process date range: one card per day, summary footer at the end
-            process_date_range(
+            counts = process_date_range(
                 client,
                 access_token,
                 tm,
@@ -646,6 +682,10 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 bookings_list,
                 dry_run=args.dry_run,
             )
+            # SPEC §5.7: a checkout failure or an error on any day is a failure
+            if counts.get("failed") or counts.get("error"):
+                print()
+                sys.exit(1)
 
     except SystemExit:
         raise
@@ -659,9 +699,4 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        pinfo("\ninterrupted by user")
-        print()
-        sys.exit(130)
+    main()

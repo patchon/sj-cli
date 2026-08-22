@@ -8,6 +8,7 @@ import tomllib
 from datetime import date, datetime
 from datetime import time as dt_time
 from pathlib import Path
+from typing import Any
 
 from sj_api_client.client import STATION_MAP
 from sj_api_client.dates import sweden_now
@@ -36,6 +37,7 @@ class CfgManager:
 
     Attributes:
         DEFAULT_PATH: The default system path for the configuration file.
+        EXAMPLE_PATH: The documented template next to the code (first-run setup).
         path: The path to the configuration file to be loaded.
         cfg: The dictionary containing the loaded configuration data.
 
@@ -46,13 +48,14 @@ class CfgManager:
         / "sj-api-client"
         / "config.toml"
     )
+    EXAMPLE_PATH = Path(__file__).parent / "config.example.toml"
 
-    def __init__(self, cfg_path=None):
+    def __init__(self, cfg_path: str | Path | None = None) -> None:
         self.path = Path(cfg_path) if cfg_path else self.DEFAULT_PATH
-        self.cfg = {}
+        self.cfg: dict[str, Any] = {}
         logger.debug(f"initialized config manager with path {self.path}")
 
-    def load(self) -> dict:
+    def load(self) -> dict[str, Any]:
         """
         Loads and parses the configuration file.
 
@@ -60,7 +63,8 @@ class CfgManager:
             The parsed configuration settings.
 
         Raises:
-            SJConfigError: If there is an error reading or parsing the file.
+            SJConfigError: If the file is missing, cannot be read, or is not
+                valid TOML — each with its own message.
 
         """
         if not self.path.exists():
@@ -68,12 +72,12 @@ class CfgManager:
         try:
             with self.path.open("rb") as f:
                 self.cfg = tomllib.load(f)
-                logger.debug(f"loading config {log_json(self.cfg)} from {self.path}")
-            return self.cfg
-        except Exception as e:
+        except OSError as e:
+            raise SJConfigError(f"cannot read config at {self.path}: {e}") from e
+        except ValueError as e:  # TOMLDecodeError, or a non-UTF-8 file
             raise SJConfigError(f"failed to parse toml config at {self.path}: {e}") from e
-
-    EXAMPLE_PATH = Path(__file__).parent / "config.example.toml"
+        logger.debug(f"loading config {log_json(self.cfg)} from {self.path}")
+        return self.cfg
 
     def create_interactive(self) -> bool:
         """
@@ -87,6 +91,9 @@ class CfgManager:
         Returns:
             True when the config was created, False when declined.
 
+        Raises:
+            SJConfigError: If the file cannot be written.
+
         """
         pinfo(f"no config found at {self.path}")
         if ask("create it now? [y/n]: ").strip().lower() not in ("y", "yes"):
@@ -99,7 +106,11 @@ class CfgManager:
             pwarn(f"'{email}' is not an email address")
         while True:
             prompt("sj account password: ")
-            password = getpass.getpass("")
+            try:
+                password = getpass.getpass("")
+            except EOFError:  # Ctrl-D: treat like an empty answer, as ask() does
+                print()
+                password = ""
             if password:
                 break
             pwarn("password must not be empty")
@@ -107,13 +118,21 @@ class CfgManager:
         def toml_str(value: str) -> str:
             return value.replace("\\", "\\\\").replace('"', '\\"')
 
+        # Function replacements: a string replacement would have re.sub
+        # re-process the backslashes toml_str just escaped.
         template = self.EXAMPLE_PATH.read_text()
-        content = re.sub(r'(?m)^email = ".*"$', f'email = "{toml_str(email)}"', template)
-        content = re.sub(r'(?m)^password = ".*"$', f'password = "{toml_str(password)}"', content)
-        with spinner("writing config"):
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(content)
-            self.path.chmod(0o600)
+        content = re.sub(r'(?m)^email = ".*"$', lambda _m: f'email = "{toml_str(email)}"', template)
+        content = re.sub(
+            r'(?m)^password = ".*"$', lambda _m: f'password = "{toml_str(password)}"', content
+        )
+        try:
+            with spinner("writing config"):
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self.path.touch(mode=0o600)  # create owner-only before the password is written
+                self.path.write_text(content)
+                self.path.chmod(0o600)
+        except OSError as e:
+            raise SJConfigError(f"could not write config at {self.path}: {e}") from e
 
         blank()
         print_status_card(
@@ -126,7 +145,7 @@ class CfgManager:
         )
         return True
 
-    def verify_cfg(self, cfg: dict, require_search: bool = True) -> None:
+    def verify_cfg(self, cfg: dict[str, Any], require_search: bool = True) -> None:
         """
         Validates configuration fields.
 
@@ -141,21 +160,28 @@ class CfgManager:
         """
         errors: list[str] = []
 
-        # [auth] section
+        # [auth] section (every value may be of the wrong TOML type: collect
+        # an error rather than crash on it)
         auth = cfg.get("auth")
-        if not auth:
+        if not auth or not isinstance(auth, dict):
             errors.append("[auth] section is missing")
         else:
             email = auth.get("email", "")
-            if not email or "@" not in email or "." not in email.split("@")[-1]:
+            if (
+                not isinstance(email, str)
+                or not email
+                or "@" not in email
+                or "." not in email.split("@")[-1]
+            ):
                 errors.append("email must be a valid email address (x@y.z)")
-            if not auth.get("password"):
+            password = auth.get("password")
+            if not password or not isinstance(password, str):
                 errors.append("password must be a non-empty string")
 
         # [search_parameters] section — only booking-shaped operations use it
         if require_search:
             params = cfg.get("search_parameters")
-            if not params:
+            if not params or not isinstance(params, dict):
                 errors.append("[search_parameters] section is missing")
             else:
                 self._validate_search_params(params, errors)
@@ -165,7 +191,7 @@ class CfgManager:
                 "configuration errors:\n  - " + "\n  - ".join(errors), errors=errors
             )
 
-    def _validate_search_params(self, params: dict, errors: list[str]) -> None:
+    def _validate_search_params(self, params: dict[str, Any], errors: list[str]) -> None:
         """Validate the [search_parameters] section."""
         # date_start
         date_start = self._validate_date(params.get("date_start", ""), "date_start", errors)
@@ -213,19 +239,19 @@ class CfgManager:
             val = params.get(field, "")
             if not val:
                 errors.append(f"{field} is required")
-            elif val.strip().lower() not in station_names_lower:
+            elif not isinstance(val, str) or val.strip().lower() not in station_names_lower:
                 errors.append(f"{field} '{val}' not found in station map")
 
         # comfort_class
         valid_classes = {"1 class", "2 class", "2 class calm"}
         cc = params.get("comfort_class", "")
-        if cc not in valid_classes:
+        if not isinstance(cc, str) or cc not in valid_classes:
             errors.append(f"comfort_class must be one of: {', '.join(sorted(valid_classes))}")
 
         # flexibility
         valid_flex = {"FULLFLEX", "SEMIFLEX", "NOFLEX"}
         flex = params.get("flexibility", "")
-        if flex not in valid_flex:
+        if not isinstance(flex, str) or flex not in valid_flex:
             errors.append(f"flexibility must be one of: {', '.join(sorted(valid_flex))}")
 
         # select_closest_ticket_available
@@ -265,9 +291,7 @@ class CfgManager:
                 if "ALL" in st and len(st) > 1:
                     errors.append("service_types: 'ALL' cannot be combined with other values")
 
-    def _validate_date(
-        self, value: "str | date", field_name: str, errors: list[str]
-    ) -> date | None:
+    def _validate_date(self, value: str | date, field_name: str, errors: list[str]) -> date | None:
         """
         Validate a config date. Returns the parsed date or None.
 
@@ -293,7 +317,7 @@ class CfgManager:
             return None
 
     def _validate_time(
-        self, value: "str | dt_time", field_name: str, errors: list[str]
+        self, value: str | dt_time, field_name: str, errors: list[str]
     ) -> str | None:
         """
         Validate a config time. Returns the normalised "HH:MM" string or None.
@@ -310,7 +334,7 @@ class CfgManager:
         if not isinstance(value, str):
             errors.append(f"{field_name} '{value}' must be a time formatted HH:MM (24-hour)")
             return None
-        if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", value):
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
             if re.fullmatch(r"\d{2}:\d{2}", value):
                 errors.append(f"{field_name} '{value}' is not a real time of day (HH:MM, 24-hour)")
             else:

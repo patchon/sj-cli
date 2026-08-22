@@ -1,16 +1,43 @@
 """Token management for the SJ API client."""
 
 import base64
+import contextlib
 import json
 import logging
-import time as _time
+import os
+import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from sj_api_client.errors import SJAuthError
 from sj_api_client.logger import log_json
 
 logger = logging.getLogger(__name__)
+
+
+def _write_private_json(path: Path, data: object) -> None:
+    """
+    Write JSON to a file only its owner can read: it holds tokens or cookies.
+
+    Atomic: the data goes to a sibling temp file (created 0600) that replaces
+    the real one only once complete, so a failure half-way (disk full,
+    Ctrl-C) leaves the previous valid cache in place instead of a fragment
+    that would lock every later run out with "failed to parse token cache".
+    """
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(path)  # the new file carries the temp file's 0600
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
 
 
 class TokenManager:
@@ -26,7 +53,7 @@ class TokenManager:
 
     DEFAULT_PATH = Path.home() / ".cache" / "sj-api-client" / "token.json"
 
-    def __init__(self, cache_path=None):
+    def __init__(self, cache_path: str | Path | None = None) -> None:
         """
         Initializes the TokenManager.
 
@@ -37,10 +64,10 @@ class TokenManager:
         """
         self.path = Path(cache_path) if cache_path else self.DEFAULT_PATH
         self.cookie_path = self.path.parent / "cookies.json"
-        self.token = None
+        self.token: dict[str, Any] | None = None
         logger.debug(f"initialized token manager with path {self.path}")
 
-    def load(self):
+    def load(self) -> dict[str, Any] | None:
         """
         Loads and parses the token cache file.
 
@@ -66,12 +93,14 @@ class TokenManager:
                 f"(delete the file to force a fresh login)"
             ) from e
 
-    def save(self, token_data):
+    def save(self, token_data: dict[str, Any]) -> None:
         """
         Saves the provided token data to the cache file.
 
-        Creates the directory structure if it doesn't exist.
-        Computes and stores the absolute refresh token expiry timestamp.
+        Creates the directory structure if it doesn't exist; the file is
+        written owner-readable only (0600), like the config that holds the
+        password. Computes and stores the absolute refresh token expiry
+        timestamp.
 
         Args:
             token_data (dict): The dict containing token information to save.
@@ -80,18 +109,19 @@ class TokenManager:
         # Compute absolute refresh token expiry if we have the relative value
         rt_expires_in = token_data.get("refresh_token_expires_in")
         if rt_expires_in is not None and "refresh_token_expires_on" not in token_data:
-            token_data["refresh_token_expires_on"] = int(_time.time()) + int(rt_expires_in)
+            token_data["refresh_token_expires_on"] = int(time.time()) + int(rt_expires_in)
 
+        # The in-memory token is the source of truth for this run even when
+        # the cache cannot be written: a fresh login must not be treated as
+        # expired just because the disk is read-only or full.
+        self.token = token_data
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("w") as f:
-                json.dump(token_data, f)
-                logger.debug(f"saved token data {log_json(token_data)} to {self.path}")
-            self.token = token_data
+            _write_private_json(self.path, token_data)
+            logger.debug(f"saved token data {log_json(token_data)} to {self.path}")
         except Exception as e:
             logger.error(f"failed to save token data to {self.path}: {e}")
 
-    def is_valid(self):
+    def is_valid(self) -> bool:
         """
         Checks if the access token is present and not expired.
 
@@ -123,7 +153,7 @@ class TokenManager:
 
         # Add a 5 minute buffer
         logger.debug("token expiration found, checking validity")
-        now = datetime.now().timestamp()
+        now = time.time()
         if now < (exp - 300):
             logger.debug(f"token is valid until {datetime.fromtimestamp(exp)}")
             return True
@@ -132,7 +162,7 @@ class TokenManager:
         logger.debug(f"token is expired at {datetime.fromtimestamp(exp)}")
         return False
 
-    def has_refresh_token(self):
+    def has_refresh_token(self) -> bool:
         """
         Checks if a refresh token is available and not expired.
 
@@ -146,7 +176,7 @@ class TokenManager:
 
         rt_expires_on = self.token.get("refresh_token_expires_on")
         if rt_expires_on and isinstance(rt_expires_on, (int, float)):
-            now = _time.time()
+            now = time.time()
             if now >= rt_expires_on:
                 logger.debug(f"refresh token expired at {datetime.fromtimestamp(rt_expires_on)}")
                 return False
@@ -180,7 +210,7 @@ class TokenManager:
         if not rt_expires_on or not isinstance(rt_expires_on, (int, float)):
             return False
 
-        remaining = rt_expires_on - _time.time()
+        remaining = rt_expires_on - time.time()
         if 0 < remaining < threshold_seconds:
             logger.info(
                 f"refresh token expires in {int(remaining)}s, proactive renewal recommended"
@@ -221,8 +251,13 @@ class TokenManager:
             Labels of the caches actually removed: "token" and/or "cookies".
                 Empty list when nothing was cached.
 
+        Raises:
+            SJAuthError: If a cache file exists but could not be deleted —
+                the session is then still usable, so "logged out" would lie.
+
         """
         removed = []
+        failed = []
         for label, path in (("token", self.path), ("cookies", self.cookie_path)):
             if not path.exists():
                 continue
@@ -232,15 +267,16 @@ class TokenManager:
                 logger.debug(f"removed {label} cache at {path}")
             except OSError as e:
                 logger.warning(f"failed to remove {path}: {e}")
+                failed.append(f"{label} cache at {path}: {e}")
         self.token = None
+        if failed:
+            raise SJAuthError("could not remove the " + "; ".join(failed))
         return removed
 
     def save_cookies(self, cookies: list[dict[str, str | None]]) -> None:
         """Save cookies to the cookie cache file."""
         try:
-            self.cookie_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.cookie_path.open("w") as f:
-                json.dump(cookies, f)
+            _write_private_json(self.cookie_path, cookies)
             logger.debug(f"saved {len(cookies)} cookies to {self.cookie_path}")
         except Exception as e:
             logger.warning(f"failed to save cookies: {e}")

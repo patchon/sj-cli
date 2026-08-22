@@ -85,3 +85,26 @@ def test_logout_server_failure_still_clears_and_raises(tmp_path, capsys):
     assert "✗ ending sj.se session" in out
     assert "✓ removing cached token and cookies" in out
     assert "● logged out" not in out  # the cli renders the failure card instead
+
+
+class _UntouchedClient:
+    def __getattr__(self, name):
+        raise AssertionError(f"client.{name} must not be called without cookies")
+
+
+def test_logout_fails_loudly_when_the_cache_cannot_be_deleted(tmp_path, capsys):
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    cache = tmp_path / "cache"
+    tm = TokenManager(cache / "token.json")
+    tm.save({"access_token": "a", "expires_on": 1})
+    cache.chmod(0o500)
+    try:
+        with pytest.raises(SJAuthError, match="could not remove the token cache"):
+            handle_logout(_UntouchedClient(), tm)
+    finally:
+        cache.chmod(0o700)
+    out = capsys.readouterr().out
+    assert "✗ removing cached token and cookies" in out and "● logged out" not in out

@@ -72,12 +72,21 @@ def test_select_best_departure_shape(capsys):
     best = select_best_departure(deps, "06:35", "2 class calm", select_closest=True)
     assert best["id"] == "a" and best["class"] == "2 class"
     assert "2 class calm unavailable, using 2 class" in capsys.readouterr().out
+    # a closest departure without the class does not end the leg: the next
+    # closest that carries it is taken, and the skip is announced
+    best = select_best_departure(
+        deps, "06:35", "2 class calm", select_closest=True, allow_fallback=False
+    )
+    assert best["id"] == "b" and best["class"] == "2 class calm"
+    assert "departure at 06:30: no matching class available" in capsys.readouterr().out
     assert (
         select_best_departure(
-            deps, "06:35", "2 class calm", select_closest=True, allow_fallback=False
+            [deps[0]], "06:35", "2 class calm", select_closest=True, allow_fallback=False
         )
         is None
     )
+    # exact time only: the single exact match is tried, nothing else
+    assert select_best_departure(deps, "06:35", "2 class calm", select_closest=False) is None
 
 
 def test_find_offer_id_prefers_calm_then_second():
@@ -219,3 +228,39 @@ def test_find_offer_id_honours_allow_fallback_flag():
         find_offer_id(offers(calm_price=None), "2 class calm", "FULLFLEX", allow_fallback=False)
         is None
     )
+
+
+def test_segment_date_is_the_swedish_calendar_date():
+    from sj_api_client.booking import _segment_date
+
+    assert _segment_date("2026-10-24T22:30:00Z") == "2026-10-25"  # 00:30 Swedish
+    assert _segment_date("2026-09-01T06:59:00+02:00") == "2026-09-01"
+    assert _segment_date("2026-09-01") == "2026-09-01"  # unparsable: raw date part
+
+
+def test_duplicate_check_matches_a_journey_with_a_change():
+    from sj_api_client.booking import check_existing_booking
+
+    def seg(origin, dest, when):
+        return {
+            "departureStation": {"uicStationCode": origin},
+            "arrivalStation": {"uicStationCode": dest},
+            "departureDateTime": when,
+        }
+
+    connection = {
+        "booking": {
+            "bookingStatus": "CONFIRMED",
+            "journeys": [
+                {
+                    "segments": [
+                        seg("A", "C", f"{D}T06:59:00+02:00"),
+                        seg("C", "B", f"{D}T07:40:00+02:00"),
+                    ]
+                }
+            ],
+        }
+    }
+    assert check_existing_booking([connection], "A", "B", D)
+    assert not check_existing_booking([connection], "A", "C", D)  # the leg, not the journey
+    assert not check_existing_booking([connection], "B", "A", D)

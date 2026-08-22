@@ -76,14 +76,25 @@ def test_booking_date_range_uses_swedish_wall_clock():
     assert end == "2027-03-19"  # 00:30 on the 18th in Sweden, +1 day
 
 
-def test_validate_dates_against_pass_boundaries():
-    tp = {
-        "startTravelValidityDateTime": "2026-08-31T22:00:00Z",  # 00:00 Sep 1 in Sweden
-        "endTravelValidityDateTime": "2026-12-31T22:59:59Z",
-    }  # 23:59:59 Dec 31 in Sweden
-    validate_dates_against_pass(base_cfg(date_start="2026-09-01", date_end="2026-12-31"), tp)
+@pytest.mark.parametrize(
+    ("start", "end", "first_day", "last_day"),
+    [
+        # real API shape: midnight UTC rendered in the Swedish offset; the end
+        # instant is exclusive (the day after the last valid day)
+        ("2025-03-17T01:00:00+01:00", "2026-03-18T01:00:00+01:00", "2025-03-17", "2026-03-17"),
+        ("2026-09-01T02:00:00+02:00", "2027-09-02T02:00:00+02:00", "2026-09-01", "2027-09-01"),
+    ],
+    ids=["winter-cet", "summer-cest"],
+)
+def test_validate_dates_against_pass_boundaries(start, end, first_day, last_day):
+    from datetime import date, timedelta
+
+    tp = {"startTravelValidityDateTime": start, "endTravelValidityDateTime": end}
+    day_before = (date.fromisoformat(first_day) - timedelta(days=1)).isoformat()
+    day_after = (date.fromisoformat(last_day) + timedelta(days=1)).isoformat()
+    validate_dates_against_pass(base_cfg(date_start=first_day, date_end=last_day), tp)
     with pytest.raises(SystemExit):
-        validate_dates_against_pass(base_cfg(date_start="2026-08-31", date_end="2026-09-01"), tp)
+        validate_dates_against_pass(base_cfg(date_start=day_before, date_end=last_day), tp)
     with pytest.raises(SystemExit):
-        validate_dates_against_pass(base_cfg(date_start="2026-09-01", date_end="2027-01-01"), tp)
+        validate_dates_against_pass(base_cfg(date_start=first_day, date_end=day_after), tp)
     validate_dates_against_pass(base_cfg(), {})  # no validity info → no check

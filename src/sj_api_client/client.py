@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from sj_api_client.errors import SJAPIError
+from sj_api_client.errors import SJAPIError, SJAuthError
 from sj_api_client.logger import log_json, log_request, log_response
 
 logger = logging.getLogger(__name__)
@@ -46,10 +46,9 @@ def parse_json_response(response: httpx.Response, url: str) -> None:
         httpx.HTTPStatusError: If JSON decoding fails and the http status code
             is a non-2xx error, or if the JSON decoding succeeds but we haven't
             been able to catch the error.
-        SJAPIError: If the json contains a status key which isn't 200, or if
-            it contains the key errorCode or error.
-        Exception: If JSON decoding fails despite a http 2xx success status
-            code.
+        SJAPIError: If the json contains a status key which isn't 200, if it
+            contains the key errorCode or error, or if JSON decoding fails
+            despite a http 2xx success status code.
 
     """
     logger.debug(f"parsing response ({response.status_code}) from {url} as json")
@@ -66,7 +65,7 @@ def parse_json_response(response: httpx.Response, url: str) -> None:
             f"body [raw]: {response.text[:1200]} <truncated after 1200 chars> "
             f"..."
         )
-        raise Exception(msg) from None
+        raise SJAPIError(msg) from None
     logger.debug(f"parsed json: as {log_json(resp_json)}")
 
     # Make sure the status key is 200 if it exists
@@ -98,8 +97,9 @@ class RetryTransport(httpx.BaseTransport):
     """
     Transport wrapper that retries on transient failures.
 
-    Idempotent requests (GET/HEAD/OPTIONS) are retried on 502/503, timeouts
-    and connection errors with exponential backoff (1s, 2s, 4s). Other
+    Idempotent requests (GET/HEAD/OPTIONS) are retried on 502/503, timeouts,
+    connection errors and transient transport errors (a connection reset or
+    closed by the server) with exponential backoff (1s, 2s, 4s). Other
     methods (POST/PATCH — booking creation, checkout, cancellation) are
     retried only when the request provably never reached the server
     (connection error / connect timeout): a 502 or read timeout after a POST
@@ -120,9 +120,11 @@ class RetryTransport(httpx.BaseTransport):
         for attempt in range(len(self.RETRY_DELAYS) + 1):
             try:
                 response = self._transport.handle_request(request)
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
                 # Connection never established → the request was not sent → safe
-                # to retry for any method. Otherwise only idempotent methods.
+                # to retry for any method. Otherwise (read/write errors, a
+                # pooled connection the server closed, timeouts) only
+                # idempotent methods.
                 never_sent = isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
                 if (idempotent or never_sent) and attempt < len(self.RETRY_DELAYS):
                     delay = self.RETRY_DELAYS[attempt]
@@ -195,6 +197,10 @@ class SJClient:
     X_CLIENT_VERSION = "20251217.0004-prod"
 
     def __init__(self) -> None:
+        self._setup()
+
+    def _setup(self) -> None:
+        """Create the HTTP client and fresh login state (PKCE codes, B2C context)."""
         logger.debug("initializing SJClient")
 
         # Create a new client instance with retry transport
@@ -222,7 +228,7 @@ class SJClient:
         self.nonce = secrets.token_urlsafe(16)
 
         # B2C context, filled in step by step during the login flow. All of it
-        # lives here so reset() (which re-runs __init__) clears it.
+        # lives here so reset() (which re-runs _setup) clears it.
         self.csrf_token = ""
         self.trans_id = ""
         self.page_view_id = ""
@@ -233,8 +239,9 @@ class SJClient:
         self._verified_device_unique_id = ""
 
     def reset(self) -> None:
-        """Reset client state for a fresh login attempt."""
-        self.__init__()
+        """Reset for a fresh login attempt: new HTTP client, new PKCE codes, empty context."""
+        self.close()
+        self._setup()
 
     def export_cookies(self) -> list[dict[str, str | None]]:
         """Export the client's cookies as a serializable list."""
@@ -339,10 +346,9 @@ class SJClient:
             True if MFA (SMS) is required, False if B2C skipped MFA.
 
         Raises:
-            Exception: If any part of the sequence fails, including network
-                issues, failure to parse tokens, or if credential submission
-                returns an error.
-            HTTPStatusError: If the HTTP status code is not 200.
+            SJAPIError: If a response lacks the expected tokens or reports an
+                error (e.g. rejected credentials).
+            httpx.HTTPError: On network failures or non-2xx responses.
 
         """
         logger.info("starting login sequence ...")
@@ -376,7 +382,8 @@ class SJClient:
             The authorization code string if successful, None otherwise.
 
         Raises:
-            Exception: If required context is missing or the flow fails.
+            SJAuthError: If the login sequence was not run first.
+            SJAPIError: If the response lacks the device-registration fields.
 
         """
         logger.info("finalizing login flow")
@@ -388,11 +395,11 @@ class SJClient:
         # This page contains the device registration SA_FIELDS
         resp = self.last_response
         if resp is None:
-            raise Exception("missing last_response, login sequence was not run")
+            raise SJAuthError("missing last_response, login sequence was not run")
 
         if "SA_FIELDS" not in resp.text:
             logger.error("missing SA_FIELDS in response")
-            raise Exception("missing SA_FIELDS in response")
+            raise SJAPIError("missing SA_FIELDS in response")
 
         logger.info("performing device registration ...")
 
@@ -447,7 +454,7 @@ class SJClient:
 
         fp_resp = self.client.post(url_fingerprint, data=payload, headers=headers)
         logger.info(f"fingerprint response http code: {fp_resp.status_code}")
-        logger.debug(f"fingerprint response content: {fp_resp.content}")
+        logger.debug(f"fingerprint response content: {fp_resp.text[:1200]}")
 
         # Update csrf token from response
         self._get_csrf_token(fp_resp.headers)
@@ -505,25 +512,19 @@ class SJClient:
             parse_json_response(resp, url_token)
         # If we have an error from the api
         except SJAPIError as e:
-            try:
-                err_data = e.args[0]
-                if isinstance(err_data, dict):
-                    err_desc = err_data.get("error_description", "")
-                    if "The provided grant has expired" in err_desc:
-                        iss_match = re.search(r"Grant issued time: (\d+)", err_desc)
-                        exp_match = re.search(r"Grant expiration time: (\d+)", err_desc)
-
-                        if iss_match and exp_match:
-                            iss_dt = datetime.fromtimestamp(int(iss_match.group(1)))
-                            exp_dt = datetime.fromtimestamp(int(exp_match.group(1)))
-                            logger.warning(
-                                f"token refresh failed, grant is expired,"
-                                f"issued at {iss_dt} and expired: {exp_dt}"
-                            )
-                            logger.info("token refresh grant is expired, will do full login")
-                            return None
-            except Exception:
-                pass
+            err_desc = (e.payload or {}).get("error_description", "")
+            if "The provided grant has expired" in err_desc:
+                iss_match = re.search(r"Grant issued time: (\d+)", err_desc)
+                exp_match = re.search(r"Grant expiration time: (\d+)", err_desc)
+                if iss_match and exp_match:
+                    iss_dt = datetime.fromtimestamp(int(iss_match.group(1)))
+                    exp_dt = datetime.fromtimestamp(int(exp_match.group(1)))
+                    logger.warning(
+                        f"token refresh failed, grant is expired, "
+                        f"issued at {iss_dt} and expired: {exp_dt}"
+                    )
+                logger.info("token refresh grant is expired, will do full login")
+                return None
 
             logger.error(f"api error refreshing token: {e}")
             return None
@@ -538,8 +539,8 @@ class SJClient:
         Explicitly requests the SMS code using Phonefactor endpoint.
 
         Raises:
-            Exception: If required context is missing or if rate limits are
-                detected.
+            SJAuthError: If the login sequence was not run first.
+            SJAPIError: If B2C reports an error or the SMS is rate limited.
 
         """
         logger.info("triggering sms ...")
@@ -584,7 +585,7 @@ class SJClient:
         # Check for rate limiting in the text
         if "error_phone_throttled" in resp.text:
             logger.error(f"rate limit detected (error_phone_throttled): {resp.text}")
-            raise Exception("rate limit detected (error_phone_throttled)")
+            raise SJAPIError("rate limit detected (error_phone_throttled)")
 
         # Try to parse json response
         parse_json_response(resp, url_sms)
@@ -600,7 +601,8 @@ class SJClient:
             code: The verification code entered by the user.
 
         Raises:
-            Exception: If required context is missing.
+            SJAuthError: If the login sequence was not run first.
+            SJAPIError: If B2C rejects the code or the response is malformed.
 
         """
         logger.info("verifying code ...")
@@ -889,8 +891,8 @@ class SJClient:
         steps.
 
         Raises:
-            Exception: If the 'transId' cannot be found in the page content.
-            HTTPStatusError: If the HTTP status code is not 200.
+            SJAPIError: If the 'transId' cannot be found in the page content.
+            httpx.HTTPStatusError: If the HTTP status code is not 200.
 
         """
         logger.info("fetching login page ...")
@@ -914,7 +916,7 @@ class SJClient:
         trans_match = re.search(r'"transId":"([^"]+)"', content)
         if not trans_match:
             logger.error(f"failed to fetch transid from login page {content}")
-            raise Exception("failed to fetch transid")
+            raise SJAPIError("failed to fetch transid")
 
         # Set / update csrf and transid
         self._get_csrf_token(resp.headers)
@@ -958,7 +960,7 @@ class SJClient:
             resp: The headers object from an httpx response.
 
         Raises:
-            Exception: If the CSRF token could not be found in either the
+            SJAPIError: If the CSRF token could not be found in either the
                 headers or the cookies.
 
         """
@@ -967,7 +969,7 @@ class SJClient:
 
         if not self.csrf_token:
             logger.error("csrf token could not be found in headers or cookie")
-            raise Exception("csrf token not found in headers or cookie")
+            raise SJAPIError("csrf token not found in headers or cookie")
 
     def _get_csrf_token_from_cookie(self) -> None:
         """
@@ -1115,14 +1117,14 @@ class SJClient:
             attributes: A list of attribute names to check on the current instance.
 
         Raises:
-            Exception: If any of the required attributes are missing or empty.
+            SJAuthError: If any of the required attributes are missing or empty.
 
         """
         for attr in attributes:
             if not getattr(self, attr, None):
                 error_msg = f"missing {attr}, can't proceed"
                 logger.error(error_msg)
-                raise Exception(error_msg)
+                raise SJAuthError(error_msg)
 
     def exchange_code(self, code: str) -> dict[str, Any]:
         """
@@ -1366,7 +1368,7 @@ class SJClient:
                 "travelPassRole": "HOLDER",
             }
 
-        payload = {
+        payload: dict[str, Any] = {
             "origin": origin_id,
             "destination": dest_id,
             "departureDate": departure_date,  # YYYY-MM-DD

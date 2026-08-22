@@ -1,7 +1,7 @@
 """SJAPIError turns API error bodies into readable messages (code · message),
 keeping the raw payload and parsed fields as attributes."""
 
-from sj_api_client.errors import SJAPIError
+from sj_api_client.errors import SJAPIError, SJAuthError, SJConfigError, SJError
 
 
 def test_b2c_error_dict_is_humanized():
@@ -38,3 +38,9 @@ def test_string_payload_unchanged():
     assert e.payload is None
     assert e.code is None
     assert e.message is None
+
+
+def test_every_error_shares_the_sjerror_base():
+    for exc in (SJAPIError("x"), SJAuthError("x"), SJConfigError("x", ["a"])):
+        assert isinstance(exc, SJError)
+    assert SJConfigError("x", ["a"]).errors == ["a"]
