@@ -119,15 +119,18 @@ class CfgManager:
         blank()
         print_status_card(True, "config created", [
             ("file", str(self.path)),
-            ("next", "edit [search_parameters] (route, dates, times), then re-run"),
+            ("next", "edit [search_parameters] (route, dates, times) before booking"),
         ])
         return True
 
-    def verify_cfg(self, cfg: dict) -> None:
+    def verify_cfg(self, cfg: dict, require_search: bool = True) -> None:
         """
-        Validates all configuration fields.
+        Validates configuration fields.
 
-        Collects all errors and reports them at once.
+        [auth] is always validated; [search_parameters] only when
+        require_search is true — operations that never touch the route or
+        dates (login, listing, cancelling by number) work with a config
+        holding only credentials. Collects all errors, reports them at once.
 
         Raises:
             SJConfigError: If any validation errors are found.
@@ -146,12 +149,13 @@ class CfgManager:
             if not auth.get("password"):
                 errors.append("password must be a non-empty string")
 
-        # [search_parameters] section
-        params = cfg.get("search_parameters")
-        if not params:
-            errors.append("[search_parameters] section is missing")
-        else:
-            self._validate_search_params(params, errors)
+        # [search_parameters] section — only booking-shaped operations use it
+        if require_search:
+            params = cfg.get("search_parameters")
+            if not params:
+                errors.append("[search_parameters] section is missing")
+            else:
+                self._validate_search_params(params, errors)
 
         if errors:
             raise SJConfigError(

@@ -69,8 +69,9 @@ $EDITOR ~/.config/sj-api-client/config.toml      # credentials, route, dates, ti
 
 Or skip the copy: on first run (in a terminal) the tool offers to create the config for you —
 it asks for your SJ credentials (password never echoed), writes the documented template with
-them filled in (file mode 0600), and points you at `[search_parameters]` to set route, dates
-and times.
+them filled in (file mode 0600), and carries straight on with whatever you asked — `--login`
+logs in right away. Only booking and date-based cancelling need `[search_parameters]` (route,
+dates, times) edited first.
 
 The config lives **outside** the repo on purpose — it contains your SJ password. `config.toml` in
 the repo root is gitignored; only `config.example.toml` is tracked.

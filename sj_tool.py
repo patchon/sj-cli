@@ -498,16 +498,17 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     # 1. Load and validate config; offer first-run setup when it is missing
     try:
         cm = CfgManager()
-        if not cm.path.exists():
-            if sys.stdin.isatty() and cm.create_interactive():
-                sys.exit(0)
+        # First-run setup on a missing config; on success fall through and
+        # run the requested operation with the freshly written config.
+        if not cm.path.exists() and not (sys.stdin.isatty() and cm.create_interactive()):
             print_status_card(False, "no configuration", lines=[
                 f"expected a config file at {cm.path}",
                 "run any command in a terminal to create it, or copy config.example.toml",
             ])
             sys.exit(1)
         cfg = cm.load()
-        cm.verify_cfg(cfg)
+        # Route/dates are only needed by the booking-shaped operations
+        cm.verify_cfg(cfg, require_search=args.book or bool(args.cancel_date))
     except SJConfigError as e:
         print_status_card(False, "invalid configuration", lines=e.errors or [str(e)])
         sys.exit(1)

@@ -131,3 +131,21 @@ def test_create_interactive_declined_leaves_nothing(tmp_path, monkeypatch):
     cm = CfgManager(tmp_path / "config.toml")
     assert cm.create_interactive() is False
     assert not cm.path.exists()
+
+
+def test_verify_cfg_search_params_scoped_to_operations_that_use_them():
+    # a fresh wizard config has valid [auth] but stale template search dates:
+    # login/list/cancel-booking must still work
+    cfg = base_cfg(date_start="2020-01-01", date_end="2020-03-20")
+    with pytest.raises(SJConfigError):
+        CfgManager().verify_cfg(cfg)  # booking modes: full validation
+    CfgManager().verify_cfg(cfg, require_search=False)  # non-booking: [auth] only
+
+    # a missing [search_parameters] section is fine when not required
+    CfgManager().verify_cfg({"auth": cfg["auth"]}, require_search=False)
+
+    # [auth] is enforced regardless of the operation
+    bad = base_cfg()
+    bad["auth"]["email"] = "not-an-email"
+    with pytest.raises(SJConfigError, match="email must be a valid email"):
+        CfgManager().verify_cfg(bad, require_search=False)
