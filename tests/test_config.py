@@ -96,3 +96,38 @@ def test_native_toml_time_is_accepted_and_normalised():
     verify(cfg)  # unquoted TOML times (with seconds) must not crash or error
     assert cfg["search_parameters"]["time_leave"] == "06:59"
     assert cfg["search_parameters"]["time_return"] == "17:22"
+
+
+def test_load_missing_file_says_so_not_parse_error(tmp_path):
+    with pytest.raises(SJConfigError, match="no config file found at"):
+        CfgManager(tmp_path / "config.toml").load()
+
+
+def test_create_interactive_writes_template_with_credentials(tmp_path, monkeypatch, capsys):
+    import sj_config as m
+
+    answers = iter(["y", "not-an-email", "user@example.com"])
+    monkeypatch.setattr(m, "ask", lambda _t: next(answers))
+    passwords = iter(["", 's3cr3t"quote'])
+    monkeypatch.setattr(m.getpass, "getpass", lambda _p="": next(passwords))
+    cm = CfgManager(tmp_path / "config.toml")
+    assert cm.create_interactive() is True
+    text = cm.path.read_text()
+    assert 'email = "user@example.com"' in text
+    assert 'password = "s3cr3t\\"quote"' in text
+    assert "[search_parameters]" in text  # the documented template came along
+    assert (cm.path.stat().st_mode & 0o777) == 0o600  # holds the password
+    out = capsys.readouterr().out
+    assert "! 'not-an-email' is not an email address" in out
+    assert "! password must not be empty" in out
+    assert "● config created" in out
+    cm.load()  # the created file is valid TOML
+
+
+def test_create_interactive_declined_leaves_nothing(tmp_path, monkeypatch):
+    import sj_config as m
+
+    monkeypatch.setattr(m, "ask", lambda _t: "n")
+    cm = CfgManager(tmp_path / "config.toml")
+    assert cm.create_interactive() is False
+    assert not cm.path.exists()
