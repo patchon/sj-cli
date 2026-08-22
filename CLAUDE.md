@@ -102,7 +102,7 @@ Modules organized by separation of concerns, plain venv (no package manager):
 
 ## Configuration
 
-Config path: `~/.config/sj-api-client/config.toml` (or `$XDG_CONFIG_HOME/sj-api-client/config.toml`). Template: `config.example.toml`. Missing config + interactive terminal → first-run setup (`CfgManager.create_interactive`): asks credentials, writes the template with them filled in, chmod 600, exits 0; non-interactive → `● no configuration` card, exit 1.
+Config path: `~/.config/sj-api-client/config.toml` (or `$XDG_CONFIG_HOME/sj-api-client/config.toml`). Template: `config.example.toml`. Missing config + interactive terminal → first-run setup (`CfgManager.create_interactive`): asks credentials, writes the template with them filled in, chmod 600, then continues with the requested operation; non-interactive → `● no configuration` card, exit 1. `verify_cfg(cfg, require_search=...)`: [auth] always, [search_parameters] only for --book/--cancel-date.
 
 ```toml
 [auth]

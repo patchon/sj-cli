@@ -107,7 +107,7 @@ Email and password stored in plaintext in `config.toml`. Acceptable for this use
 
 `~/.config/sj-api-client/config.toml` (or `$XDG_CONFIG_HOME/sj-api-client/config.toml`)
 
-**First run**: when the file does not exist and stdin is a terminal, the tool offers to create it — `? create it now? [y/n]`, then asks for the SJ email (validated, re-asked) and password (via `getpass`, never echoed, re-asked if empty), writes the documented template (`config.example.toml`) with the credentials filled in (TOML-escaped), chmods it to `0600`, and closes with a `● config created` card pointing at `[search_parameters]`; the run then exits 0. Declined, or in a non-interactive run, a `● no configuration` card names the expected path and exits 1. A missing file is reported as missing — `failed to parse` is reserved for real TOML errors.
+**First run**: when the file does not exist and stdin is a terminal, the tool offers to create it — `? create it now? [y/n]`, then asks for the SJ email (validated, re-asked) and password (via `getpass`, never echoed, re-asked if empty), writes the documented template (`config.example.toml`) with the credentials filled in (TOML-escaped), chmods it to `0600`, and closes with a `● config created` card pointing at `[search_parameters]`; the run then **continues with the requested operation** (so `--login` logs in right away — only `--book`/`--cancel-date` still need the search parameters edited first). Declined, or in a non-interactive run, a `● no configuration` card names the expected path and exits 1. A missing file is reported as missing — `failed to parse` is reserved for real TOML errors.
 
 ### 4.2 Schema
 
@@ -136,7 +136,7 @@ service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 
 ### 4.3 Validation rules
 
-All validation runs at startup before any API calls. Fail fast: the errors render as a status card — `● invalid configuration` (red dot + bold verdict), a blank line, then one plain indented line per error — and the run exits 1. `SJConfigError` carries the individual messages as `.errors`; file-level failures (missing/unparsable config) render the same card with a single line.
+Validation runs at startup before any API calls, scoped to the operation: `[auth]` is always validated; `[search_parameters]` only for the operations that use it (`--book`, `--cancel-date`) — login, listing and cancel-by-number work with a config holding only credentials (e.g. one freshly written by the first-run setup). Fail fast: the errors render as a status card — `● invalid configuration` (red dot + bold verdict), a blank line, then one plain indented line per error — and the run exits 1. `SJConfigError` carries the individual messages as `.errors`; file-level failures (missing/unparsable config) render the same card with a single line.
 
 | Field | Rules |
 |---|---|
