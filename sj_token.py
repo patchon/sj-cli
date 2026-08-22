@@ -1,5 +1,6 @@
 """Token management for the SJ API client."""
 
+import base64
 import json
 import logging
 import time as _time
@@ -191,6 +192,52 @@ class TokenManager:
             return True
 
         return False
+
+    def profile_email(self) -> str | None:
+        """
+        Email of the logged-in user, from the token's profile_info blob.
+
+        profile_info is base64url-encoded JSON from B2C; the email is its
+        preferred_username claim.
+
+        Returns:
+            The email string, or None if absent or undecodable.
+
+        """
+        if not self.token:
+            return None
+        blob = self.token.get("profile_info")
+        if not isinstance(blob, str) or not blob:
+            return None
+        try:
+            data = json.loads(base64.urlsafe_b64decode(blob + "=" * (-len(blob) % 4)))
+            email = data.get("preferred_username")
+            return email if isinstance(email, str) and email else None
+        except Exception as e:
+            logger.debug(f"could not decode profile_info: {e}")
+            return None
+
+    def clear(self) -> list[str]:
+        """
+        Delete the cached token and cookie files (logout).
+
+        Returns:
+            Labels of the caches actually removed: "token" and/or "cookies".
+                Empty list when nothing was cached.
+
+        """
+        removed = []
+        for label, path in (("token", self.path), ("cookies", self.cookie_path)):
+            if not path.exists():
+                continue
+            try:
+                path.unlink()
+                removed.append(label)
+                logger.debug(f"removed {label} cache at {path}")
+            except OSError as e:
+                logger.warning(f"failed to remove {path}: {e}")
+        self.token = None
+        return removed
 
     def save_cookies(self, cookies: list[dict[str, str | None]]) -> None:
         """Save cookies to the cookie cache file."""

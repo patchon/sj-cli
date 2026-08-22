@@ -44,3 +44,31 @@ def test_validity_buffer_and_expiry(tmp_path):
     tm.token = {"refresh_token": "r", "refresh_token_expires_on": now + 600}
     assert tm.has_refresh_token()
     assert tm.refresh_token_needs_renewal(threshold_seconds=3600)
+
+
+def test_clear_removes_caches_and_is_idempotent(tmp_path):
+    tm = TokenManager(tmp_path / "token.json")
+    tm.save({"access_token": "a", "expires_on": 1})
+    tm.save_cookies([{"name": "n", "value": "v", "domain": "", "path": "/"}])
+    assert tm.clear() == ["token", "cookies"]
+    assert not (tmp_path / "token.json").exists()
+    assert not (tmp_path / "cookies.json").exists()
+    assert tm.token is None
+    assert tm.clear() == []
+
+
+def test_profile_email_from_profile_info(tmp_path):
+    import base64
+
+    tm = TokenManager(tmp_path / "token.json")
+    blob = base64.urlsafe_b64encode(
+        json.dumps({"preferred_username": "user@example.com", "ver": "1.0"}).encode()
+    ).decode().rstrip("=")
+    tm.token = {"profile_info": blob}
+    assert tm.profile_email() == "user@example.com"
+    tm.token = {"profile_info": "%%%not-base64%%%"}
+    assert tm.profile_email() is None
+    tm.token = {}
+    assert tm.profile_email() is None
+    tm.token = None
+    assert tm.profile_email() is None

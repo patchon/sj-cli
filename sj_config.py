@@ -4,6 +4,7 @@ import logging
 import os
 import re
 from datetime import date, datetime
+from datetime import time as dt_time
 from pathlib import Path
 
 import tomllib
@@ -101,7 +102,7 @@ class CfgManager:
 
         if errors:
             raise SJConfigError(
-                "configuration errors:\n  - " + "\n  - ".join(errors)
+                "configuration errors:\n  - " + "\n  - ".join(errors), errors=errors
             )
 
     def _validate_search_params(self, params: dict, errors: list[str]) -> None:
@@ -112,6 +113,12 @@ class CfgManager:
         # date_end
         date_end = self._validate_date(params.get("date_end", ""), "date_end", errors)
 
+        # Normalise native TOML dates back to strings for downstream code
+        if date_start:
+            params["date_start"] = date_start.isoformat()
+        if date_end:
+            params["date_end"] = date_end.isoformat()
+
         # date_end >= date_start
         if date_start and date_end and date_end < date_start:
             errors.append("date_end must be >= date_start")
@@ -121,18 +128,24 @@ class CfgManager:
             errors.append("date_start must be today or in the future")
 
         # time_leave
-        self._validate_time(params.get("time_leave", ""), "time_leave", errors)
+        t = self._validate_time(params.get("time_leave", ""), "time_leave", errors)
+        if t:
+            params["time_leave"] = t
 
         # roundtrip
         roundtrip = params.get("roundtrip")
         if roundtrip is None or not isinstance(roundtrip, bool):
             errors.append("roundtrip must be a boolean (true/false)")
         elif roundtrip:
-            self._validate_time(params.get("time_return", ""), "time_return", errors)
+            t = self._validate_time(params.get("time_return", ""), "time_return", errors)
+            if t:
+                params["time_return"] = t
         else:
             tr = params.get("time_return", "")
             if tr:
-                self._validate_time(tr, "time_return", errors)
+                t = self._validate_time(tr, "time_return", errors)
+                if t:
+                    params["time_return"] = t
 
         # station_from / station_to
         station_names_lower = {k.lower() for k in STATION_MAP}
@@ -199,24 +212,54 @@ class CfgManager:
                     )
 
     def _validate_date(
-        self, value: str, field_name: str, errors: list[str]
+        self, value: "str | date", field_name: str, errors: list[str]
     ) -> date | None:
-        """Validate a YYYY-MM-DD date string. Returns parsed date or None."""
+        """
+        Validate a config date. Returns the parsed date or None.
+
+        Accepts a quoted "YYYY-MM-DD" string or a native (unquoted) TOML
+        date. Error messages echo the received value, so a subtly wrong one
+        (wrong separator, trailing space, impossible day) is visible.
+        """
+        if isinstance(value, datetime):
+            errors.append(f"{field_name} must be a date (YYYY-MM-DD), not a date-time")
+            return None
+        if isinstance(value, date):
+            return value  # native TOML date (unquoted in the config)
         if not value:
             errors.append(f"{field_name} is required")
             return None
         try:
             return datetime.strptime(value, "%Y-%m-%d").date()
-        except ValueError:
-            errors.append(f"{field_name} must be a valid date (YYYY-MM-DD)")
+        except (TypeError, ValueError):
+            if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                errors.append(f"{field_name} '{value}' is not a real calendar date")
+            else:
+                errors.append(f"{field_name} '{value}' must be a date formatted YYYY-MM-DD")
             return None
 
     def _validate_time(
-        self, value: str, field_name: str, errors: list[str]
-    ) -> None:
-        """Validate an HH:MM time string (24-hour)."""
+        self, value: "str | dt_time", field_name: str, errors: list[str]
+    ) -> str | None:
+        """
+        Validate a config time. Returns the normalised "HH:MM" string or None.
+
+        Accepts a quoted "HH:MM" string or a native (unquoted) TOML time
+        (written with seconds, e.g. 06:59:00). Error messages echo the
+        received value, so a subtly wrong one is visible.
+        """
+        if isinstance(value, dt_time):
+            return value.strftime("%H:%M")  # native TOML time (unquoted)
         if not value:
             errors.append(f"{field_name} is required")
-            return
+            return None
+        if not isinstance(value, str):
+            errors.append(f"{field_name} '{value}' must be a time formatted HH:MM (24-hour)")
+            return None
         if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", value):
-            errors.append(f"{field_name} must be a valid time (HH:MM, 24-hour)")
+            if re.fullmatch(r"\d{2}:\d{2}", value):
+                errors.append(f"{field_name} '{value}' is not a real time of day (HH:MM, 24-hour)")
+            else:
+                errors.append(f"{field_name} '{value}' must be a time formatted HH:MM (24-hour)")
+            return None
+        return value

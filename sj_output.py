@@ -23,6 +23,7 @@ _spinner_active = False
 # ANSI SGR codes used for output styling
 BOLD = "1"
 DIM = "2"
+RED = "31"
 GREEN = "32"
 YELLOW = "33"
 MAGENTA = "35"
@@ -98,10 +99,10 @@ def spinner(msg: str, interval: float = 0.08, trail: bool = True):
             yield
         except BaseException:
             if trail:
-                _emit(style(f"\u2717 {text}", DIM))
+                _emit(_trail_line(False, text))
             raise
         if trail:
-            _emit(style(f"\u2713 {text}", DIM))
+            _emit(_trail_line(True, text))
         return
 
     def _spin():
@@ -109,7 +110,7 @@ def spinner(msg: str, interval: float = 0.08, trail: bool = True):
         while not stop.is_set():
             frame = _BRAILLE_FRAMES[i % len(_BRAILLE_FRAMES)]
             with _stdout_lock:
-                sys.stdout.write(f"\r{prefix}{frame} {text}")
+                sys.stdout.write(f"\r{_MARGIN}{prefix}{frame} {text}")
                 sys.stdout.flush()
             i += 1
             stop.wait(interval)
@@ -122,18 +123,27 @@ def spinner(msg: str, interval: float = 0.08, trail: bool = True):
     _spinner_active = True
     t = threading.Thread(target=_spin, daemon=True)
     t.start()
-    mark = "\u2713"
+    ok = True
     try:
         yield
     except BaseException:
-        mark = "\u2717"
+        ok = False
         raise
     finally:
         stop.set()
         t.join()
         _spinner_active = False
         if trail:
-            _emit(style(f"{mark} {text}", DIM))
+            _emit(_trail_line(ok, text))
+
+
+def _trail_line(ok: bool, text: str) -> str:
+    """Trail line for a finished step: green ✓ / red ✗ mark, dim text."""
+    mark = style("✓", GREEN) if ok else style("✗", RED)
+    return f"{mark} {style(text, DIM)}"
+
+
+_MARGIN = " "  # global left margin: every printed line starts off the terminal edge
 
 
 def _emit(line: str) -> None:
@@ -141,7 +151,7 @@ def _emit(line: str) -> None:
     with _stdout_lock:
         if _spinner_active:
             sys.stdout.write("\r\033[2K")
-        print(f"{_indent}{line}" if line else line, file=sys.stdout)
+        print(f"{_MARGIN}{_indent}{line}" if line else line, file=sys.stdout)
 
 
 def pinfo(msg: str) -> None:
@@ -159,14 +169,99 @@ def pdim(msg: str) -> None:
     _emit(style(msg, DIM))
 
 
+def _status_line(ok: bool, msg: str) -> str:
+    """Operation status line: green/red ● by outcome, dim summary text."""
+    mark = style("●", GREEN if ok else RED)
+    return f"{mark} {style(msg, DIM)}"
+
+
+def pstatus(ok: bool, msg: str) -> None:
+    """Print the status line that closes an operation."""
+    _emit(_status_line(ok, msg))
+
+
+def pwarn(msg: str) -> None:
+    """Warning line: yellow '!' mark, dim text — a deviation worth noticing."""
+    _emit(f"{style('!', YELLOW)} {style(msg, DIM)}")
+
+
 def blank() -> None:
     """Print an empty line (never indented)."""
     _emit("")
 
 
-def print_title(text: str) -> None:
-    """Bold title line that opens a mode's output, e.g. '🚆 booking · sj årskort silver · …'."""
-    _emit(style(text, BOLD))
+def prompt(text: str) -> None:
+    """Inline input prompt: cyan '?' marker + text, no trailing newline."""
+    with _stdout_lock:
+        sys.stdout.write(f"{_MARGIN}{_indent}{style('?', CYAN)} {text}")
+        sys.stdout.flush()
+
+
+def ask(text: str) -> str:
+    """Show an inline '?' prompt and read one line of input ('' on EOF)."""
+    prompt(text)
+    try:
+        reply = input()
+        if not sys.stdin.isatty():
+            print()  # close the prompt line when input wasn't echoed
+    except EOFError:
+        print()
+        reply = ""
+    return reply
+
+
+def print_header_box(rows: list[tuple[str, str]]) -> None:
+    """
+    Rounded header banner opening every pass-scoped mode.
+
+    Dim borders and labels, plain values; the first row's value (the
+    operation) is bold. Width fits the longest row.
+    """
+    label_w = max(visible_len(label) for label, _ in rows)
+    body = []
+    for i, (label, value) in enumerate(rows):
+        val = style(value, BOLD) if i == 0 else value
+        body.append(f"{style(pad(label, label_w), DIM)}   {val}")
+    inner = max(visible_len(line) for line in body)
+    bar = style("│", DIM)
+    _emit(style(f"╭{'─' * (inner + 4)}╮", DIM))
+    for line in body:
+        _emit(f"{bar}  {pad(line, inner)}  {bar}")
+    _emit(style(f"╰{'─' * (inner + 4)}╯", DIM))
+
+
+def print_status_card(
+    ok: bool,
+    verdict: str,
+    facts: list[tuple[str, str]] = (),
+    lines: list[str] = (),
+) -> None:
+    """
+    Status card, the result block of card-first modes and failures.
+
+    Coloured dot + bold verdict, blank line, then dim-labelled facts and/or
+    plain indented lines (for detail without natural labels, e.g. config
+    errors), trailing blank.
+    """
+    dot = style("●", GREEN if ok else RED)
+    _emit(f"{dot} {style(verdict, BOLD)}")
+    if facts or lines:
+        blank()
+    for label, value in facts:
+        _emit(_fact_line(label, value))
+    for line in lines:
+        _emit(f"  {line}")
+    blank()
+
+
+def _fact_line(label: str, value: str) -> str:
+    """One card fact: dim 7-char label, plain value (shared card grammar)."""
+    return f"  {style(pad(label, 7), DIM)}   {value}"
+
+
+def print_fact(label: str, value: str) -> None:
+    """Print one card fact at top level (run headers use the same grammar)."""
+    _emit(_fact_line(label, value))
 
 
 def format_duration(iso_duration: str) -> str:
@@ -192,50 +287,6 @@ def format_class_name(raw_name: str) -> str:
     return raw_name.split(",", maxsplit=1)[0].strip()
 
 
-def format_table(headers: list[str], rows: list[list[str]], title: str = "") -> str:
-    """
-    Format data as an aligned text table.
-
-    Args:
-        headers: Column header strings.
-        rows: List of rows, each row a list of cell strings.
-        title: Optional table title.
-
-    Returns:
-        The formatted table as a multi-line string.
-
-    """
-    col_widths = []
-    for i, header in enumerate(headers):
-        max_width = len(header)
-        for row in rows:
-            if i < len(row):
-                max_width = max(max_width, visible_len(row[i]))
-        col_widths.append(max_width + 2)
-
-    total_width = sum(col_widths)
-    separator = style("\u2500" * total_width, DIM)
-
-    lines = []
-    if title:
-        lines.append(style(title.lower(), BOLD))
-
-    lines.append(separator)
-    header_line = "".join(
-        pad(style(h.lower(), BOLD), w) for h, w in zip(headers, col_widths, strict=False)
-    )
-    lines.append(header_line)
-    lines.append(separator)
-
-    for row in rows:
-        cells = []
-        for i, w in enumerate(col_widths):
-            cell = row[i] if i < len(row) else "\u2014"
-            cells.append(pad(cell, w))
-        lines.append("".join(cells))
-
-    lines.append(separator)
-    return "\n".join(lines)
 
 
 def _format_date_label(date_str: str) -> str:
@@ -352,11 +403,12 @@ def print_leg_lines(rows: list[dict]) -> None:
         _emit(line)
 
 
-def print_bookings_table(bookings: list[dict], pass_name: str | None, summary: bool = True) -> None:
+def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
     """
     Print bookings as one card per travel day, legs indented beneath.
 
-    Grouping is by date rather than booking number because with
+    Card-first: no title and no leading blank — the first day header is the
+    headline. Grouping is by date rather than booking number because with
     `book_partial` each leg is its own booking; the booking number is shown
     on every leg line so it is always visible for cancellation.
 
@@ -364,7 +416,6 @@ def print_bookings_table(bookings: list[dict], pass_name: str | None, summary: b
         bookings: Leg rows (sorted by departure) with keys: date, direction,
                   departure, arrival, duration, comfort_class, route,
                   booking_number, past ("Y"/"N"), and optionally train, seat.
-        pass_name: Travel pass name for the title line, or None for no title.
         summary: Print the "N day(s) · N booking(s) · …" footer line.
 
     """
@@ -384,11 +435,10 @@ def print_bookings_table(bookings: list[dict], pass_name: str | None, summary: b
         padded_groups.setdefault(leg.get("date", "\u2014"), []).append(padded)
 
     lines: list[str] = []
-    if pass_name:
-        lines += [style(f"\U0001f3ab {pass_name.lower()}", BOLD)]
-    lines.append("")
     past_legs = 0
-    for date_str, legs in padded_groups.items():
+    for i, (date_str, legs) in enumerate(padded_groups.items()):
+        if i:
+            lines.append("")
         all_past = all(leg.get("past") == "Y" for leg in legs)
         header = day_header(date_str, _group_route(legs), dim=all_past)
         if all_past and not color_enabled():
@@ -396,19 +446,14 @@ def print_bookings_table(bookings: list[dict], pass_name: str | None, summary: b
         lines.append(header)
         past_legs += sum(leg.get("past") == "Y" for leg in legs)
         lines += [f"  {line}" for line in leg_lines(legs)]
-        lines.append("")
 
     if summary:
         n_bookings = len({leg.get("booking_number") for leg in bookings})
-        footer = (
-            f"\U0001f686 {len(groups)} day(s) \u00b7 {n_bookings} booking(s) "
-            f"\u00b7 {len(bookings)} leg(s)"
-        )
+        footer = f"{len(groups)} day(s) \u00b7 {n_bookings} booking(s)"
         if past_legs:
             footer += f" \u00b7 {past_legs} in the past"
-        lines.append(style(footer, DIM))
-    else:
-        lines.pop()  # drop trailing blank line
+        lines.append("")
+        lines.append(_status_line(True, footer))
     for line in lines:
         _emit(line)
 
@@ -447,11 +492,15 @@ def _days_remaining(end_iso: str | None) -> str:
         return "\u2014"
 
 
-def print_travelpasses_table(
+def print_travelpasses(
     travel_passes: list[dict], receipt_info: dict[str, dict] | None = None
 ) -> None:
     """
-    Print travel passes as a formatted table.
+    Print travel passes as cards in the shared card grammar.
+
+    One card per pass: bold name + card number header, then dim-labelled
+    facts (holder, validity with days left, price from the receipt).
+    Unknown facts are omitted rather than shown as placeholders.
 
     Args:
         travel_passes: List of travel pass dicts from the API.
@@ -459,39 +508,41 @@ def print_travelpasses_table(
 
     """
     if not travel_passes:
-        pinfo("no travel passes found")
+        pstatus(False, "no travel passes found")
         return
 
-    headers = ["Name", "Card Number", "Holder", "Valid From", "Valid To", "Days Left", "Price"]
-    rows = []
-
-    for tp in travel_passes:
-        name = tp.get("name", "\u2014")
-        card_number = tp.get("code", "\u2014")
+    for i, tp in enumerate(travel_passes):
+        if i:
+            blank()
+        _emit(f"{style(tp.get('name', '\u2014'), BOLD)}   {tp.get('code', '\u2014')}")
 
         holder_data = tp.get("holder", {})
         first = holder_data.get("firstName", "")
         last = holder_data.get("lastName", "")
         email = holder_data.get("email", "")
-        holder = f"{first} {last} ({email})".strip() if first or last else "\u2014"
+        if first or last:
+            _emit(_fact_line("holder", f"{first} {last} ({email})".strip()))
 
         valid_from = _format_tp_date(tp.get("startTravelValidityDateTime"))
         valid_to = _format_tp_date(tp.get("endTravelValidityDateTime"), exclusive=True)
-        days_left = _days_remaining(tp.get("endTravelValidityDateTime"))
+        if valid_from != "\u2014" or valid_to != "\u2014":
+            valid = f"{valid_from} \u2013 {valid_to}"
+            days_left = _days_remaining(tp.get("endTravelValidityDateTime"))
+            if days_left == "expired":
+                valid += " (expired)"
+            elif days_left != "\u2014":
+                valid += f" ({days_left} days left)"
+            _emit(_fact_line("valid", valid))
 
-        # Try to get price from receipt info
-        price = "\u2014"
         if receipt_info:
-            booking_id = tp.get("travelPassCreationBookingId", "")
-            receipt = receipt_info.get(booking_id)
+            receipt = receipt_info.get(tp.get("travelPassCreationBookingId", ""))
             if receipt:
                 price = _extract_price(receipt)
+                if price != "\u2014":
+                    _emit(_fact_line("price", price))
 
-        rows.append([name, card_number, holder, valid_from, valid_to, days_left, price])
-
-    table = format_table(headers, rows)
-    print(f"\n{table}")
-    pdim(f"{len(travel_passes)} travel pass(es)")
+    blank()
+    pstatus(True, f"{len(travel_passes)} travel pass(es)")
 
 
 def _format_amount(raw_amount: str | float, currency: str = "SEK") -> str:

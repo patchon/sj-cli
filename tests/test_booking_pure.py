@@ -128,15 +128,51 @@ def test_describe_run():
     from tests.conftest import base_cfg
     p = base_cfg(date_start="2026-09-01", date_end="2026-10-30", service_types=["SJ_HIGH"])["search_parameters"]
     assert describe_run(p) == [
-        "Linköping Central ⇄ Stockholm Central · 1 sep – 30 oct 2026 · weekdays",
-        "out 06:59 · back 17:22 · 2 class calm · FULLFLEX · SJ High-speed train",
+        ("route", "Linköping Central ⇄ Stockholm Central"),
+        ("days", "1 sep – 30 oct 2026 · weekdays only"),
+        ("times", "out 06:59 · back 17:22"),
+        ("ticket", "2 class calm · FULLFLEX · SJ High-speed train"),
     ]
     p = base_cfg(roundtrip=False, date_end="2026-09-01", select_closest_ticket_available=False,
                  skip_weekends=False, allow_class_fallback=False, book_partial=True)["search_parameters"]
     assert describe_run(p) == [
-        "Linköping Central → Stockholm Central · 1 sep 2026 · every day except red days",
-        "out 06:59 · 2 class calm · FULLFLEX · exact time only · no class fallback · partial ok",
+        ("route", "Linköping Central → Stockholm Central"),
+        ("days", "1 sep 2026 · every day except red days"),
+        ("times", "out 06:59"),
+        ("ticket", "2 class calm · FULLFLEX · exact time only · no class fallback · partial ok"),
     ]
     p = base_cfg(skip_holidays=False, service_types=["ALL"])["search_parameters"]
-    assert describe_run(p)[0].endswith("weekdays incl. red days")
-    assert describe_run(p)[1] == "out 06:59 · back 17:22 · 2 class calm · FULLFLEX"
+    label, value = describe_run(p)[1]
+    assert label == "days"
+    assert value.endswith("weekdays incl. red days")
+    assert describe_run(p)[3] == ("ticket", "2 class calm · FULLFLEX")
+
+
+def test_confirm_uses_question_prompt(monkeypatch, capsys):
+    from sj_booking import _confirm
+
+    monkeypatch.setattr("builtins.input", lambda: "Y")
+    assert _confirm("cancel booking ERU0HWB2? [y/n]: ") is True
+    assert capsys.readouterr().out.startswith(" ? cancel booking ERU0HWB2? [y/n]: ")
+    monkeypatch.setattr("builtins.input", lambda: "nope")
+    assert _confirm("cancel? [y/n]: ") is False
+
+
+def test_find_offer_id_falls_through_class_chain_on_same_departure():
+    # 1 class requested but the pass only covers 2 class (e.g. Årskort Silver):
+    # the FIRST offer exists at a price > 0, calm/second are 0-price. The §7.2
+    # chain must fall through on the same departure instead of giving up.
+    o = offers(first_price=295)
+    assert find_offer_id(o, "1 class", "FULLFLEX") == ("OFF-calm", "2 class calm")
+    # 2 class falls up to calm when plain second has no 0-price offer
+    assert find_offer_id(offers(second_price=195), "2 class", "FULLFLEX") == (
+        "OFF-calm", "2 class calm",
+    )
+
+
+def test_find_offer_id_honours_allow_fallback_flag():
+    # exact class only when the flag is off — at the offer level too (SPEC §7.2)
+    assert find_offer_id(offers(first_price=295), "1 class", "FULLFLEX",
+                         allow_fallback=False) is None
+    assert find_offer_id(offers(calm_price=None), "2 class calm", "FULLFLEX",
+                         allow_fallback=False) is None

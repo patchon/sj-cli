@@ -5,13 +5,14 @@ import select
 import sys
 
 from sj_client import SJClient
-from sj_errors import SJAuthError
-from sj_output import pinfo, spinner
+from sj_errors import SJAPIError, SJAuthError
+from sj_output import blank, print_status_card, prompt, pwarn, spinner
 from sj_token import TokenManager
 
 logger = logging.getLogger(__name__)
 
 SMS_TIMEOUT_SECONDS = 120
+SMS_CODE_ATTEMPTS = 3
 
 
 def read_sms_code(timeout_seconds: int = SMS_TIMEOUT_SECONDS) -> str | None:
@@ -25,14 +26,13 @@ def read_sms_code(timeout_seconds: int = SMS_TIMEOUT_SECONDS) -> str | None:
         The entered code string, or None if timeout or empty input.
 
     """
-    pinfo(f"enter sms code (timeout {timeout_seconds}s): ")
-    sys.stdout.flush()
+    prompt(f"enter sms code (timeout {timeout_seconds // 60}m): ")
 
     ready, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
-    if not ready:
-        return None
-
-    code = sys.stdin.readline().strip()
+    code = sys.stdin.readline().strip() if ready else ""
+    # Close the prompt line unless the user's Enter already echoed a newline
+    if not code or not sys.stdin.isatty():
+        print()
     return code or None
 
 
@@ -77,6 +77,7 @@ def perform_full_login(
                         with spinner("restoring session"):
                             token_data = client.exchange_code(auth_code)
                         token_manager.save_cookies(client.export_cookies())
+                        blank()
                         return token_data
                     logger.info("silent login failed, falling back to full login")
                 except Exception as e:
@@ -93,33 +94,44 @@ def perform_full_login(
 
         if mfa_required:
             # Step 2: SMS
-            pinfo("sms verification required")
-            client.sms_trigger()
+            with spinner("sending sms code"):
+                client.sms_trigger()
 
-            code = read_sms_code()
-            if not code:
-                raise SJAuthError("sms code not provided or timed out after 2 minutes")
-
-            # Step 3: Verify
-            with spinner("verifying sms code"):
-                client.sms_verify(code)
+            # Step 3: Prompt + verify, retrying on a rejected code (same sms,
+            # never re-sent). B2C answers a bare {"status": "449"} ("retry")
+            # when the code is rejected — translate it, the body says no more.
+            for attempt in range(1, SMS_CODE_ATTEMPTS + 1):
+                code = read_sms_code()
+                if not code:
+                    raise SJAuthError("sms code not provided or timed out after 2 minutes")
+                try:
+                    with spinner("verifying sms code"):
+                        client.sms_verify(code)
+                    break
+                except SJAPIError as e:
+                    if not (e.payload and str(e.payload.get("status")) == "449"):
+                        raise
+                    if attempt == SMS_CODE_ATTEMPTS:
+                        raise SJAuthError(
+                            f"sms code rejected {SMS_CODE_ATTEMPTS} times, "
+                            f"re-run to try again"
+                        ) from e
+                    pwarn(f"sms code rejected, {SMS_CODE_ATTEMPTS - attempt} attempt(s) left")
         else:
-            pinfo("sms verification not required, skipping")
+            logger.info("sms verification not required, skipping")
 
-        # Step 4: Finalize (device registration + extract auth code)
-        with spinner("finalizing login"):
+        # Steps 4+5: finalize (device registration + auth code) and exchange
+        with spinner("completing login"):
             auth_code = client.finalize_login()
-        if not auth_code:
-            raise SJAuthError("could not retrieve authorization code from final redirect")
-
-        # Step 5: Exchange
-        with spinner("exchanging authorization code"):
+            if not auth_code:
+                raise SJAuthError("could not retrieve authorization code from final redirect")
             token_data = client.exchange_code(auth_code)
 
         # Save cookies for future silent logins
         if token_manager:
             token_manager.save_cookies(client.export_cookies())
 
+        blank()
         return token_data
 
     except SJAuthError:
@@ -128,9 +140,56 @@ def perform_full_login(
         raise SJAuthError(f"login failed: {e}") from e
 
 
+def handle_logout(client: SJClient, token_manager: TokenManager) -> None:
+    """
+    Log out: end the sj.se SSO session server-side and delete the local caches.
+
+    The server-side call (OIDC end-session endpoint, authenticated by the
+    cached SSO cookies) is skipped when no cookies are cached. The local
+    caches are cleared even when that call fails.
+
+    Args:
+        client: The SJ HTTP client.
+        token_manager: The token cache manager.
+
+    Raises:
+        SJAuthError: If the server-side logout call failed (caches are
+            cleared regardless).
+
+    """
+    server_error: Exception | None = None
+    cookies = token_manager.load_cookies()
+    printed_trail = False
+    if cookies:
+        printed_trail = True
+        try:
+            with spinner("ending sj.se session"):
+                client.import_cookies(cookies)
+                client.b2c_logout()
+        except Exception as e:
+            logger.warning(f"server-side logout failed: {e}")
+            server_error = e
+
+    removed = []
+    if token_manager.path.exists() or token_manager.cookie_path.exists():
+        printed_trail = True
+        with spinner("removing cached token and cookies"):
+            removed = token_manager.clear()
+
+    if server_error:
+        # Caches are cleared; sj_tool renders the failure card from this.
+        raise SJAuthError(
+            f"server-side logout failed: {server_error} (local caches cleared)"
+        ) from server_error
+
+    if printed_trail:
+        blank()
+    print_status_card(True, "logged out" if removed or cookies else "already logged out")
+
+
 def ensure_authenticated(
     client: SJClient, token_manager: TokenManager, email: str, password: str
-) -> str:
+) -> tuple[str, str]:
     """
     Ensure a valid access token is available.
 
@@ -143,7 +202,9 @@ def ensure_authenticated(
         password: User's password (for full login fallback).
 
     Returns:
-        A valid access token string.
+        (access_token, method) where method says which lifecycle rung
+        supplied the token: "cached" (valid cached token), "refreshed"
+        (silent refresh), or "full" (interactive/cookie full login).
 
     Raises:
         SJAuthError: If all authentication methods fail.
@@ -163,13 +224,13 @@ def ensure_authenticated(
                     new_token = client.refresh_token(token_data["refresh_token"])
                     if new_token:
                         token_manager.save(new_token)
-                        pinfo("session extended via proactive token refresh")
-                        return new_token["access_token"]
+                        logger.info("session extended via proactive token refresh")
+                        return new_token["access_token"], "refreshed"
                 except Exception as e:
                     logger.warning(f"proactive refresh failed: {e}")
                 # Still valid, use current token
             logger.info("using cached access token")
-            return token_data["access_token"]
+            return token_data["access_token"], "cached"
 
         # Expired but has refresh token → try refresh
         if token_manager.has_refresh_token():
@@ -179,20 +240,20 @@ def ensure_authenticated(
                 if new_token:
                     token_manager.save(new_token)
                     logger.info("token refreshed successfully")
-                    return new_token["access_token"]
+                    return new_token["access_token"], "refreshed"
             except Exception as e:
                 logger.warning(f"token refresh failed: {e}")
 
             # Refresh failed, fall through to full login
-            pinfo("token refresh failed, performing full login ...")
+            logger.info("token refresh failed, performing full login ...")
         else:
-            pinfo("refresh token expired, performing full login ...")
+            logger.info("refresh token expired, performing full login ...")
 
     # No token or refresh failed → full login (try cookies first)
-    pinfo("no valid token found, performing full login ...")
+    logger.info("no valid token found, performing full login ...")
     token_data = perform_full_login(client, email, password, token_manager)
     token_manager.save(token_data)
-    return token_data["access_token"]
+    return token_data["access_token"], "full"
 
 
 def ensure_valid_token(
@@ -224,7 +285,7 @@ def ensure_valid_token(
                     new_token = client.refresh_token(token_data["refresh_token"])
                     if new_token:
                         token_manager.save(new_token)
-                        pinfo("session extended via proactive token refresh")
+                        logger.info("session extended via proactive token refresh")
                         return new_token["access_token"]
                 except Exception as e:
                     logger.warning(f"proactive mid-run refresh failed: {e}")
@@ -243,7 +304,7 @@ def ensure_valid_token(
         new_token = client.refresh_token(token_data["refresh_token"])
         if new_token:
             token_manager.save(new_token)
-            pinfo("token refreshed mid-run")
+            logger.info("token refreshed mid-run")
             return new_token["access_token"]
     except Exception as e:
         logger.warning(f"mid-run token refresh failed: {e}")

@@ -2,12 +2,14 @@
 """Entry point for the SJ API client."""
 
 import argparse
+import contextlib
 import logging
 import os
+import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sj_auth import ensure_authenticated
+from sj_auth import ensure_authenticated, handle_logout
 from sj_booking import (
     booking_date_range,
     cleanup_stale_provisionals,
@@ -18,12 +20,24 @@ from sj_booking import (
     handle_list_bookings,
     process_date_range,
 )
-from sj_calendar import parse_api_datetime, sweden_now, to_sweden
+from sj_calendar import SWEDEN, parse_api_datetime, sweden_now, to_sweden
 from sj_client import SJClient
 from sj_config import CfgManager
-from sj_errors import SJAuthError, SJConfigError
+from sj_errors import SJAPIError, SJAuthError, SJConfigError
 from sj_logger import setup_logging
-from sj_output import pdim, pinfo, print_title, print_travelpasses_table, spinner
+from sj_output import (
+    DIM,
+    RED,
+    ask,
+    blank,
+    pinfo,
+    print_fact,
+    print_header_box,
+    print_status_card,
+    print_travelpasses,
+    spinner,
+    style,
+)
 from sj_token import TokenManager
 
 setup_logging(os.getenv("LOG_LEVEL", ""))
@@ -31,34 +45,152 @@ setup_logging(os.getenv("LOG_LEVEL", ""))
 logger = logging.getLogger(__name__)
 
 
+def _parse_one_date(token: str, errors: list[str]):
+    """Parse one YYYY-MM-DD token; echo the value in the error like sj_config does."""
+    try:
+        return datetime.strptime(token, "%Y-%m-%d").date()
+    except ValueError:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", token):
+            errors.append(f"'{token}' is not a real calendar date")
+        else:
+            errors.append(f"'{token}' must be a date formatted YYYY-MM-DD")
+        return None
+
+
+def parse_cancel_dates(value: str) -> tuple[list[str], list[str]]:
+    """
+    Parse the --cancel-date value into individual dates.
+
+    Accepts a date, a comma-separated list, and/or inclusive start..end
+    ranges — mixed freely.
+
+    Validate-first contract: every token is checked and ALL problems are
+    collected before any cancellation work may start.
+
+    Returns:
+        (sorted unique ISO dates, errors). The dates are only meaningful
+        when errors is empty.
+
+    """
+    dates: set = set()
+    errors: list[str] = []
+    for raw in value.split(","):
+        token = raw.strip()
+        if not token:
+            errors.append("empty entry in the date list")
+            continue
+        if ".." in token:
+            parts = token.split("..")
+            if len(parts) != 2:
+                errors.append(f"'{token}' must be a single range start..end")
+                continue
+            start = _parse_one_date(parts[0], errors)
+            end = _parse_one_date(parts[1], errors)
+            if not (start and end):
+                continue
+            if start > end:
+                errors.append(f"range '{token}' must run forwards (start before end)")
+            elif (end - start).days > 366:
+                errors.append(f"range '{token}' spans more than a year")
+            else:
+                curr = start
+                while curr <= end:
+                    dates.add(curr)
+                    curr += timedelta(days=1)
+        else:
+            d = _parse_one_date(token, errors)
+            if d:
+                dates.add(d)
+    if errors:
+        return [], errors
+    return [d.isoformat() for d in sorted(dates)], []
+
+
+def parse_booking_numbers(value: str) -> tuple[list[str], list[str]]:
+    """
+    Parse the --cancel-booking value into booking numbers.
+
+    Comma-separated, case-insensitive, deduplicated with order kept.
+    Validate-first contract: ALL problems are collected before any
+    cancellation work may start; date-like values get a --cancel-date hint.
+
+    Returns:
+        (booking numbers upper-cased, errors). Only meaningful when errors
+        is empty.
+
+    """
+    numbers: list[str] = []
+    errors: list[str] = []
+    date_like = False
+    for raw in value.split(","):
+        token = raw.strip()
+        if not token:
+            errors.append("empty entry in the booking number list")
+            continue
+        if not token.isalnum():
+            errors.append(
+                f"'{token}' is not a booking number (letters and digits only, e.g. 3HT2NEIL)"
+            )
+            if ".." in token or re.search(r"\d{4}-\d{2}-\d{2}", token):
+                date_like = True
+            continue
+        if token.upper() not in numbers:
+            numbers.append(token.upper())
+    if date_like:
+        errors.append("these look like dates — did you mean --cancel-date?")
+    if errors:
+        return [], errors
+    return numbers, []
+
+
 class SJArgumentParser(argparse.ArgumentParser):
-    """ArgumentParser that exits with code 1 on error."""
+    """
+    ArgumentParser in the app's voice.
+
+    Help always ends with a blank line. A usage error shows the full help
+    (not just the usage line) and closes with the red ● status line naming
+    the problem, then exits 1.
+    """
+
+    def print_help(self, file=None):
+        super().print_help(file)
+        print(file=file or sys.stdout)
 
     def error(self, message):
-        self.print_usage(sys.stderr)
-        print(f"error: {message}", file=sys.stderr)
+        self.print_help(sys.stderr)
+        print(f" {style('●', RED)} {style(message, DIM)}", file=sys.stderr)
+        print(file=sys.stderr)
         sys.exit(1)
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments. A mode flag is required; bare invocation prints help."""
     parser = SJArgumentParser(
         description="SJ API client for automated train ticket booking."
     )
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Search and show what would be booked, without booking anything.",
+    )
+    group.add_argument(
         "--book",
         action="store_true",
-        help="Book tickets for real (default is dry-run).",
+        help="Book tickets for real.",
     )
     group.add_argument(
         "--cancel-date",
-        metavar="YYYY-MM-DD",
-        help="Cancel bookings for a specific date.",
+        metavar="DATES",
+        help=(
+            "Cancel bookings for one or more dates: a YYYY-MM-DD date, a "
+            "comma-separated list, and/or inclusive START..END ranges "
+            "(e.g. 2026-09-16,2026-09-21..2026-09-25)."
+        ),
     )
     group.add_argument(
-        "--cancel-bookings",
+        "--cancel-booking",
         metavar="BOOKING_NUMBER",
         help="Cancel booking(s) by number, comma-separated (e.g. 3HT2NEIL or 3HT2NEIL,ABCD1234).",
     )
@@ -73,17 +205,42 @@ def parse_args() -> argparse.Namespace:
         help="Display travel passes with validity and receipt details.",
     )
     group.add_argument(
-        "--login-only",
+        "--login",
         action="store_true",
-        help="Perform login only (authenticate and cache token), then exit.",
+        help="Authenticate and cache the token, then exit.",
     )
     group.add_argument(
-        "--test-if-already-logged-in",
+        "--logout",
         action="store_true",
-        help="Test if a valid cached token exists, exit 0 if yes, 1 if no.",
+        help="Log out: end the sj.se session and delete the cached token and cookies.",
+    )
+    group.add_argument(
+        "--login-status",
+        action="store_true",
+        help="Exit 0 if logged in (valid or refreshable cached token), 1 if not (for scripting).",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+
+    # No implicit default mode: a bare invocation shows the help and fails,
+    # so nothing (not even a read-only search) runs without being asked for.
+    if not any(vars(args).values()):
+        parser.error("no operation given, choose one of the flags above")
+
+    # Validate-first: every cancel date is parsed and checked here, before
+    # any auth or API work can start.
+    if args.cancel_date:
+        args.cancel_dates, errors = parse_cancel_dates(args.cancel_date)
+        if errors:
+            print_status_card(False, "invalid --cancel-date", lines=errors)
+            sys.exit(1)
+    if args.cancel_booking:
+        args.cancel_booking_numbers, errors = parse_booking_numbers(args.cancel_booking)
+        if errors:
+            print_status_card(False, "invalid --cancel-booking", lines=errors)
+            sys.exit(1)
+
+    return args
 
 
 def _is_expired(travel_pass: dict) -> bool:
@@ -131,8 +288,9 @@ def resolve_travel_pass(travel_passes: list) -> dict:
         valid_end = tp.get("endTravelValidityDateTime", "")[:10]
         pinfo(f"  {i}. {name} ({valid_start} → {valid_end})")
 
+    blank()
     while True:
-        choice = input(f"select pass [1-{len(travel_passes)}]: ").strip()
+        choice = ask(f"select pass [1-{len(travel_passes)}]: ").strip()
         try:
             idx = int(choice) - 1
             if 0 <= idx < len(travel_passes):
@@ -192,12 +350,68 @@ def handle_list_travelpasses(client: SJClient, travel_passes: list) -> None:
         if receipt:
             receipt_info[booking_id] = receipt
 
-    print_travelpasses_table(travel_passes, receipt_info)
+    print_travelpasses(travel_passes, receipt_info)
 
 
-def handle_test_logged_in() -> None:
-    """Test if a valid cached token exists and exit accordingly."""
-    tm = TokenManager()
+def _format_epoch(ts) -> str | None:
+    """Format a Unix timestamp as Swedish wall-clock ('fri 22 aug 18:04')."""
+    if not isinstance(ts, (int, float)):
+        return None
+    return datetime.fromtimestamp(ts, tz=SWEDEN).strftime("%a %d %b %H:%M").lower()
+
+
+def _relative_epoch(ts: float) -> str:
+    """Coarse human distance to a future Unix timestamp ('in 23h')."""
+    secs = int(ts - sweden_now().timestamp())
+    if secs < 3600:
+        return f"in {max(1, secs // 60)}m"
+    if secs < 172800:
+        return f"in {secs // 3600}h"
+    return f"in {secs // 86400}d"
+
+
+def _cached_email(tm: TokenManager) -> str | None:
+    """Email from the cached token's profile_info, ignoring a corrupt cache."""
+    with contextlib.suppress(SJAuthError):
+        tm.load()
+    return tm.profile_email()
+
+
+def _print_auth_header(operation: str, email: str | None) -> None:
+    """Header box for the session-scoped auth modes: operation + account."""
+    rows = [("operation", operation)]
+    if email:
+        rows.append(("account", email))
+    print_header_box(rows)
+    blank()
+
+
+def print_login_failed(e: SJAuthError) -> None:
+    """Render the --login failure card, with code/message from an API-error cause."""
+    blank()
+    cause = e.__cause__
+    if isinstance(cause, SJAPIError) and cause.message:
+        facts = [("reason", cause.message)]
+        if cause.code:
+            facts.append(("code", cause.code))
+    else:
+        facts = [("reason", str(e))]
+    print_status_card(False, "login failed", facts)
+
+
+def handle_login_status(tm: TokenManager | None = None, verdict: str = "logged in") -> None:
+    """
+    Report whether the tool is logged in, and exit accordingly.
+
+    "Logged in" means the next run needs no interaction, judged from the
+    cache alone (no network): a valid access token, or a still-usable
+    refresh token — the same ladder ensure_authenticated walks. Cached SSO
+    cookies are not considered; they cannot be verified offline. Renders a
+    status card: who is logged in (email from profile_info), the session
+    horizon (extended automatically by every run) with a relative time, and
+    the access-token expiry — kept even when the token has lapsed.
+    """
+    tm = tm or TokenManager()
     try:
         token_data = tm.load()
     except SJAuthError as e:
@@ -206,18 +420,40 @@ def handle_test_logged_in() -> None:
         sys.exit(1)
 
     if not token_data:
-        pinfo("not logged in: no cached token found")
-        print()
+        print_status_card(
+            False, "not logged in", [("session", "no cached login found · log in with --login")]
+        )
         sys.exit(1)
 
-    if not tm.is_valid():
-        pinfo("not logged in: cached token is expired")
-        print()
-        sys.exit(1)
+    valid = tm.is_valid()
+    refreshable = tm.has_refresh_token()
 
-    pinfo("logged in: valid cached token exists")
-    print()
-    sys.exit(0)
+    if valid or refreshable:
+        facts = []
+        at_exp = token_data.get("expires_on")
+        rt_exp = token_data.get("refresh_token_expires_on")
+        horizon = rt_exp if refreshable and isinstance(rt_exp, (int, float)) else None
+        if horizon is None and valid:
+            horizon = at_exp if isinstance(at_exp, (int, float)) else None
+        if horizon is not None:
+            session = f"valid until {_format_epoch(horizon)} (expires {_relative_epoch(horizon)})"
+        else:
+            session = "renews on next run"
+        facts.append(("session", session))
+
+        at_txt = _format_epoch(at_exp)
+        if valid:
+            if at_txt:
+                facts.append(("token", f"valid until {at_txt}"))
+        else:
+            expired = f"expired {at_txt}" if at_txt else "expired"
+            facts.append(("token", f"{expired} · renews automatically on next run"))
+
+        print_status_card(True, verdict, facts)
+        sys.exit(0)
+
+    print_status_card(False, "not logged in", [("session", "expired · log in with --login")])
+    sys.exit(1)
 
 
 def main():
@@ -225,9 +461,11 @@ def main():
     print()
     args = parse_args()
 
-    # Handle --test-if-already-logged-in early (no config or client needed)
-    if args.test_if_already_logged_in:
-        handle_test_logged_in()
+    # Handle --login-status early (no config or client needed)
+    if args.login_status:
+        tm = TokenManager()
+        _print_auth_header("checking login status", _cached_email(tm))
+        handle_login_status(tm)
 
     client = SJClient()
     try:
@@ -238,33 +476,53 @@ def main():
 
 def _run(args: argparse.Namespace, client: SJClient) -> None:
     """Everything after argument parsing; split out so main() can close the client."""
+    # Handle --logout early: no config needed, only the client (for the
+    # server-side end-session call) and the caches.
+    if args.logout:
+        tm = TokenManager()
+        _print_auth_header("logging out", _cached_email(tm))
+        try:
+            handle_logout(client, tm)
+        except SJAuthError as e:
+            blank()
+            print_status_card(False, "logout failed", lines=[str(e)])
+            sys.exit(1)
+        sys.exit(0)
+
     # 1. Load and validate config
     try:
         cm = CfgManager()
         cfg = cm.load()
         cm.verify_cfg(cfg)
     except SJConfigError as e:
-        pinfo(str(e))
-        print()
+        print_status_card(False, "invalid configuration", lines=e.errors or [str(e)])
         sys.exit(1)
 
     email = cfg["auth"]["email"]
     password = cfg["auth"]["password"]
 
+    # --login opens with its header box before the auth trail
+    if args.login:
+        _print_auth_header("logging in", email)
+
     # 2. Authenticate
     try:
         tm = TokenManager()
-        access_token = ensure_authenticated(client, tm, email, password)
+        access_token, auth_method = ensure_authenticated(client, tm, email, password)
     except SJAuthError as e:
-        pinfo(str(e))
-        print()
+        if args.login:
+            print_login_failed(e)
+        else:
+            pinfo(str(e))
+            print()
         sys.exit(1)
 
-    # Handle --login-only: authenticate and exit
-    if args.login_only:
-        pinfo("login successful, token cached")
-        print()
-        sys.exit(0)
+    # Handle --login: authenticate, then show the same card as --login-status.
+    # A login that needed no full login is "already logged in".
+    if args.login:
+        handle_login_status(
+            tm, verdict="logged in" if auth_method == "full" else "already logged in"
+        )
 
     # 3. Fetch membership and travel pass
     try:
@@ -286,8 +544,13 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             or tp_product_id
         )
 
-        # Title context, lowercase by convention: "sj årskort silver · john doe"
-        who = f"{active_pass.get('name', 'Unknown')} \u00b7 {user_name}".lower()
+        # Header-box identity rows: account is always the second row app-wide;
+        # pass and holder keep their real casing
+        pass_rows = [
+            ("account", email),
+            ("travelpass", active_pass.get("name", "Unknown")),
+            ("holder", user_name),
+        ]
 
     except SystemExit:
         raise
@@ -296,38 +559,48 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         print()
         sys.exit(1)
 
-    # 4. Mode dispatch. Every mode opens with a bold title line; book/dry-run add
-    # two dim lines describing the run (route, dates, times, class, filter).
+    # 4. Mode dispatch. Every pass-scoped mode opens with the header box
+    # (operation / travelpass / holder); auth modes lead with their cards.
     try:
         if args.list_travelpasses:
-            print_title(f"\U0001f3ab travel passes \u00b7 {user_name.lower()}")
+            print_header_box([
+                ("operation", "listing travel passes"), ("account", email), ("holder", user_name),
+            ])
+            blank()
             handle_list_travelpasses(client, travel_passes)
 
         elif args.list_bookings:
-            print_title(f"\U0001f3ab {who}")
+            print_header_box([("operation", "listing bookings"), *pass_rows])
+            blank()
             handle_list_bookings(client, access_token, active_pass)
 
         elif args.cancel_date:
-            print_title(f"\U0001f3ab {who}")
+            print_header_box([("operation", "cancelling bookings"), *pass_rows])
+            blank()
             validate_dates_against_pass(cfg, active_pass)
-            handle_cancel_mode(client, access_token, cfg, args.cancel_date)
+            for i, cancel_date in enumerate(args.cancel_dates):
+                if i:
+                    blank()
+                handle_cancel_mode(client, access_token, cfg, cancel_date)
 
-        elif args.cancel_bookings:
-            print_title(f"\U0001f3ab {who}")
-            booking_numbers = [
-                b.strip().upper() for b in args.cancel_bookings.split(",") if b.strip()
-            ]
-            for bn in booking_numbers:
+        elif args.cancel_booking:
+            print_header_box([("operation", "cancelling bookings"), *pass_rows])
+            blank()
+            for i, bn in enumerate(args.cancel_booking_numbers):
+                if i:
+                    blank()
                 handle_cancel_booking(client, access_token, active_pass, bn)
 
         else:
-            # Default: dry-run. With --book: book for real.
+            # --dry-run or --book (parse_args guarantees one mode is set).
             validate_dates_against_pass(cfg, active_pass)
 
-            mode = "\U0001f686 booking" if args.book else "\U0001f50d dry run"
-            print_title(f"{mode} \u00b7 {who}")
-            for line in describe_run(cfg["search_parameters"]):
-                pdim(line)
+            operation = "booking tickets" if args.book else "dry run · booking tickets"
+            print_header_box([("operation", operation), *pass_rows])
+            blank()
+            for label, value in describe_run(cfg["search_parameters"]):
+                print_fact(label, value)
+            blank()
 
             # Fetch existing bookings for the duplicate check (quietly: a
             # routine step, not part of the day-by-day trail)

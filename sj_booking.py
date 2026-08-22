@@ -10,6 +10,7 @@ from sj_client import SJClient
 from sj_config import SERVICE_TYPE_NAMES
 from sj_errors import SJAPIError
 from sj_output import (
+    ask,
     blank,
     format_class_name,
     format_duration,
@@ -21,6 +22,8 @@ from sj_output import (
     print_day_header,
     print_day_note,
     print_leg_lines,
+    pstatus,
+    pwarn,
     spinner,
 )
 from sj_token import TokenManager
@@ -275,11 +278,11 @@ def select_best_departure(
 
     valid_class = _resolve_class_for_departure(dep, requested_class, allow_fallback)
     if not valid_class:
-        pinfo(f"departure at {time_str}: no matching class available")
+        pwarn(f"departure at {time_str}: no matching class available")
         return None
 
     if valid_class != requested_class:
-        pinfo(f"departure at {time_str}: {requested_class} unavailable, using {valid_class}")
+        pwarn(f"departure at {time_str}: {requested_class} unavailable, using {valid_class}")
 
     target_minutes = time_str_to_minutes(target_time_str)
     dep_minutes = get_departure_time_minutes(dep)
@@ -295,15 +298,25 @@ def select_best_departure(
 
 
 def find_offer_id(
-    offer_response: dict, requested_class: str, requested_flexibility: str
+    offer_response: dict,
+    requested_class: str,
+    requested_flexibility: str,
+    allow_fallback: bool = True,
 ) -> tuple[str, str] | None:
     """
     Parse the get_offers response and find the offerId for a 0-price offer.
+
+    The SPEC §7.2 class-fallback chain applies here too, not only to seat
+    availability: a departure can carry seats in the requested class while
+    the pass has no 0-price offer for it (e.g. 1 class on an Årskort
+    Silver). With allow_fallback, fall through requested → 2 class calm →
+    2 class on this same departure before giving up.
 
     Args:
         offer_response: The offers API response dict.
         requested_class: Requested comfort class.
         requested_flexibility: Requested flexibility (FULLFLEX, SEMIFLEX, NOFLEX).
+        allow_fallback: If False, match only the exact requested class.
 
     Returns:
         Tuple of (offer_id, matched_class) if a 0-price offer is found,
@@ -317,9 +330,14 @@ def find_offer_id(
 
     class_map = {
         "2 class": ["SECOND"],
-        "2 class calm": ["SECOND_CALM", "SECOND"],
+        "2 class calm": ["SECOND_CALM"],
         "1 class": ["FIRST"],
     }
+    if allow_fallback:
+        class_map = {
+            cls: keys + [fb for fb in ("SECOND_CALM", "SECOND") if fb not in keys]
+            for cls, keys in class_map.items()
+        }
 
     api_to_display = {
         "SECOND": "2 class",
@@ -442,7 +460,7 @@ def _try_alternative_departure(
 
     with spinner(f"checking alternative departure at {time_str}"):
         offers = client.get_offers(access_token, dep_id, passenger_token)
-    result = find_offer_id(offers, valid_class, flexibility)
+    result = find_offer_id(offers, valid_class, flexibility, allow_fallback)
     if result:
         offer_id, matched_class = result
         pinfo(f"found offer at alternative departure {time_str}")
@@ -456,7 +474,7 @@ def _try_alternative_departure(
             "departure": dep,
         }
 
-    pinfo(f"alternative departure {time_str} also unavailable, skipping")
+    pwarn(f"alternative departure {time_str} also unavailable, skipping")
     return None
 
 
@@ -575,6 +593,7 @@ def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: li
 
     """
     valid_bookings = []
+    printed_trail = False
     for item in bookings:
         booking = item.get("booking", {})
         b_id = booking.get("bookingId") or booking.get("id") or item.get("bookingId")
@@ -583,13 +602,14 @@ def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: li
         if is_stale_provisional(booking):
             # cancel_provisional_booking() swallows errors and returns False;
             # raise inside the spinner so the trail shows ✗ and we can report it.
+            printed_trail = True
             try:
                 with spinner(f"cancelling stale provisional booking {b_num}"):
                     if not client.cancel_provisional_booking(access_token, b_id):
                         raise SJAPIError(f"cancel request for {b_num} was not accepted")
             except SJAPIError as e:
                 logger.warning(f"failed to cancel provisional booking {b_id}: {e}")
-                pinfo(f"could not cancel stale provisional booking {b_num}, continuing")
+                pwarn(f"could not cancel stale provisional booking {b_num}, continuing")
             continue
 
         if booking.get("bookingStatus") == "CANCELLED":
@@ -597,6 +617,8 @@ def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: li
 
         valid_bookings.append(item)
 
+    if printed_trail:
+        blank()  # separate the cleanup trail from the day cards that follow
     logger.info(f"found {len(valid_bookings)} active bookings after cleanup")
     return valid_bookings
 
@@ -666,18 +688,18 @@ def _resolve_leg(
         return {"found": False}
 
     if best["diff"] != 0:
-        pinfo(
+        pwarn(
             f"no exact match for {target_time}, closest is {best['time_str']} ({best['diff']:+d}m)"
         )
     logger.info(f"selected {label}: {best['time_str']}")
 
     with spinner(f"checking offers for {label} at {best['time_str']}"):
         offers = client.get_offers(access_token, best["id"], passenger_token)
-    offer_result = find_offer_id(offers, best["class"], flexibility)
+    offer_result = find_offer_id(offers, best["class"], flexibility, allow_fallback)
     if offer_result:
         offer_id, matched_class = offer_result
         if matched_class != best["class"]:
-            pinfo(f"{label} class fallback: {best['class']} → {matched_class}")
+            pwarn(f"{label} class fallback: {best['class']} → {matched_class}")
         return {
             "found": True,
             "has_offer": True,
@@ -689,7 +711,7 @@ def _resolve_leg(
             "alternative": False,
         }
 
-    pinfo(f"no valid offer for {label} at {best['time_str']}, trying closest alternative")
+    pwarn(f"no valid offer for {label} at {best['time_str']}, trying closest alternative")
     alt = _try_alternative_departure(
         client,
         access_token,
@@ -818,7 +840,7 @@ def handle_booking_process(
         if dry_run:
             dry_run_result["outbound"] = _dry_run_leg(out, flexibility)
         elif not out["found"]:
-            pinfo("no departure found for outbound")
+            pwarn("no departure found for outbound")
             return None
         elif not out["has_offer"]:
             # Nothing can be booked without an outbound offer; the caller
@@ -837,9 +859,9 @@ def handle_booking_process(
             dry_run_result["inbound"] = _dry_run_leg(inb, flexibility)
         elif not inb["found"]:
             if not booking_id:
-                pinfo("no departure found for inbound")
+                pwarn("no departure found for inbound")
                 return None
-            pinfo("no departure found for inbound, booking outbound only")
+            pwarn("no departure found for inbound, booking outbound only")
         elif not inb["has_offer"]:
             if not booking_id:
                 return None
@@ -1019,7 +1041,7 @@ def process_booking_flow(
     logger.info(f"processing date: {date_str}")
 
     if not (need_outbound or need_inbound):
-        pinfo("already fully booked")
+        pinfo("tickets already booked")
         return None
 
     service_types = params.get("service_types")
@@ -1171,13 +1193,15 @@ def _span_label(start: datetime, end: datetime) -> str:
     return f"{day(start, start.year != end.year)} \u2013 {day(end, True)}"
 
 
-def describe_run(params: dict) -> list[str]:
+def describe_run(params: dict) -> list[tuple[str, str]]:
     """
-    Two detail lines for the run header, derived from the config.
+    Run-header facts derived from the config, in the shared card grammar.
 
     Example:
-        Linköping Central ⇄ Stockholm Central · 1 sep - 30 oct 2026 · weekdays
-        out 06:59 · back 17:22 · 2 class calm · FULLFLEX · SJ High-speed train
+        route     Linköping Central ⇄ Stockholm Central
+        days      1 sep - 30 oct 2026 · weekdays only
+        times     out 06:59 · back 17:22
+        ticket    2 class calm · FULLFLEX · SJ High-speed train
 
     """
     roundtrip = params.get("roundtrip", False)
@@ -1186,20 +1210,16 @@ def describe_run(params: dict) -> list[str]:
     end = datetime.strptime(params["date_end"], "%Y-%m-%d")
     skip_w, skip_h = params.get("skip_weekends", True), params.get("skip_holidays", True)
     days = {
-        (True, True): "weekdays",
+        (True, True): "weekdays only",
         (True, False): "weekdays incl. red days",
         (False, True): "every day except red days",
         (False, False): "every day",
     }[(skip_w, skip_h)]
-    line1 = (
-        f"{params['station_from']} {arrow} {params['station_to']} \u00b7 "
-        f"{_span_label(start, end)} \u00b7 {days}"
-    )
-
-    parts = [f"out {params.get('time_leave')}"]
+    times = [f"out {params.get('time_leave')}"]
     if roundtrip:
-        parts.append(f"back {params.get('time_return')}")
-    parts += [params.get("comfort_class", ""), params.get("flexibility", "")]
+        times.append(f"back {params.get('time_return')}")
+
+    parts = [params.get("comfort_class", ""), params.get("flexibility", "")]
     service_types = params.get("service_types") or []
     if service_types and service_types != ["ALL"]:
         parts.append(", ".join(SERVICE_TYPE_NAMES.get(t, t) for t in service_types))
@@ -1209,12 +1229,16 @@ def describe_run(params: dict) -> list[str]:
         parts.append("no class fallback")
     if params.get("book_partial", False):
         parts.append("partial ok")
-    line2 = " \u00b7 ".join(p for p in parts if p)
-    return [line1, line2]
+    return [
+        ("route", f"{params['station_from']} {arrow} {params['station_to']}"),
+        ("days", f"{_span_label(start, end)} \u00b7 {days}"),
+        ("times", " \u00b7 ".join(times)),
+        ("ticket", " \u00b7 ".join(p for p in parts if p)),
+    ]
 
 
 def _run_summary(counts: dict[str, int], dry_run: bool) -> str:
-    """Footer line: '🚆 12 day(s) · 9 booked · 1 already booked · 2 skipped'."""
+    """Footer line: '12 day(s) · 9 booked · 1 already booked · 2 skipped'."""
     parts = [f"{counts['days']} day(s)"]
     labels = (
         ("booked", "bookable" if dry_run else "booked"),
@@ -1227,8 +1251,7 @@ def _run_summary(counts: dict[str, int], dry_run: bool) -> str:
     parts += [f"{counts[k]} {label}" for k, label in labels if counts.get(k)]
     if dry_run:
         parts.insert(0, "dry run")
-    icon = "\U0001f50d" if dry_run else "\U0001f686"
-    return f"{icon} " + " \u00b7 ".join(parts)
+    return " \u00b7 ".join(parts)
 
 
 def process_date_range(
@@ -1276,7 +1299,8 @@ def process_date_range(
     def count(key: str) -> None:
         counts[key] = counts.get(key, 0) + 1
 
-    blank()
+    # No leading blank: the caller prints one after the run-header facts,
+    # before the bookings fetch, so the live spinner is already separated.
     while curr <= end_date:
         date_str = curr.strftime("%Y-%m-%d")
         counts["days"] += 1
@@ -1294,7 +1318,7 @@ def process_date_range(
 
         need_outbound, need_inbound = plan_day(client, params, existing_bookings, date_str)
         if not (need_outbound or need_inbound):
-            print_day_note(date_str, "already fully booked")
+            print_day_note(date_str, "tickets already booked")
             blank()
             count("already")
             curr += timedelta(days=1)
@@ -1332,7 +1356,7 @@ def process_date_range(
                 booked = _booked_rows(result.get("booking") or {}, result["booking_number"])
                 print_leg_lines(booked)
                 if not result.get("checked_out"):
-                    pinfo("checkout failed, provisional left (cleaned up on next --book run)")
+                    pwarn("checkout failed, provisional left (cleaned up on next --book run)")
                     count("failed")
                 else:
                     wanted = int(need_outbound) + int(need_inbound)
@@ -1347,13 +1371,13 @@ def process_date_range(
             with spinner("waiting before next date", trail=False):
                 time.sleep(2)
 
-    pdim(_run_summary(counts, dry_run))
+    pstatus(True, _run_summary(counts, dry_run))
     return results
 
 
-def _confirm(prompt: str) -> bool:
+def _confirm(question: str) -> bool:
     """Ask a yes/no question on stdin; 'y' and 'yes' (any case) mean yes."""
-    return input(prompt).strip().lower() in ("y", "yes")
+    return ask(question).strip().lower() in ("y", "yes")
 
 
 def handle_cancel_mode(
@@ -1404,7 +1428,8 @@ def handle_cancel_mode(
                         matched_numbers.add(b_num)
 
     if not matched_numbers:
-        pinfo(f"no bookings found for {cancel_date} on route {origin_name} → {dest_name}")
+        blank()
+        pstatus(False, f"no bookings found for {cancel_date} on route {origin_name} → {dest_name}")
         return
 
     # Build a minimal travel_pass dict for handle_cancel_booking
@@ -1453,7 +1478,8 @@ def handle_cancel_booking(
             break
 
     if not matched_item:
-        pinfo(f"no active booking found with number {booking_number}")
+        blank()
+        pstatus(False, f"no active booking found with number {booking_number}")
         return
 
     booking = matched_item.get("booking", {})
@@ -1469,7 +1495,8 @@ def handle_cancel_booking(
         pinfo("  1. confirm the pending cancellation")
         pinfo("  2. revert (undo) the pending cancellation")
         pinfo("  3. do nothing")
-        choice = input("select action [1/2/3]: ").strip()
+        blank()
+        choice = ask("select action [1/2/3]: ").strip()
 
         if choice == "1":
             confirmed = client.finalize_cancellation(access_token, b_id)
@@ -1521,12 +1548,13 @@ def handle_cancel_booking(
                     }
                 )
 
-    print_bookings_table(display_rows, None, summary=False)
+    blank()
+    print_bookings_table(display_rows, summary=False)
     blank()
 
     if not segments_to_cancel:
         if has_past_segment:
-            pinfo("all segments are in the past, nothing to cancel")
+            pstatus(False, "all segments are in the past, nothing to cancel")
         else:
             pinfo("no cancellable segments found")
         return
@@ -1534,7 +1562,8 @@ def handle_cancel_booking(
     # Select which segments to cancel
     if len(segments_to_cancel) == 1:
         if not _confirm(f"cancel booking {booking_number}? [y/n]: "):
-            pinfo("cancellation aborted")
+            blank()
+            pstatus(False, "cancellation aborted")
             return
         selected = segments_to_cancel
     else:
@@ -1547,7 +1576,8 @@ def handle_cancel_booking(
         pinfo("  a. all")
 
         valid_nums = [str(i) for i in range(1, len(segments_to_cancel) + 1)]
-        choice = input(f"select [{'/'.join(valid_nums)}/a]: ").strip()
+        blank()
+        choice = ask(f"select [{'/'.join(valid_nums)}/a]: ").strip()
 
         if choice.upper() == "A":
             selected = segments_to_cancel
@@ -1568,8 +1598,10 @@ def handle_cancel_booking(
         pinfo("selected for cancellation:")
         with indented():
             print_leg_lines([{**seg["_row"], "booking_number": ""} for seg in selected])
+        blank()
         if not _confirm("cancel selected journey(s)? [y/n]: "):
-            pinfo("cancellation aborted")
+            blank()
+            pstatus(False, "cancellation aborted")
             return
 
     # Clean up internal labels before sending to API
@@ -1591,11 +1623,17 @@ def handle_cancel_booking(
     n_total = len(segments_to_cancel)
     if confirmed:
         if n_selected == n_total:
-            pinfo(f"booking {booking_number} cancelled")
+            blank()
+            pstatus(True, f"booking {booking_number} cancelled")
         else:
-            pinfo(f"{n_selected} of {n_total} journey(s) cancelled from booking {booking_number}")
+            blank()
+            pstatus(
+                True,
+                f"{n_selected} of {n_total} journey(s) cancelled from booking {booking_number}",
+            )
     else:
-        pinfo(f"cancellation initiated but confirmation failed for {booking_number}")
+        blank()
+        pstatus(False, f"cancellation initiated but confirmation failed for {booking_number}")
 
 
 def handle_list_bookings(
@@ -1625,13 +1663,13 @@ def handle_list_bookings(
                 display_rows.append(row)
 
     if not display_rows:
-        pinfo(f"no bookings found between {b_start} and {b_end}")
+        pstatus(False, f"no bookings found between {b_start} and {b_end}")
         return
 
     # Sort by date, then departure time
     display_rows.sort(key=lambda r: r.pop("_sort_key", ""))
 
-    print_bookings_table(display_rows, None)
+    print_bookings_table(display_rows)
 
 
 def _get_arrival_time(departure: dict) -> str:

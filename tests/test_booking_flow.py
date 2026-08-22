@@ -65,7 +65,7 @@ def test_outbound_no_offer_uses_closest_earlier_alternative(capsys):
     creates = [x for x in c.calls if x[0] in ("create", "offers")]
     assert creates[:3] == [("offers", "o-best"), ("offers", "o-early"), ("create", "OFF-calm")]
     out = capsys.readouterr().out
-    assert "no valid offer for outbound at 06:59, trying closest alternative" in out
+    assert "! no valid offer for outbound at 06:59, trying closest alternative" in out
     assert "found offer at alternative departure 06:30" in out
 
 
@@ -137,7 +137,7 @@ def test_class_fallback_message_when_offer_class_differs(capsys):
     result = flow(c)
     assert result["legs"] == ["outbound", "return"]
     assert ("create", "OFF-second") in c.calls
-    assert "outbound class fallback: 2 class calm → 2 class" in capsys.readouterr().out
+    assert "! outbound class fallback: 2 class calm → 2 class" in capsys.readouterr().out
 
 
 def test_booking_number_is_read_from_nested_booking_object():
@@ -165,7 +165,7 @@ def test_fully_booked_day_is_skipped(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN})
     assert flow(c, existing=[existing(LKP, STH), existing(STH, LKP)]) is None
     assert not [x for x in c.calls if x[0] != "resolve"]
-    assert "already fully booked" in capsys.readouterr().out
+    assert "tickets already booked" in capsys.readouterr().out
 
 
 def test_only_missing_leg_is_searched_one_way(capsys):
@@ -255,39 +255,42 @@ def test_book_mode_prints_day_cards_notes_and_summary(capsys):
     assert "  ← 17:22 – 21:53   4h 37m   X 2000 543   carriage 3 seat 17   2 klass Lugn   NUM1\n" in out
     # one-line days
     assert "sat 05 sep 2026   weekend\n" in out and "sun 06 sep 2026   weekend\n" in out
-    assert "mon 07 sep 2026   already fully booked\n" in out
+    assert "mon 07 sep 2026   tickets already booked\n" in out
     assert "tue 08 sep 2026   Linköping Central ⇄ Stockholm Central\n" in out
     # no date/route repetition inside the card, no 'done', summary footer instead
     assert "searching 2026-09-04" not in out and "done" not in out
-    assert "🚆 5 day(s) · 2 booked · 1 already booked · 2 skipped" in out
+    assert "\n ● 5 day(s) · 2 booked · 1 already booked · 2 skipped" in out
 
 
 def test_book_mode_card_for_failed_day(capsys):
     c = FakeClient({"OUT": [], "IN": IN})
     run_range(c, base_cfg(), dry_run=False)
     out = capsys.readouterr().out
-    assert "tue 01 sep 2026   Linköping Central ⇄ Stockholm Central\n  ✓ searching outbound at 06:59\n" in out
-    assert "  no departure found for outbound\n  nothing booked\n" in out
-    assert "🚆 1 day(s) · 1 not booked" in out
+    assert "tue 01 sep 2026   Linköping Central ⇄ Stockholm Central\n   ✓ searching outbound at 06:59\n" in out
+    assert "  ! no departure found for outbound\n   nothing booked\n" in out
+    assert "\n ● 1 day(s) · 1 not booked" in out
 
 
 def test_book_mode_checkout_failure_is_counted(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN}, checkout_ok=False)
     run_range(c, base_cfg(), dry_run=False)
     out = capsys.readouterr().out
-    assert "  checkout failed, provisional left (cleaned up on next --book run)\n" in out
-    assert "🚆 1 day(s) · 1 checkout failed" in out
+    assert "  ! checkout failed, provisional left (cleaned up on next --book run)\n" in out
+    assert "\n ● 1 day(s) · 1 checkout failed" in out
 
 
 def test_dry_run_prints_cards_with_notes_and_returns_rows(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN}, {"i-best": NO_OFFER, "i-late": NO_OFFER})
     rows = run_range(c, base_cfg(), dry_run=True)
     out = capsys.readouterr().out
+    # the blank before the first card is the caller's (printed before the
+    # bookings fetch); process_date_range starts with the card itself
+    assert not out.startswith("\n")
     assert [r["direction"] for r in rows] == ["Outbound", "Return"]
     assert rows[0]["note"] == "" and rows[1]["note"] == "no 0-price offer"
     assert "  → 06:59 – 11:36   4h 37m   X 2000 O-BEST   2 class calm   FULLFLEX\n" in out
     assert "  ← 17:22 – 21:53   4h 37m   X 2000 I-BEST   2 class calm   no 0-price offer\n" in out
-    assert "🔍 dry run · 1 day(s) · 1 partly bookable" in out
+    assert "\n ● dry run · 1 day(s) · 1 partly bookable" in out
     assert not [x for x in c.calls if x[0] in ("create", "add", "customer", "checkout")]
 
 
@@ -299,4 +302,4 @@ def test_process_date_range_survives_per_date_exception(capsys):
     assert rows == []
     out = capsys.readouterr().out
     assert "  error: api down\n" in out
-    assert "🔍 dry run · 1 day(s) · 1 unavailable" in out
+    assert "\n ● dry run · 1 day(s) · 1 unavailable" in out

@@ -6,13 +6,22 @@ API as the web app (reverse-engineered), so it can authenticate, search, pick th
 find the 0-price pass-holder offer and check out, day after day, skipping weekends and Swedish red
 days and never double-booking a day that is already covered.
 
-Dry run is the default; nothing is booked until you pass `--book`.
+Nothing is booked until you pass `--book`; `--dry-run` shows what would be booked. A mode flag
+is always required — running the tool bare just prints the help.
 
 ```
 $ python3 sj_tool.py --book
-🚆 booking · sj årskort silver · first last
-Linköping Central ⇄ Stockholm Central · 1 sep – 30 oct 2026 · weekdays
-out 06:59 · back 17:22 · 2 class calm · FULLFLEX · SJ High-speed train
+╭──────────────────────────────────╮
+│  operation    booking tickets    │
+│  account      user@example.com   │
+│  travelpass   SJ Årskort Silver  │
+│  holder       First Last         │
+╰──────────────────────────────────╯
+
+  route     Linköping Central ⇄ Stockholm Central
+  days      1 sep – 30 oct 2026 · weekdays only
+  times     out 06:59 · back 17:22
+  ticket    2 class calm · FULLFLEX · SJ High-speed train
 
 tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
   ✓ searching outbound at 06:59
@@ -25,17 +34,20 @@ tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
   → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
   ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
 
-wed 16 sep 2026   already fully booked
+wed 16 sep 2026   tickets already booked
 
 sat 19 sep 2026   weekend
 
-🚆 3 day(s) · 1 booked · 1 already booked · 1 skipped
+3 day(s) · 1 booked · 1 already booked · 1 skipped
 ```
 
-Every mode prints the same shape: a title line (book and dry run add two lines describing the
-run from your config), a dim progress trail, one card per travel day (bold date + route, legs
-beneath), and a dim summary. Dry run shows the legs it *would* book in
-the same cards; `--list-bookings` shows what is booked.
+Every pass-scoped mode (book, dry run, cancel, list) opens with a header box naming the
+operation, configured account, travel pass and holder. Book and dry run follow with the run's config as labelled
+facts, a dim progress trail, one card per travel day (bold date + route, legs beneath), and a
+dim summary; dry run shows the legs it *would* book in the same cards. `--list-bookings` shows
+the booked day cards with a `N day(s) · N booking(s)` footer, `--list-travelpasses` one card per
+pass. The auth modes (`--login`, `--logout`, `--login-status`) answer with a status card instead:
+a green/red dot + verdict, then labelled facts (account, session horizon, token expiry).
 
 ## Requirements
 
@@ -92,27 +104,30 @@ Uppsala, Lund — "Central"/"C" spellings, case-insensitive).
 ```bash
 source venv/bin/activate
 
-python3 sj_tool.py                         # dry run (default): show what would be booked
+python3 sj_tool.py --dry-run               # show what would be booked, without booking
 python3 sj_tool.py --book                  # book for real
 python3 sj_tool.py --list-bookings         # active bookings as one card per travel day
 python3 sj_tool.py --list-travelpasses     # passes with validity, days left and price
-python3 sj_tool.py --cancel-date 2026-09-16        # cancel that day's bookings on the configured route
-python3 sj_tool.py --cancel-bookings JS3TWMF1,ABCD1234   # cancel by booking number (any case)
-python3 sj_tool.py --login-only            # authenticate, cache the token, exit
-python3 sj_tool.py --test-if-already-logged-in   # exit 0 if a valid cached token exists (scripting)
+python3 sj_tool.py --cancel-date 2026-09-16                # cancel that day's bookings on the configured route
+python3 sj_tool.py --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
+python3 sj_tool.py --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
+python3 sj_tool.py --login                 # authenticate, cache the token, exit
+python3 sj_tool.py --logout                # end the sj.se session, delete cached token + cookies
+python3 sj_tool.py --login-status          # exit 0 if logged in — valid or refreshable token (scripting)
 
-LOG_LEVEL=DEBUG python3 sj_tool.py         # diagnostics on stderr (TRACE adds httpx wire logs)
-NO_COLOR=1 python3 sj_tool.py              # plain output (also automatic when piped)
+LOG_LEVEL=DEBUG python3 sj_tool.py --dry-run   # diagnostics on stderr (TRACE adds httpx wire logs)
+NO_COLOR=1 python3 sj_tool.py --dry-run        # plain output (also automatic when piped)
 ```
 
-Flags are mutually exclusive. Exit code 0 on success, 1 on any failure, 130 on Ctrl-C.
+Flags are mutually exclusive and one mode flag is required (a bare run prints the help and
+exits 1). Exit code 0 on success, 1 on any failure, 130 on Ctrl-C.
 
 ### First login
 
 The first run performs the sj.se B2C login and asks for an SMS code (2-minute timeout). Tokens
 are cached in `~/.cache/sj-api-client/token.json` and refreshed automatically; SSO cookies are
-cached next to it so later full logins usually skip the SMS step. Delete the cache directory to
-force a fresh login.
+cached next to it so later full logins usually skip the SMS step. `--logout` ends the sj.se
+session and deletes both caches — the next login then needs the SMS step again.
 
 ## How a day is booked
 
@@ -137,7 +152,7 @@ duplicate booking. Full details, edge cases and message catalogue: [`SPEC.md`](S
 ## Development
 
 ```bash
-./venv/bin/pytest      # ~80 tests, <1 s, no network (scripted fake client)
+./venv/bin/pytest      # ~140 tests, <1 s, no network (scripted fake client)
 ruff check .           # lint; ruff.toml selects ALL with documented ignores
 ```
 
