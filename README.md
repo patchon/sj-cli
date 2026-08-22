@@ -67,7 +67,7 @@ cp config.example.toml ~/.config/sj-api-client/config.toml
 $EDITOR ~/.config/sj-api-client/config.toml      # credentials, route, dates, times
 ```
 
-Or skip the copy: on first run (in a terminal) the tool offers to create the config for you —
+Or skip the copy: run `--login` in a terminal and the tool offers to create the config for you —
 it asks for your SJ credentials (password never echoed), writes the documented template with
 them filled in (file mode 0600), and carries straight on with whatever you asked — `--login`
 logs in right away. Only booking and date-based cancelling need `[search_parameters]` (route,
