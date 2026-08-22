@@ -172,3 +172,119 @@ def test_stale_provisional_cleanup_reports_the_cause_and_continues(capsys):
         "! could not cancel stale provisional booking PROV1 (E7 · not cancellable), continuing"
         in out
     )
+
+
+# --- stale-provisional cleanup: only our own, only when old enough ----------
+
+
+class RecordingProvisionalClient:
+    def __init__(self):
+        self.cancelled = []
+
+    def cancel_provisional_booking(self, token, booking_id):
+        self.cancelled.append(booking_id)
+
+
+def _provisional(number, origin, dest, created):
+    item = _bookings(number)[0]
+    item["bookingId"] = number
+    b = item["booking"]
+    b["bookingId"] = number
+    b["bookingStatus"] = "NEW"
+    b["created"] = created
+    for journey in b["journeys"]:
+        for seg in journey["segments"]:
+            seg["departureStation"]["uicStationCode"] = origin
+            seg["arrivalStation"]["uicStationCode"] = dest
+    return item
+
+
+def test_stale_cleanup_spares_other_routes_and_fresh_provisionals(capsys):
+    from datetime import datetime, timedelta
+
+    from sj_api_client.booking import cleanup_stale_provisionals
+    from sj_api_client.dates import SWEDEN
+
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=SWEDEN)
+    old = (now - timedelta(minutes=30)).isoformat()
+    fresh = (now - timedelta(minutes=2)).isoformat()
+    items = [
+        _provisional("OURS", "1", "2", old),  # our route, old: an interrupted run
+        _provisional("BACK", "2", "1", old),  # our route, return direction
+        _provisional("CART", "9", "8", old),  # someone's cart on another route
+        _provisional("LIVE", "1", "2", fresh),  # our route but in flight right now
+        _provisional("NOTS", "1", "2", None),  # our route, no timestamp to judge by
+        _bookings("NUM2")[0],  # a real booking
+    ]
+    c = RecordingProvisionalClient()
+    kept = cleanup_stale_provisionals(c, "tok", items, route=("1", "2"), now=now)
+    assert c.cancelled == ["OURS", "BACK", "NOTS"]
+    assert [i["booking"]["bookingNumber"] for i in kept] == ["NUM2"]
+    out = capsys.readouterr().out
+    assert "✓ cancelling stale provisional booking OURS" in out
+    assert "! leaving recent provisional booking LIVE alone (created 2m ago)" in out
+    assert "CART" not in out  # not ours: not touched, not mentioned
+
+
+# --- --cancel-date cancels only that day's journeys -------------------------
+
+
+class RouteCancelClient(RecordingCancelClient):
+    STATIONS = {"Linköping Central": "740000009", "Stockholm Central": "740000001"}
+
+    def resolve_station(self, name):
+        return self.STATIONS.get(name, name)
+
+
+def _two_day_booking():
+    item = _bookings()[0]
+    out_seg = item["booking"]["journeys"][0]["segments"][0]
+    in_seg = item["booking"]["journeys"][1]["segments"][0]
+    out_seg["departureStation"] = {"name": "Linköping Central", "uicStationCode": "740000009"}
+    out_seg["arrivalStation"] = {"name": "Stockholm Central", "uicStationCode": "740000001"}
+    in_seg["departureStation"] = {"name": "Stockholm Central", "uicStationCode": "740000001"}
+    in_seg["arrivalStation"] = {"name": "Linköping Central", "uicStationCode": "740000009"}
+    in_seg["departureDateTime"] = "2099-09-25T17:22:00+02:00"
+    in_seg["arrivalDateTime"] = "2099-09-25T21:53:00+02:00"
+    return [item]
+
+
+def test_cancel_date_only_cancels_the_journeys_on_that_date(monkeypatch, capsys):
+    from sj_api_client.booking import handle_cancel_mode
+    from tests.fakes import base_cfg
+
+    monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: _two_day_booking())
+    c = RouteCancelClient()
+    asked = []
+    monkeypatch.setattr(booking, "ask", lambda text: asked.append(text) or "y")
+    assert handle_cancel_mode(c, "tok", base_cfg(), "2099-09-25") is True
+    # only the 25th's journey goes to the API, never the 24th's
+    assert c.patches == [("U1", [{"serviceIdentifier": "s2", "passengerIds": ["p1"]}])]
+    out = capsys.readouterr().out
+    assert "fri 25 sep 2099" in out
+    assert "thu 24 sep 2099" not in out  # the other day's journey is not shown as cancellable
+    assert asked == ["cancel this journey from booking NUM1? [y/n]: "]
+    assert "1 other journey in booking NUM1 on other dates is kept" in out
+    assert "● 1 of 2 journey(s) cancelled from booking NUM1" in out
+
+
+def test_cancel_date_dry_run_counts_only_that_date(monkeypatch, capsys):
+    from sj_api_client.booking import handle_cancel_mode
+    from tests.fakes import base_cfg
+
+    monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: _two_day_booking())
+    assert handle_cancel_mode(RouteCancelClient(), "tok", base_cfg(), "2099-09-24", dry_run=True)
+    assert (
+        "● dry run · 1 journey(s) would be cancelled from booking NUM1" in capsys.readouterr().out
+    )
+
+
+def test_cancel_passenger_ids_skip_explicit_null_ids(monkeypatch):
+    items = _bookings()
+    for journey in items[0]["booking"]["journeys"]:
+        journey["segments"][0]["passengers"] = [{"id": None, "passengerId": "P9"}, {"id": None}]
+    monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: items)
+    c = RecordingCancelClient()
+    _answers(monkeypatch, "a", "y")
+    assert handle_cancel_booking(c, "tok", {}, "NUM1") is True
+    assert c.patches[0][1][0]["passengerIds"] == ["P9"]

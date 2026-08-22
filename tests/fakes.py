@@ -65,6 +65,7 @@ class FakeClient:
             "returnDepartureSearchId": "IN",
         }
         self.calls: list[tuple] = []
+        self.customer_updates: list[tuple] = []
         self._booking_counter = 0
         self._last_dep: dict | None = None
         self._bookings: dict[str, dict] = {}
@@ -122,6 +123,7 @@ class FakeClient:
         self._bookings[booking_id] = {
             "bookingNumber": f"NUM{self._booking_counter}",
             "bookingStatus": "NEW",
+            "customer": {"email": "a@b.se", "phoneNumber": "+46701112233"},
             "journeys": [{"segments": [self._segment("OUTBOUND")]}],
         }
         return self._response(booking_id)
@@ -131,8 +133,9 @@ class FakeClient:
         self._bookings[booking_id]["journeys"].append({"segments": [self._segment("INBOUND")]})
         return self._response(booking_id)
 
-    def update_booking_customer(self, token, booking_id, email, phone):
+    def update_booking_customer(self, token, booking_id, email, phone=None):
         self.calls.append(("customer", booking_id))
+        self.customer_updates.append((booking_id, email, phone))
         return {}
 
     def checkout_booking(self, token, booking_id):
@@ -167,3 +170,15 @@ def base_cfg(**overrides):
     }
     params.update(overrides)
     return {"auth": {"email": "a@b.se", "password": "x"}, "search_parameters": params}
+
+
+def future_cfg(**overrides):
+    """base_cfg with a date window that validates whatever today is (today+30 .. today+60)."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    dates = {
+        "date_start": (today + timedelta(days=30)).isoformat(),
+        "date_end": (today + timedelta(days=60)).isoformat(),
+    }
+    return base_cfg(**{**dates, **overrides})

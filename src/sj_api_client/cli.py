@@ -23,7 +23,7 @@ from sj_api_client.booking import (
 from sj_api_client.client import SJClient
 from sj_api_client.config import CfgManager
 from sj_api_client.dates import SWEDEN, parse_api_datetime, sweden_now, to_sweden
-from sj_api_client.errors import SJAPIError, SJAuthError, SJConfigError
+from sj_api_client.errors import SJAPIError, SJAuthError, SJConfigError, error_text
 from sj_api_client.logger import setup_logging
 from sj_api_client.output import (
     DIM,
@@ -35,6 +35,8 @@ from sj_api_client.output import (
     print_header_box,
     print_status_card,
     print_travelpasses,
+    pstatus,
+    pwarn,
     spinner,
     style,
 )
@@ -56,6 +58,14 @@ def _parse_one_date(token: str, errors: list[str]) -> date | None:
         else:
             errors.append(f"'{token}' must be a date formatted YYYY-MM-DD")
         return None
+
+
+def _anniversary(d: date) -> date:
+    """The same calendar date next year (29 Feb → 1 Mar)."""
+    try:
+        return d.replace(year=d.year + 1)
+    except ValueError:
+        return date(d.year + 1, 3, 1)
 
 
 def parse_cancel_dates(value: str) -> tuple[list[str], list[str]]:
@@ -91,7 +101,7 @@ def parse_cancel_dates(value: str) -> tuple[list[str], list[str]]:
                 continue
             if start > end:
                 errors.append(f"range '{token}' must run forwards (start before end)")
-            elif (end - start).days > 366:
+            elif end >= _anniversary(start):  # a calendar year at most, leap day included
                 errors.append(f"range '{token}' spans more than a year")
             else:
                 curr = start
@@ -168,7 +178,11 @@ class SJArgumentParser(argparse.ArgumentParser):
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments. A mode flag is required; bare invocation prints help."""
-    parser = SJArgumentParser(description="SJ API client for automated train ticket booking.")
+    # allow_abbrev=False: argparse would otherwise take any unique prefix as
+    # an alias, so that `--logo` (a typo of --login) logs the user out.
+    parser = SJArgumentParser(
+        description="SJ API client for automated train ticket booking.", allow_abbrev=False
+    )
 
     parser.add_argument(
         "--dry-run",
@@ -227,27 +241,53 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
 
     # No implicit default mode: a bare invocation (or a bare --dry-run, which
-    # is only a modifier) shows the help and fails.
-    if not any(v for k, v in vars(args).items() if k != "dry_run"):
+    # is only a modifier) shows the help and fails. An empty value (`--cancel-date ""`)
+    # is an operation with an invalid argument, reported as such below.
+    given = [k for k, v in vars(args).items() if k != "dry_run" and v not in (None, False)]
+    if not given:
         parser.error("no operation given, choose one of the flags above")
 
-    if args.dry_run and not (args.book or args.cancel_date or args.cancel_booking):
+    if args.dry_run and not (
+        args.book or args.cancel_date is not None or args.cancel_booking is not None
+    ):
         parser.error("--dry-run only applies to --book, --cancel-date and --cancel-booking")
 
     # Validate-first: every cancel date is parsed and checked here, before
     # any auth or API work can start.
-    if args.cancel_date:
+    if args.cancel_date is not None:
         args.cancel_dates, errors = parse_cancel_dates(args.cancel_date)
         if errors:
             print_status_card(False, "invalid --cancel-date", lines=errors)
             sys.exit(1)
-    if args.cancel_booking:
+    if args.cancel_booking is not None:
         args.cancel_booking_numbers, errors = parse_booking_numbers(args.cancel_booking)
         if errors:
             print_status_card(False, "invalid --cancel-booking", lines=errors)
             sys.exit(1)
 
     return args
+
+
+def _pass_validity(travel_pass: dict) -> tuple[date | None, date | None]:
+    """
+    (first valid day, last valid day) of a pass as Swedish calendar dates.
+
+    The API's validity instants are midnight UTC and the end is exclusive
+    (the day after the last valid day). None for an unknown or unparsable
+    bound.
+    """
+
+    def day(key: str, exclusive: bool) -> date | None:
+        raw = travel_pass.get(key)
+        if not raw:
+            return None
+        try:
+            local = to_sweden(raw)
+        except (ValueError, TypeError):
+            return None
+        return (local - timedelta(days=1)).date() if exclusive else local.date()
+
+    return day("startTravelValidityDateTime", False), day("endTravelValidityDateTime", True)
 
 
 def _is_expired(travel_pass: dict) -> bool:
@@ -261,18 +301,35 @@ def _is_expired(travel_pass: dict) -> bool:
         return False
 
 
-def resolve_travel_pass(travel_passes: list) -> dict:
+def _covers(travel_pass: dict, window: tuple[date, date]) -> bool:
+    """True if the pass's known validity contains the whole window."""
+    first, last = _pass_validity(travel_pass)
+    if first is None or last is None:
+        return False
+    return first <= window[0] and window[1] <= last
+
+
+def resolve_travel_pass(
+    travel_passes: list,
+    for_dates: tuple[date, date] | None = None,
+    choose: bool = True,
+) -> dict:
     """
     Select the travel pass to use.
 
-    Expired passes are dropped (SPEC §9.1). Auto-picks if only one pass
-    remains. Prompts for selection if multiple.
+    Expired passes are dropped (SPEC §9.1). One pass left: that one. Several:
+    the single pass whose validity covers ``for_dates`` (a renewal bought
+    ahead never needs a question); otherwise a numbered prompt — only at a
+    terminal, and an empty answer (Ctrl-D) ends the run rather than asking
+    forever. With ``choose`` false (modes that only need a date range, not
+    a product) the longest-lived pass is taken silently.
 
     Returns:
         The selected travel pass dict.
 
     Raises:
-        SystemExit: If no valid passes found.
+        SystemExit: If no valid pass exists, no terminal is there to choose
+            at, or nothing was chosen.
 
     """
     valid = [tp for tp in travel_passes if not _is_expired(tp)]
@@ -280,45 +337,73 @@ def resolve_travel_pass(travel_passes: list) -> dict:
         logger.info(f"ignoring {len(travel_passes) - len(valid)} expired travel pass(es)")
 
     if not valid:
-        pinfo("no valid travel pass found" if travel_passes else "no travel pass found")
+        pstatus(False, "no valid travel pass found" if travel_passes else "no travel pass found")
+        print()
         sys.exit(1)
-    travel_passes = valid
 
-    if len(travel_passes) == 1:
-        return travel_passes[0]
+    if len(valid) == 1:
+        return valid[0]
 
-    # Multiple passes: prompt for selection
+    if for_dates:
+        covering = [tp for tp in valid if _covers(tp, for_dates)]
+        if len(covering) == 1:
+            logger.info(f"using the pass that covers {for_dates[0]} – {for_dates[1]}")
+            return covering[0]
+        if covering:
+            valid = covering
+
+    if not choose:
+        return max(valid, key=lambda tp: tp.get("endTravelValidityDateTime") or "")
+
+    if not sys.stdin.isatty():
+        pstatus(False, f"{len(valid)} valid travel passes · run in a terminal to choose one")
+        print()
+        sys.exit(1)
+
     pinfo("available travel passes:")
-    for i, tp in enumerate(travel_passes, 1):
+    for i, tp in enumerate(valid, 1):
         name = tp.get("name", "Unknown")
-        valid_start = (tp.get("startTravelValidityDateTime") or "")[:10]
-        valid_end = (tp.get("endTravelValidityDateTime") or "")[:10]
-        pinfo(f"  {i}. {name} ({valid_start} → {valid_end})")
+        first, last = _pass_validity(tp)
+        pinfo(f"  {i}. {name} ({first or '\u2014'} \u2192 {last or '\u2014'})")
 
     blank()
     while True:
-        choice = ask(f"select pass [1-{len(travel_passes)}]: ").strip()
+        choice = ask(f"select pass [1-{len(valid)}]: ").strip()
+        if not choice:  # end of input, or an empty answer: not a selection
+            blank()
+            pstatus(False, "no travel pass selected")
+            print()
+            sys.exit(1)
         try:
             idx = int(choice) - 1
-            if 0 <= idx < len(travel_passes):
-                return travel_passes[idx]
+            if 0 <= idx < len(valid):
+                return valid[idx]
         except ValueError:
             pass
         pinfo("invalid selection, try again")
 
 
-def validate_dates_against_pass(cfg: dict, travel_pass: dict) -> None:
+def booking_window(params: dict, today: date | None = None) -> tuple[date, date]:
+    """The dates a --book run will actually walk: date_start clamped to today, date_end."""
+    today = today or sweden_now().date()
+    start = date.fromisoformat(params["date_start"])
+    end = date.fromisoformat(params["date_end"])
+    return max(start, today), end
+
+
+def validate_dates_against_pass(cfg: dict, travel_pass: dict, today: date | None = None) -> None:
     """
-    Validate that search dates fall within travel pass validity.
+    Validate that the booking window falls within the travel pass validity.
+
+    The window starts today when date_start lies in the past (the booking
+    loop does the same), so a standing config keeps working on later runs.
 
     Raises:
         SystemExit: If dates are outside validity.
 
     """
-    valid_start = travel_pass.get("startTravelValidityDateTime")
-    valid_end = travel_pass.get("endTravelValidityDateTime")
-
-    if not valid_start or not valid_end:
+    vp_start, vp_end = _pass_validity(travel_pass)
+    if vp_start is None or vp_end is None:
         return
 
     # Compare Swedish calendar dates: config dates are Swedish dates, and the
@@ -326,18 +411,15 @@ def validate_dates_against_pass(cfg: dict, travel_pass: dict) -> None:
     # datetime comparison would reject the pass's first day. The end instant
     # is exclusive — the day after the last valid day — exactly as
     # --list-travelpasses shows it.
-    vp_start = to_sweden(valid_start).date()
-    vp_end = (to_sweden(valid_end) - timedelta(days=1)).date()
-
-    params = cfg.get("search_parameters", {})
-    s_start = date.fromisoformat(params["date_start"])
-    s_end = date.fromisoformat(params["date_end"])
+    s_start, s_end = booking_window(cfg.get("search_parameters", {}), today)
 
     if s_start < vp_start or s_end > vp_end:
-        pinfo(
-            f"search dates ({params['date_start']} – {params['date_end']}) "
-            f"are outside travel pass validity ({vp_start} – {vp_end})\n"
+        pstatus(
+            False,
+            f"search dates ({s_start} \u2013 {s_end}) "
+            f"are outside travel pass validity ({vp_start} \u2013 {vp_end})",
         )
+        print()
         sys.exit(1)
 
 
@@ -350,7 +432,13 @@ def handle_list_travelpasses(client: SJClient, travel_passes: list) -> None:
         if not booking_id:
             continue
 
-        receipts = client.get_receipt_search(booking_id)
+        # The receipt is a detail (the price): a failure must not hide the cards
+        try:
+            receipts = client.get_receipt_search(booking_id)
+        except Exception as e:
+            logger.warning(f"receipt search failed for {booking_id}: {e}")
+            pwarn(f"could not fetch the receipt for {tp.get('name', '\u2014')}: {error_text(e)}")
+            continue
         if not receipts:
             continue
 
@@ -422,9 +510,12 @@ def handle_login_status(tm: TokenManager | None = None, verdict: str = "logged i
     """
     tm = tm or TokenManager()
     try:
-        token_data = tm.load()
+        # A session established in this run (tm.token) is the truth even when
+        # the cache could not be written: never re-read a stale or absent file
+        # over it. A fresh manager reads the cache.
+        token_data = tm.token if tm.token is not None else tm.load()
     except SJAuthError as e:
-        pinfo(str(e))
+        pstatus(False, str(e))
         print()
         sys.exit(1)
 
@@ -533,8 +624,11 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
 
     try:
         cfg = cm.load()
-        # Route/dates are only needed by the booking-shaped operations
-        cm.verify_cfg(cfg, require_search=args.book or bool(args.cancel_date))
+        # Route/dates are only needed by the booking-shaped operations, the
+        # date window only by --book (--cancel-date takes its own dates)
+        cm.verify_cfg(
+            cfg, require_search=args.book or args.cancel_date is not None, require_dates=args.book
+        )
     except SJConfigError as e:
         print_status_card(False, "invalid configuration", lines=e.errors or [str(e)])
         sys.exit(1)
@@ -554,74 +648,86 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         if args.login:
             print_login_failed(e)
         else:
-            pinfo(str(e))
+            pstatus(False, error_text(e))
             print()
         sys.exit(1)
 
     # Handle --login: authenticate, then show the same card as --login-status.
     # A login that needed no full login is "already logged in".
     if args.login:
+        if tm.save_error:
+            pwarn(
+                f"token cache not saved: {tm.save_error} · the next run will need to log in again"
+            )
+            blank()
         handle_login_status(
             tm, verdict="logged in" if auth_method == "full" else "already logged in"
         )
 
-    # 3. Fetch membership and travel pass
+    # 3. Fetch membership and travel passes
     try:
         membership = client.get_membership(access_token)
         user_name = f"{membership.get('firstName')} {membership.get('lastName')}"
 
         tp_resp = client.get_travel_passes(access_token)
         travel_passes = tp_resp if isinstance(tp_resp, list) else tp_resp.get("travelPasses", [])
-
-        active_pass = resolve_travel_pass(travel_passes)
-        tp_product_id: str = active_pass.get("travelPassId", "")
-
-        # Resolve passenger token
-        tp_token_id: str = (
-            active_pass.get("passengerToken")
-            or active_pass.get("travelPassCreationBookingId")
-            or tp_product_id
-        )
-
-        # Header-box identity rows: account is always the second row app-wide;
-        # pass and holder keep their real casing
-        pass_rows = [
-            ("account", email),
-            ("travelpass", active_pass.get("name", "Unknown")),
-            ("holder", user_name),
-        ]
-
-    except SystemExit:
-        raise
     except Exception as e:
-        pinfo(f"initialization failed: {e}")
+        pstatus(False, f"initialization failed: {error_text(e)}")
         print()
         sys.exit(1)
+
+    # --list-travelpasses shows every pass, expired ones included: no selection
+    if args.list_travelpasses:
+        print_header_box(
+            [
+                ("operation", "listing travel passes"),
+                ("account", email),
+                ("holder", user_name),
+            ]
+        )
+        blank()
+        try:
+            handle_list_travelpasses(client, travel_passes)
+        except Exception as e:
+            _fail(e)
+        print()
+        return
+
+    # Pick the pass: --book needs the product (the one covering its window,
+    # or a choice at the terminal); the other modes only a date range.
+    window = booking_window(cfg["search_parameters"]) if args.book else None
+    active_pass = resolve_travel_pass(travel_passes, for_dates=window, choose=args.book)
+    tp_product_id: str = active_pass.get("travelPassId", "")
+
+    # Resolve passenger token
+    tp_token_id: str = (
+        active_pass.get("passengerToken")
+        or active_pass.get("travelPassCreationBookingId")
+        or tp_product_id
+    )
+
+    # Header-box identity rows: account is always the second row app-wide;
+    # pass and holder keep their real casing
+    pass_rows = [
+        ("account", email),
+        ("travelpass", active_pass.get("name", "Unknown")),
+        ("holder", user_name),
+    ]
 
     # 4. Mode dispatch. Every pass-scoped mode opens with the header box
     # (operation / travelpass / holder); auth modes lead with their cards.
     try:
-        if args.list_travelpasses:
-            print_header_box(
-                [
-                    ("operation", "listing travel passes"),
-                    ("account", email),
-                    ("holder", user_name),
-                ]
-            )
-            blank()
-            handle_list_travelpasses(client, travel_passes)
-
-        elif args.list_bookings:
+        if args.list_bookings:
             print_header_box([("operation", "listing bookings"), *pass_rows])
             blank()
             handle_list_bookings(client, access_token, active_pass)
 
-        elif args.cancel_date:
+        elif args.cancel_date is not None:
+            # Cancelling needs the route only: the config's date window and
+            # the pass validity say nothing about the dates given here.
             operation = ("dry run · " if args.dry_run else "") + "cancelling bookings"
             print_header_box([("operation", operation), *pass_rows])
             blank()
-            validate_dates_against_pass(cfg, active_pass)
             ok = True
             for i, cancel_date in enumerate(args.cancel_dates):
                 if i:
@@ -633,7 +739,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 print()
                 sys.exit(1)
 
-        elif args.cancel_booking:
+        elif args.cancel_booking is not None:
             operation = ("dry run · " if args.dry_run else "") + "cancelling bookings"
             print_header_box([("operation", operation), *pass_rows])
             blank()
@@ -667,9 +773,17 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             with spinner("fetching existing bookings", trail=False):
                 bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)
 
-            # Cleanup stale provisionals (never in a dry run: no mutations)
+            # Cleanup stale provisionals (never in a dry run: no mutations),
+            # only our own: on the configured route and not brand new.
             if not args.dry_run:
-                bookings_list = cleanup_stale_provisionals(client, access_token, bookings_list)
+                params = cfg["search_parameters"]
+                route = (
+                    client.resolve_station(params["station_from"]),
+                    client.resolve_station(params["station_to"]),
+                )
+                bookings_list = cleanup_stale_provisionals(
+                    client, access_token, bookings_list, route=route
+                )
 
             # Process date range: one card per day, summary footer at the end
             counts = process_date_range(
@@ -690,12 +804,17 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        logger.error(f"error: {e}")
-        pinfo(f"error: {e}")
-        print()
-        sys.exit(1)
+        _fail(e)
 
     print()
+
+
+def _fail(e: Exception) -> NoReturn:
+    """Close a mode that died on an unexpected error: red ● line, exit 1."""
+    logger.error(f"error: {e}")
+    pstatus(False, f"error: {error_text(e)}")
+    print()
+    sys.exit(1)
 
 
 if __name__ == "__main__":

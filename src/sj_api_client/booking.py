@@ -2,12 +2,14 @@
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from sj_api_client.auth import ensure_valid_token
 from sj_api_client.client import SJClient
 from sj_api_client.config import SERVICE_TYPE_NAMES
 from sj_api_client.dates import skip_reason, sweden_now, to_sweden
+from sj_api_client.errors import SJAuthError, error_text
 from sj_api_client.output import (
     ask,
     blank,
@@ -28,6 +30,12 @@ from sj_api_client.output import (
 from sj_api_client.tokens import TokenManager
 
 logger = logging.getLogger(__name__)
+
+# A provisional booking younger than this is left alone by the stale cleanup:
+# it may be a cart the user is checking out right now, or another run of this
+# tool between its create and checkout calls. Provisionals expire server-side
+# after ~30 minutes anyway.
+STALE_PROVISIONAL_GRACE = timedelta(minutes=10)
 
 
 def booking_date_range(
@@ -79,13 +87,15 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
     dep_dt = segment.get("departureDateTime", "")
     arr_dt = segment.get("arrivalDateTime", "")
     duration = segment.get("duration", "")
-    prod_name = segment.get("productFamily", {}).get("name", "—")
-    dep_station = segment.get("departureStation", {}).get("name", "—")
-    arr_station = segment.get("arrivalStation", {}).get("name", "—")
+    # The API writes explicit nulls for absent sub-objects: `or {}` covers
+    # both a missing key and a null value (`.get(key, {})` only the former).
+    prod_name = (segment.get("productFamily") or {}).get("name") or "—"
+    dep_station = (segment.get("departureStation") or {}).get("name") or "—"
+    arr_station = (segment.get("arrivalStation") or {}).get("name") or "—"
 
     # Train: brand + public service number, e.g. "X 2000 537"
-    brand = segment.get("serviceBrandNameDescription") or segment.get("serviceType", {}).get(
-        "name", ""
+    brand = segment.get("serviceBrandNameDescription") or (
+        (segment.get("serviceType") or {}).get("name") or ""
     )
     number = segment.get("publicServiceName") or segment.get("serviceName") or ""
     train = " ".join(part for part in (brand, number) if part) or "—"
@@ -152,7 +162,9 @@ def get_departure_time_minutes(dep: dict) -> int:
 def check_comfort_availability(departure: dict, requested_class: str) -> bool:
     """Check if a departure supports the requested class based on serviceProperties."""
     props = [
-        p.get("code") for leg in departure.get("legs", []) for p in leg.get("serviceProperties", [])
+        p.get("code")
+        for leg in departure.get("legs") or []
+        for p in leg.get("serviceProperties") or []
     ]
 
     has_1_class = "COMFORT-AB" in props
@@ -332,8 +344,8 @@ def find_offer_id(
         None otherwise. matched_class is the display name (e.g. "2 class calm").
 
     """
-    seat_offers = offer_response.get("seatOffers", {})
-    offers = seat_offers.get("offers", {})
+    seat_offers = offer_response.get("seatOffers") or {}
+    offers = seat_offers.get("offers") or {}
     if not offers:
         return None
 
@@ -362,7 +374,7 @@ def find_offer_id(
     for comf_key in target_classes:
         offer_data = offers.get(comf_key)
         if offer_data:
-            flexibilities = offer_data.get("flexibilities", {})
+            flexibilities = offer_data.get("flexibilities") or {}
 
             for flex_type, flex_data in flexibilities.items():
                 if flex_type != requested_flexibility:
@@ -372,9 +384,9 @@ def find_offer_id(
                     logger.warning(f"found {comf_key}/{flex_type} but it is not available")
                     continue
 
-                prices = flex_data.get("journeyPrices", {})
-                price_obj = prices.get("price", {})
-                amount = price_obj.get("amount")
+                prices: dict[str, Any] = flex_data.get("journeyPrices") or {}
+                price_obj: dict[str, Any] = prices.get("price") or {}
+                amount: Any = price_obj.get("amount")
 
                 try:
                     amount_val = float(amount)
@@ -432,10 +444,10 @@ def _try_alternative_departure(
 
     """
     results = client.get_search_results(access_token, search_id)
-    travels = results.get("travels", [])
+    travels = results.get("travels") or []
     if not travels:
         return None
-    departures = travels[0].get("departures", [])
+    departures = travels[0].get("departures") or []
 
     target_minutes = time_str_to_minutes(target_time)
     candidates = []
@@ -503,14 +515,14 @@ def poll_and_select(
 
     Polls up to 5 times, 1 second apart, until departures appear.
     """
-    departures = []
+    departures: list[dict[str, Any]] = []
     for attempt in range(5):
         if attempt:
             time.sleep(1.0)
         results = client.get_search_results(access_token, search_id)
-        travels = results.get("travels", [])
+        travels = results.get("travels") or []
         if travels:
-            departures = travels[0].get("departures", [])
+            departures = travels[0].get("departures") or []
             if departures:
                 break
 
@@ -532,7 +544,12 @@ def is_stale_provisional(booking: dict) -> bool:
     check ignores them in both modes so dry-run and --book agree.
     """
     status = booking.get("bookingStatus") or booking.get("status")
-    return status == "NEW" and "CANCEL_JOURNEY" in booking.get("possibleActions", [])
+    return status == "NEW" and "CANCEL_JOURNEY" in (booking.get("possibleActions") or [])
+
+
+def _booking_id(item: dict, booking: dict) -> str:
+    """The id the booking endpoints take: the listing wrapper's first, then the object's."""
+    return str(item.get("bookingId") or booking.get("bookingId") or booking.get("id") or "")
 
 
 def is_active_booking(booking: dict) -> bool:
@@ -556,13 +573,13 @@ def _journey_endpoints(journey: dict) -> tuple[str | None, str | None, str]:
     single segments would miss it, both for the duplicate check and for
     --cancel-date.
     """
-    segments = [s for s in journey.get("segments", []) if s.get("departureDateTime")]
+    segments = [s for s in journey.get("segments") or [] if s.get("departureDateTime")]
     if not segments:
         return None, None, ""
     first, last = segments[0], segments[-1]
     return (
-        first.get("departureStation", {}).get("uicStationCode"),
-        last.get("arrivalStation", {}).get("uicStationCode"),
+        (first.get("departureStation") or {}).get("uicStationCode"),
+        (last.get("arrivalStation") or {}).get("uicStationCode"),
         _segment_date(first["departureDateTime"]),
     )
 
@@ -570,10 +587,10 @@ def _journey_endpoints(journey: dict) -> tuple[str | None, str | None, str]:
 def check_existing_booking(bookings: list, origin_id: str, dest_id: str, date_str: str) -> bool:
     """Check if a (non-cancelled, non-provisional) booking exists for the route and date."""
     for item in bookings:
-        booking_details = item.get("booking", {})
+        booking_details = item.get("booking") or {}
         if not is_active_booking(booking_details):
             continue
-        for journey in booking_details.get("journeys", []):
+        for journey in booking_details.get("journeys") or []:
             j_origin, j_dest, j_date = _journey_endpoints(journey)
             if j_origin == origin_id and j_dest == dest_id and j_date == date_str:
                 return True
@@ -594,11 +611,11 @@ def fetch_all_bookings(client: SJClient, access_token: str, start_date: str, end
         List of all booking items across all pages.
 
     """
-    bookings_list = []
+    bookings_list: list[dict[str, Any]] = []
     page = 0
     while True:
         bookings_resp = client.get_bookings(access_token, start_date, end_date, page)
-        page_bookings = bookings_resp.get("bookings", [])
+        page_bookings = bookings_resp.get("bookings") or []
         bookings_list.extend(page_bookings)
 
         next_page = bookings_resp.get("nextPage")
@@ -611,25 +628,80 @@ def fetch_all_bookings(client: SJClient, access_token: str, start_date: str, end
     return bookings_list
 
 
-def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: list) -> list:
+def _on_route(booking: dict, route: tuple[str, str] | None) -> bool:
+    """True when a journey of the booking runs the route in either direction (or no route given)."""
+    if route is None:
+        return True
+    origin, dest = route
+    for journey in booking.get("journeys") or []:
+        j_origin, j_dest, _ = _journey_endpoints(journey)
+        if (j_origin, j_dest) in {(origin, dest), (dest, origin)}:
+            return True
+    return False
+
+
+def _provisional_age(booking: dict, now: datetime) -> timedelta | None:
+    """How long ago the provisional was created; None when the API gave no usable timestamp."""
+    created = booking.get("created")
+    if not created:
+        return None
+    try:
+        return now - to_sweden(created)
+    except (ValueError, TypeError):
+        return None
+
+
+def cleanup_stale_provisionals(
+    client: SJClient,
+    access_token: str,
+    bookings: list,
+    route: tuple[str, str] | None = None,
+    now: datetime | None = None,
+) -> list:
     """
     Cancel stale provisional bookings and return the filtered list.
 
-    Any booking with status "NEW" and "CANCEL_JOURNEY" in possibleActions
-    is a stale provisional from a previous interrupted run.
+    A booking with status "NEW" and "CANCEL_JOURNEY" in possibleActions is
+    a provisional. Only the ones that look like this tool's own leftovers
+    are cancelled: on the configured route (either direction — a cart the
+    user has open on sj.se for another trip is not ours to touch) and older
+    than STALE_PROVISIONAL_GRACE (a younger one may be a checkout in
+    progress, the user's or a concurrent run's). A provisional without a
+    usable ``created`` timestamp on the route is treated as stale.
+
+    Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        bookings: Booking items from the bookings API.
+        route: (origin uic, destination uic) of the configured route; None
+            matches any route.
+        now: Aware current time (defaults to sweden_now()), for the age test.
 
     Returns:
-        Filtered list with stale provisionals removed.
+        Filtered list: neither provisionals (cancelled or spared) nor
+        cancelled bookings — a provisional is never a booking.
 
     """
+    now = now or sweden_now()
     valid_bookings = []
     printed_trail = False
     for item in bookings:
-        booking = item.get("booking", {})
-        b_id = booking.get("bookingId") or booking.get("id") or item.get("bookingId")
+        booking = item.get("booking") or {}
+        b_id = _booking_id(item, booking)
         b_num = booking.get("bookingNumber") or b_id
 
         if is_stale_provisional(booking):
+            if not _on_route(booking, route):
+                logger.info(
+                    f"provisional booking {b_num} is not on the configured route, leaving it"
+                )
+                continue
+            age = _provisional_age(booking, now)
+            if age is not None and age < STALE_PROVISIONAL_GRACE:
+                printed_trail = True
+                minutes = max(0, int(age.total_seconds() // 60))
+                pwarn(f"leaving recent provisional booking {b_num} alone (created {minutes}m ago)")
+                continue
             # A failure shows as ✗ on the trail and a warning with the cause;
             # the run goes on (the provisional is retried next time).
             printed_trail = True
@@ -638,7 +710,10 @@ def cleanup_stale_provisionals(client: SJClient, access_token: str, bookings: li
                     client.cancel_provisional_booking(access_token, b_id)
             except Exception as e:
                 logger.warning(f"failed to cancel provisional booking {b_id}: {e}")
-                pwarn(f"could not cancel stale provisional booking {b_num} ({e}), continuing")
+                pwarn(
+                    f"could not cancel stale provisional booking {b_num} "
+                    f"({error_text(e)}), continuing"
+                )
             continue
 
         if booking.get("bookingStatus") == "CANCELLED":
@@ -942,7 +1017,7 @@ def handle_booking_process(
             # SPEC §8.2: the outbound provisional is already held — keep it
             # and check it out alone rather than leave it to the cleanup.
             logger.error(f"return leg failed: {e}")
-            pwarn(f"return leg failed ({e}), booking outbound only")
+            pwarn(f"return leg failed ({error_text(e)}), booking outbound only")
 
     if dry_run:
         return dry_run_result
@@ -955,7 +1030,12 @@ def handle_booking_process(
     checked_out = True
     try:
         email = cfg["auth"]["email"]
-        phone = cfg["auth"].get("phone", "+46700000000")
+        # The API already put the holder's contact details on the provisional;
+        # send those back rather than invent a number. None = leave it as is.
+        phone = (booking.get("customer") or {}).get("phoneNumber") or next(
+            (p.get("phoneNumber") for p in booking.get("passengers") or [] if p.get("phoneNumber")),
+            None,
+        )
         with spinner(f"checking out booking {booking_number or booking_id}"):
             client.update_booking_customer(access_token, booking_id, email, phone)
             client.checkout_booking(access_token, booking_id)
@@ -963,7 +1043,7 @@ def handle_booking_process(
         # The provisional booking stays; it is cleaned up as stale on the next
         # --book run (SPEC §6.2).
         logger.error(f"checkout failed for booking {booking_id}: {e}")
-        pinfo(f"checkout failed: {e}")
+        pinfo(f"checkout failed: {error_text(e)}")
         checked_out = False
 
     return {
@@ -1235,10 +1315,10 @@ def _booked_rows(booking: dict, booking_number: str | None) -> list[dict]:
     """Leg rows for a freshly booked day, from the booking object the API returned."""
     now = sweden_now()
     rows = []
-    for journey in booking.get("journeys", []):
-        for segment in journey.get("segments", []):
+    for journey in booking.get("journeys") or []:
+        for segment in journey.get("segments") or []:
             row = _segment_to_display_row(segment, booking_number or "\u2014", now)
-            row["_sort_key"] = segment.get("departureDateTime", "")
+            row["_sort_key"] = segment.get("departureDateTime") or ""
             rows.append(row)
     rows.sort(key=lambda r: r.pop("_sort_key", ""))
     return rows
@@ -1329,6 +1409,7 @@ def process_date_range(
     tp_token_id: str,
     existing_bookings: list,
     dry_run: bool = False,
+    today: date | None = None,
 ) -> dict[str, int]:
     """
     Process all dates in the configured range, printing one card per day.
@@ -1347,6 +1428,9 @@ def process_date_range(
         tp_token_id: Travel pass token ID.
         existing_bookings: List of existing bookings.
         dry_run: If True, collect results without booking.
+        today: Today's Swedish date (defaults to now); a date_start before it
+            is clamped to it with a note, so a standing window keeps working
+            on later runs.
 
     Returns:
         The day counts behind the summary line: "days" plus any of "booked",
@@ -1369,6 +1453,14 @@ def process_date_range(
 
     # No leading blank: the caller prints one after the run-header facts,
     # before the bookings fetch, so the live spinner is already separated.
+    today = today or sweden_now().date()
+    if start_date.date() < today:
+        pwarn(
+            f"date_start {params['date_start']} is in the past, starting from {today.isoformat()}"
+        )
+        blank()
+        curr = datetime.combine(today, datetime.min.time())
+
     while curr <= end_date:
         date_str = curr.strftime("%Y-%m-%d")
         counts["days"] += 1
@@ -1381,10 +1473,31 @@ def process_date_range(
             curr += timedelta(days=1)
             continue
 
-        # Mid-run token refresh
-        access_token = ensure_valid_token(client, token_manager, access_token)
+        # Mid-run token refresh. Without a session nothing more can be
+        # booked: report it on this day's card and stop, so the summary line
+        # and the exit code still tell what happened.
+        try:
+            access_token = ensure_valid_token(client, token_manager, access_token)
+        except SJAuthError as e:
+            print_day_header(date_str, "")
+            with indented():
+                pinfo(f"error: {e}")
+                pwarn("stopping: no valid session for the remaining dates")
+            count("error")
+            blank()
+            break
 
-        need_outbound, need_inbound = plan_day(client, params, existing_bookings, date_str)
+        try:
+            need_outbound, need_inbound = plan_day(client, params, existing_bookings, date_str)
+        except Exception as e:
+            logger.error(f"error planning {date_str}: {e}")
+            print_day_header(date_str, "")
+            with indented():
+                pinfo(f"error: {error_text(e)}")
+            count("error")
+            blank()
+            curr += timedelta(days=1)
+            continue
         if not (need_outbound or need_inbound):
             print_day_note(date_str, "tickets already booked")
             blank()
@@ -1408,7 +1521,7 @@ def process_date_range(
                 )
             except Exception as e:
                 logger.error(f"error processing {date_str}: {e}")
-                pinfo(f"error: {e}")
+                pinfo(f"error: {error_text(e)}")
                 result = None
                 errored = True
             else:
@@ -1425,8 +1538,16 @@ def process_date_range(
                 else:
                     count("partial" if offers else "unavailable")
             elif result:
-                booked = _booked_rows(result.get("booking") or {}, result["booking_number"])
-                print_leg_lines(booked)
+                # The booking exists whatever the rendering does: an odd
+                # shape in the booking object must not turn a booked day
+                # into a crashed run.
+                number = result.get("booking_number") or result.get("booking_id")
+                try:
+                    booked = _booked_rows(result.get("booking") or {}, result["booking_number"])
+                    print_leg_lines(booked)
+                except Exception as e:
+                    logger.error(f"could not render the legs of booking {number}: {e}")
+                    pwarn(f"booked as {number}, but the legs could not be shown ({error_text(e)})")
                 if not result.get("checked_out"):
                     pwarn("checkout failed, provisional left (cleaned up on next --book run)")
                     count("failed")
@@ -1484,10 +1605,10 @@ def handle_cancel_mode(
     # that day — whole journeys, so a connection still matches.
     matched_numbers = set()
     for item in bookings:
-        booking = item.get("booking", {})
+        booking = item.get("booking") or {}
         if not is_active_booking(booking):
             continue
-        for journey in booking.get("journeys", []):
+        for journey in booking.get("journeys") or []:
             j_origin, j_dest, j_date = _journey_endpoints(journey)
             if j_date != cancel_date:
                 continue
@@ -1501,11 +1622,19 @@ def handle_cancel_mode(
         pstatus(False, f"no bookings found for {cancel_date} on route {origin_name} → {dest_name}")
         return True
 
-    # The bookings are already fetched, so no travel pass (date range) is needed.
+    # The bookings are already fetched, so no travel pass (date range) is
+    # needed. Only that day's journeys are up for cancellation: a booking
+    # made on sj.se may hold journeys on other days too.
     ok = True
     for b_num in sorted(matched_numbers):
         ok &= handle_cancel_booking(
-            client, access_token, None, b_num, prefetched_bookings=bookings, dry_run=dry_run
+            client,
+            access_token,
+            None,
+            b_num,
+            prefetched_bookings=bookings,
+            dry_run=dry_run,
+            only_date=cancel_date,
         )
     return ok
 
@@ -1517,6 +1646,7 @@ def handle_cancel_booking(
     booking_number: str,
     prefetched_bookings: list | None = None,
     dry_run: bool = False,
+    only_date: str | None = None,
 ) -> bool:
     """
     Cancel a booking by its booking number.
@@ -1533,6 +1663,9 @@ def handle_cancel_booking(
         booking_number: The booking number to cancel.
         prefetched_bookings: If provided, skip fetching and use these instead.
         dry_run: Preview only — never prompt, never call a cancel API.
+        only_date: Swedish date (YYYY-MM-DD); when given, only the journeys
+            departing that day are shown and offered for cancellation
+            (--cancel-date), the booking's other days are left untouched.
 
     Returns:
         True when the requested cancellation happened, nothing needed
@@ -1550,7 +1683,7 @@ def handle_cancel_booking(
     # Find the booking matching the booking number
     matched_item = None
     for item in all_bookings:
-        booking = item.get("booking", {})
+        booking = item.get("booking") or {}
         if not is_active_booking(booking):
             continue
         if booking.get("bookingNumber") == booking_number:
@@ -1562,13 +1695,13 @@ def handle_cancel_booking(
         pstatus(False, f"no active booking found with number {booking_number}")
         return False
 
-    booking = matched_item.get("booking", {})
-    b_id = booking.get("bookingId") or booking.get("id") or matched_item.get("bookingId")
+    booking = matched_item.get("booking") or {}
+    b_id = _booking_id(matched_item, booking)
 
     # Check if there's a pending cancellation that needs to be resolved
-    booking_status = booking.get("bookingStatus", "")
-    possible_actions = booking.get("possibleActions", []) + booking.get(
-        "bookingPossibleActions", []
+    booking_status = booking.get("bookingStatus") or ""
+    possible_actions = (booking.get("possibleActions") or []) + (
+        booking.get("bookingPossibleActions") or []
     )
     if booking_status == "CHANGED" and "REVERT" in possible_actions:
         if dry_run:
@@ -1589,7 +1722,7 @@ def handle_cancel_booking(
             try:
                 client.finalize_cancellation(access_token, b_id)
             except Exception as e:
-                pinfo(f"failed to confirm cancellation for {booking_number}: {e}")
+                pinfo(f"failed to confirm cancellation for {booking_number}: {error_text(e)}")
                 return False
             pinfo(f"booking {booking_number} cancellation confirmed")
             return True
@@ -1597,7 +1730,7 @@ def handle_cancel_booking(
             try:
                 client.revert_booking(access_token, b_id)
             except Exception as e:
-                pinfo(f"failed to revert booking {booking_number}: {e}")
+                pinfo(f"failed to revert booking {booking_number}: {error_text(e)}")
                 return False
             pinfo(f"booking {booking_number} reverted to original state")
             return True
@@ -1607,24 +1740,30 @@ def handle_cancel_booking(
     now = sweden_now()
 
     # Collect segments for display and cancellation
-    display_rows = []
-    segments_to_cancel = []
+    display_rows: list[dict[str, Any]] = []
+    segments_to_cancel: list[dict[str, Any]] = []
     has_past_segment = False
+    other_days = 0  # cancellable journeys on days other than only_date
 
-    for journey in booking.get("journeys", []):
-        for seg in journey.get("segments", []):
+    for journey in booking.get("journeys") or []:
+        for seg in journey.get("segments") or []:
             row = _segment_to_display_row(seg, booking_number, now)
+            service_id = seg.get("serviceIdentifier") or ""
+            cancellable = row["past"] == "N" and bool(service_id)
+            if only_date and row["date"] != only_date:
+                other_days += cancellable
+                continue
             display_rows.append(row)
 
             if row["past"] == "Y":
                 has_past_segment = True
 
             # Collect cancellation metadata for future segments
-            service_id = seg.get("serviceIdentifier", "")
-            if row["past"] == "N" and service_id:
+            if cancellable:
+                passengers = seg.get("passengers") or journey.get("passengers") or []
                 passenger_ids = [
-                    p.get("id", p.get("passengerId", ""))
-                    for p in seg.get("passengers", journey.get("passengers", []))
+                    p.get("id") or p.get("passengerId")
+                    for p in passengers
                     if p.get("id") or p.get("passengerId")
                 ]
                 if not passenger_ids:
@@ -1640,6 +1779,11 @@ def handle_cancel_booking(
 
     blank()
     print_bookings_table(display_rows, summary=False)
+    if other_days:
+        pdim(
+            f"{other_days} other journey{'s' if other_days != 1 else ''} in booking "
+            f"{booking_number} on other dates {'are' if other_days != 1 else 'is'} kept"
+        )
     blank()
 
     if not segments_to_cancel:
@@ -1659,7 +1803,12 @@ def handle_cancel_booking(
 
     # Select which segments to cancel
     if len(segments_to_cancel) == 1:
-        if not _confirm(f"cancel booking {booking_number}? [y/n]: "):
+        question = (
+            f"cancel this journey from booking {booking_number}? [y/n]: "
+            if other_days
+            else f"cancel booking {booking_number}? [y/n]: "
+        )
+        if not _confirm(question):
             blank()
             pstatus(False, "cancellation aborted")
             return False
@@ -1721,14 +1870,16 @@ def handle_cancel_booking(
         blank()
         if initiated:
             pstatus(
-                False, f"cancellation initiated but confirmation failed for {booking_number}: {e}"
+                False,
+                f"cancellation initiated but confirmation failed for {booking_number}: "
+                f"{error_text(e)}",
             )
         else:
-            pstatus(False, f"failed to cancel booking {booking_number}: {e}")
+            pstatus(False, f"failed to cancel booking {booking_number}: {error_text(e)}")
         return False
 
     n_selected = len(selected)
-    n_total = len(segments_to_cancel)
+    n_total = len(segments_to_cancel) + other_days
     blank()
     if n_selected == n_total:
         pstatus(True, f"booking {booking_number} cancelled")
@@ -1754,15 +1905,15 @@ def handle_list_bookings(
     now = sweden_now()
     display_rows = []
     for item in all_bookings:
-        booking = item.get("booking", {})
+        booking = item.get("booking") or {}
         if not is_active_booking(booking):
             continue  # cancelled, or a stale provisional --book will clean up
 
-        booking_number = booking.get("bookingNumber", "—")
-        for journey in booking.get("journeys", []):
-            for segment in journey.get("segments", []):
+        booking_number = booking.get("bookingNumber") or "—"
+        for journey in booking.get("journeys") or []:
+            for segment in journey.get("segments") or []:
                 row = _segment_to_display_row(segment, booking_number, now)
-                row["_sort_key"] = segment.get("departureDateTime", "")
+                row["_sort_key"] = segment.get("departureDateTime") or ""
                 display_rows.append(row)
 
     if not display_rows:

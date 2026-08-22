@@ -31,9 +31,30 @@ logging.Logger.trace = trace  # type: ignore[attr-defined]
 
 # Keys whose values must never reach the logs (matched case-insensitively).
 _SECRET_KEYS = frozenset(
-    {"password", "access_token", "refresh_token", "id_token", "code_verifier", "authorization"}
+    {
+        "password",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "code_verifier",
+        "authorization",
+        "verification_code",  # the SMS code
+        "x-csrf-token",
+        "csrf_token",
+    }
 )
 _REDACTED = "***redacted***"
+
+
+def _is_secret(key: object, value: object) -> bool:
+    """True for a key whose value must be hidden; ``code`` only when it looks like an auth code."""
+    name = str(key).lower()
+    if name == "code":
+        # An OAuth authorization code is a long opaque string; the API's
+        # numeric error ``code`` (106) must stay readable.
+        return isinstance(value, str) and len(value) >= 20
+    return name in _SECRET_KEYS
+
 
 # httpx/httpcore trace lines carry raw header tuples (Set-Cookie with the SSO
 # cookie, Cookie, Authorization) and URLs with the one-time auth code; they
@@ -57,9 +78,7 @@ def redact_http_trace(message: str) -> str:
 def redact(data: object) -> object:
     """Return a copy of data with values of secret keys replaced (recursively)."""
     if isinstance(data, dict):
-        return {
-            k: (_REDACTED if str(k).lower() in _SECRET_KEYS else redact(v)) for k, v in data.items()
-        }
+        return {k: (_REDACTED if _is_secret(k, v) else redact(v)) for k, v in data.items()}
     if isinstance(data, list):
         return [redact(v) for v in data]
     return data
@@ -268,9 +287,10 @@ def setup_logging(level: str) -> None:
         level_upper = "CRITICAL"
 
     log_level = levels.get(level_upper)
-    err_msg = ""
     if log_level is None:
-        err_msg = f"invalid log level '{level}' specified, defaulting to CRITICAL"
+        # Said directly: the logger itself is about to be set to CRITICAL,
+        # which would swallow a warning about it.
+        print(f"invalid log level '{level}' specified, defaulting to CRITICAL", file=sys.stderr)
         log_level = logging.CRITICAL
 
     root_logger = logging.getLogger()
@@ -298,16 +318,10 @@ def setup_logging(level: str) -> None:
             )
         )
         root_logger.addHandler(handler)
-
-        if err_msg:
-            logger.warning(err_msg)
-        else:
-            logger.debug(
-                "log level set to '%s' from env variable LOG_LEVEL",
-                logging.getLevelName(log_level),
-            )
-    elif err_msg:
-        logger.warning(err_msg)
+        logger.debug(
+            "log level set to '%s' from env variable LOG_LEVEL",
+            logging.getLevelName(log_level),
+        )
 
     logger.debug(
         "setting log level to %s",

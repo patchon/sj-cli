@@ -2,7 +2,7 @@ import pytest
 
 from sj_api_client.config import SERVICE_TYPE_NAMES, CfgManager
 from sj_api_client.errors import SJConfigError
-from tests.fakes import base_cfg
+from tests.fakes import base_cfg, future_cfg
 
 
 def verify(cfg):
@@ -16,9 +16,25 @@ def errors_of(cfg) -> str:
 
 
 def test_valid_config_passes():
-    verify(base_cfg())
-    verify(base_cfg(roundtrip=False, time_return=""))
-    verify(base_cfg(service_types=["ALL"], book_partial=True, skip_weekends=False))
+    verify(future_cfg())
+    verify(future_cfg(roundtrip=False, time_return=""))
+    verify(future_cfg(service_types=["ALL"], book_partial=True, skip_weekends=False))
+
+
+def test_past_date_start_is_fine_but_a_past_window_is_not():
+    from datetime import date, timedelta
+
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    verify(future_cfg(date_start=yesterday))  # a standing window keeps working on later runs
+    msg = errors_of(base_cfg(date_start="2020-01-01", date_end="2020-03-20"))
+    assert "date_end must be today or in the future" in msg
+    assert "date_start must be today" not in msg
+    # operations that never touch the dates (--cancel-date) skip the date rules
+    CfgManager().verify_cfg(
+        base_cfg(date_start="2020-01-01", date_end="2019-01-01"), require_dates=False
+    )
+    with pytest.raises(SJConfigError, match="station_to 'Nowhere'"):
+        CfgManager().verify_cfg(base_cfg(station_to="Nowhere"), require_dates=False)
 
 
 def test_missing_sections():
@@ -41,7 +57,7 @@ def test_collects_all_errors():
     msg = errors_of(cfg)
     for frag in (
         "date_end must be >= date_start",
-        "date_start must be today or in the future",
+        "date_end must be today or in the future",
         "time_leave '25:00' is not a real time of day",
         "comfort_class must be one of",
         "flexibility must be one of",
@@ -54,14 +70,14 @@ def test_collects_all_errors():
 
 def test_time_return_required_only_for_roundtrip():
     assert "time_return is required" in errors_of(base_cfg(time_return=""))
-    verify(base_cfg(roundtrip=False, time_return=""))
+    verify(future_cfg(roundtrip=False, time_return=""))
     assert "time_return '9:00' must be a time formatted HH:MM" in errors_of(
         base_cfg(roundtrip=False, time_return="9:00")
     )
 
 
 def test_station_lookup_is_case_insensitive():
-    verify(base_cfg(station_from="linköping central", station_to="STOCKHOLM C"))
+    verify(future_cfg(station_from="linköping central", station_to="STOCKHOLM C"))
 
 
 def test_service_type_names_cover_validation_set():
@@ -90,11 +106,11 @@ def test_native_toml_date_is_accepted_and_normalised():
     import datetime
 
     cfg = base_cfg()
-    cfg["search_parameters"]["date_start"] = datetime.date(2026, 9, 16)
-    cfg["search_parameters"]["date_end"] = datetime.date(2026, 9, 21)
+    cfg["search_parameters"]["date_start"] = datetime.date(2099, 9, 16)
+    cfg["search_parameters"]["date_end"] = datetime.date(2099, 9, 21)
     verify(cfg)  # unquoted TOML dates must not crash or error
-    assert cfg["search_parameters"]["date_start"] == "2026-09-16"
-    assert cfg["search_parameters"]["date_end"] == "2026-09-21"
+    assert cfg["search_parameters"]["date_start"] == "2099-09-16"
+    assert cfg["search_parameters"]["date_end"] == "2099-09-21"
 
 
 def test_date_errors_echo_the_value_and_distinguish_causes():
@@ -117,7 +133,7 @@ def test_date_errors_echo_the_value_and_distinguish_causes():
 def test_native_toml_time_is_accepted_and_normalised():
     import datetime
 
-    cfg = base_cfg()
+    cfg = future_cfg()
     cfg["search_parameters"]["time_leave"] = datetime.time(6, 59)
     cfg["search_parameters"]["time_return"] = datetime.time(17, 22)
     verify(cfg)  # unquoted TOML times (with seconds) must not crash or error

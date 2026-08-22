@@ -264,3 +264,50 @@ def test_duplicate_check_matches_a_journey_with_a_change():
     assert check_existing_booking([connection], "A", "B", D)
     assert not check_existing_booking([connection], "A", "C", D)  # the leg, not the journey
     assert not check_existing_booking([connection], "B", "A", D)
+
+
+# --- explicit JSON nulls are as good as a missing key -----------------------
+
+
+def test_display_row_and_availability_survive_explicit_nulls():
+    from datetime import datetime
+
+    from sj_api_client.booking import (
+        _journey_endpoints,
+        _segment_to_display_row,
+        is_active_booking,
+    )
+    from sj_api_client.dates import SWEDEN
+
+    seg = {
+        "direction": "OUTBOUND",
+        "departureDateTime": f"{D}T06:59:00+02:00",
+        "arrivalDateTime": f"{D}T11:36:00+02:00",
+        "productFamily": None,
+        "departureStation": None,
+        "arrivalStation": None,
+        "serviceType": None,
+        "requiredProducts": None,
+    }
+    row = _segment_to_display_row(seg, "N", datetime(2026, 1, 1, tzinfo=SWEDEN))
+    assert (row["route"], row["comfort_class"], row["train"], row["seat"]) == (
+        "— → —",
+        "—",
+        "—",
+        "—",
+    )
+    assert _journey_endpoints({"segments": None}) == (None, None, "")
+    assert _journey_endpoints({"segments": [{**seg, "departureStation": None}]})[0] is None
+    assert not check_comfort_availability({"legs": None}, "2 class")
+    assert not check_comfort_availability({"legs": [{"serviceProperties": None}]}, "2 class")
+    assert not is_stale_provisional({"bookingStatus": "NEW", "possibleActions": None})
+    assert is_active_booking({"bookingStatus": "NEW", "possibleActions": None})
+    assert find_offer_id({"seatOffers": None}, "2 class calm", "FULLFLEX") is None
+    assert find_offer_id({"seatOffers": {"offers": None}}, "2 class calm", "FULLFLEX") is None
+    assert check_existing_booking([{"booking": {"journeys": None}}], "1", "2", D) is False
+
+
+def test_select_best_departure_survives_null_legs():
+    d = dep("a", D, "06:59", "11:36")
+    d["legs"] = None
+    assert select_best_departure([d], "06:59", "2 class calm", select_closest=True) is None

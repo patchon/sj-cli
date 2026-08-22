@@ -574,11 +574,13 @@ def _extract_price(receipt_data: dict) -> str:
         val = receipt_data.get(key)
         if val is not None:
             if isinstance(val, dict):
-                amt = val.get("amount") or val.get("value")
+                amt = val.get("amount")
+                if amt is None:
+                    amt = val.get("value")
                 cur = val.get("currency") or val.get("currencyCode") or "SEK"
-                if amt:
+                if amt is not None:  # 0 is a price (a free renewal), not "unknown"
                     return _format_amount(amt, cur)
-            elif isinstance(val, (int, float, str)) and val:
+            elif isinstance(val, (int, float)) or (isinstance(val, str) and val):
                 return _format_amount(val)
 
     logger.debug(f"could not extract price from receipt: {list(receipt_data.keys())}")
