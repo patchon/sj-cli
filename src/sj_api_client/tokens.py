@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import os
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -20,14 +21,16 @@ def _write_private_json(path: Path, data: object) -> None:
     """
     Write JSON to a file only its owner can read: it holds tokens or cookies.
 
-    Atomic: the data goes to a sibling temp file (created 0600) that replaces
-    the real one only once complete, so a failure half-way (disk full,
-    Ctrl-C) leaves the previous valid cache in place instead of a fragment
-    that would lock every later run out with "failed to parse token cache".
+    Atomic: the data goes to a sibling temp file (created 0600, with a name
+    unique to this writer — two processes saving at once must not share one)
+    that replaces the real one only once complete, so a failure half-way
+    (disk full, Ctrl-C) leaves the previous valid cache in place instead of
+    a fragment that would lock every later run out with "failed to parse
+    token cache".
     """
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f)
@@ -65,6 +68,10 @@ class TokenManager:
         self.path = Path(cache_path) if cache_path else self.DEFAULT_PATH
         self.cookie_path = self.path.parent / "cookies.json"
         self.token: dict[str, Any] | None = None
+        # Why the last save() could not write the cache (None when it could):
+        # the token still works in memory, but the next run will have to log
+        # in again, which the caller may want to say.
+        self.save_error: str | None = None
         logger.debug(f"initialized token manager with path {self.path}")
 
     def load(self) -> dict[str, Any] | None:
@@ -84,14 +91,20 @@ class TokenManager:
             return None
         try:
             with self.path.open() as f:
-                self.token = json.load(f)
-                logger.debug(f"loading token data {log_json(self.token)} from {self.path}")
-            return self.token
+                data = json.load(f)
         except Exception as e:
             raise SJAuthError(
                 f"failed to parse token cache at {self.path}: {e} "
                 f"(delete the file to force a fresh login)"
             ) from e
+        if not isinstance(data, dict):
+            raise SJAuthError(
+                f"token cache at {self.path} is not a json object "
+                f"(delete the file to force a fresh login)"
+            )
+        self.token = data
+        logger.debug(f"loading token data {log_json(self.token)} from {self.path}")
+        return self.token
 
     def save(self, token_data: dict[str, Any]) -> None:
         """
@@ -115,11 +128,13 @@ class TokenManager:
         # the cache cannot be written: a fresh login must not be treated as
         # expired just because the disk is read-only or full.
         self.token = token_data
+        self.save_error = None
         try:
             _write_private_json(self.path, token_data)
             logger.debug(f"saved token data {log_json(token_data)} to {self.path}")
         except Exception as e:
             logger.error(f"failed to save token data to {self.path}: {e}")
+            self.save_error = str(e)
 
     def is_valid(self) -> bool:
         """
@@ -282,15 +297,29 @@ class TokenManager:
             logger.warning(f"failed to save cookies: {e}")
 
     def load_cookies(self) -> list[dict[str, str | None]] | None:
-        """Load cookies from the cookie cache file."""
+        """
+        Load cookies from the cookie cache file.
+
+        A cache that is not a list of name/value cookies is ignored (with a
+        warning) rather than handed to the client: a corrupt file must not
+        make every login fail until someone deletes it.
+        """
         if not self.cookie_path.exists():
             logger.debug("no cookie cache found")
             return None
         try:
             with self.cookie_path.open() as f:
                 cookies = json.load(f)
-            logger.debug(f"loaded {len(cookies)} cookies from {self.cookie_path}")
-            return cookies
         except Exception as e:
             logger.warning(f"failed to load cookies: {e}")
             return None
+        if not isinstance(cookies, list) or not all(
+            isinstance(c, dict)
+            and isinstance(c.get("name"), str)
+            and isinstance(c.get("value"), str)
+            for c in cookies
+        ):
+            logger.warning(f"ignoring malformed cookie cache at {self.cookie_path}")
+            return None
+        logger.debug(f"loaded {len(cookies)} cookies from {self.cookie_path}")
+        return cookies

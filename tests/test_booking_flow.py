@@ -352,8 +352,18 @@ def test_handle_booking_process_inbound_only_creates_booking():
 
 
 def run_range(c, cfg, dry_run, existing=()):
+    from datetime import date
+
     return process_date_range(
-        c, "tok", FakeTokenManager(), cfg, "TP", "TOK", list(existing), dry_run=dry_run
+        c,
+        "tok",
+        FakeTokenManager(),
+        cfg,
+        "TP",
+        "TOK",
+        list(existing),
+        dry_run=dry_run,
+        today=date(2026, 8, 1),  # the fixtures live in 2026-09
     )
 
 
@@ -439,3 +449,91 @@ def test_process_date_range_survives_per_date_exception(capsys):
     out = capsys.readouterr().out
     assert "  error: api down\n" in out
     assert "\n ● dry run · 1 day(s) · 1 error(s)" in out
+
+
+# --- customer details at checkout -------------------------------------------
+
+
+def test_checkout_reuses_the_phone_number_the_api_put_on_the_booking():
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    flow(c)
+    # never a placeholder: the holder's number from the create response
+    assert c.customer_updates == [("UUID-1", "a@b.se", "+46701112233")]
+
+
+def test_checkout_sends_no_phone_when_the_booking_carries_none():
+    class NoCustomer(FakeClient):
+        def create_provisional_booking(self, *a, **k):
+            resp = super().create_provisional_booking(*a, **k)
+            resp["booking"].pop("customer")
+            return resp
+
+    c = NoCustomer({"OUT": OUT, "IN": IN})
+    flow(c)
+    assert c.customer_updates == [("UUID-1", "a@b.se", None)]
+
+
+# --- process_date_range: robustness -----------------------------------------
+
+
+def test_past_date_start_is_clamped_to_today_with_a_note(capsys):
+    from datetime import date
+
+    cfg = base_cfg(date_start="2026-09-01", date_end="2026-09-04")  # Tue..Fri
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    counts = process_date_range(
+        c, "tok", FakeTokenManager(), cfg, "TP", "TOK", [], dry_run=True, today=date(2026, 9, 3)
+    )
+    assert counts["days"] == 2
+    out = capsys.readouterr().out
+    assert "! date_start 2026-09-01 is in the past, starting from 2026-09-03\n\n" in out
+    assert "tue 01 sep 2026" not in out and "thu 03 sep 2026" in out
+
+
+def test_render_failure_after_checkout_does_not_lose_the_booking(monkeypatch, capsys):
+    from sj_api_client import booking as m
+
+    def explode(*_a, **_k):
+        raise TypeError("'NoneType' object has no attribute 'get'")
+
+    monkeypatch.setattr(m, "_booked_rows", explode)
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    assert run_range(c, base_cfg(), dry_run=False) == {"days": 1, "booked": 1}
+    out = capsys.readouterr().out
+    assert "! booked as NUM1, but the legs could not be shown" in out
+    assert "● 1 day(s) · 1 booked" in out
+
+
+def test_midrun_refresh_failure_stops_the_run_with_a_summary(capsys):
+    from sj_api_client.errors import SJAuthError
+
+    class ExpiredTokenManager(FakeTokenManager):
+        def is_valid(self):
+            return False
+
+        def has_refresh_token(self):
+            return True
+
+    class RefreshDown(FakeClient):
+        def refresh_token(self, _rt):
+            raise SJAuthError("token refresh failed: timed out")
+
+    from datetime import date
+
+    cfg = base_cfg(date_start="2026-09-01", date_end="2026-09-02")
+    counts = process_date_range(
+        RefreshDown({"OUT": OUT, "IN": IN}),
+        "tok",
+        ExpiredTokenManager(),
+        cfg,
+        "TP",
+        "TOK",
+        [],
+        today=date(2026, 8, 1),
+    )
+    assert counts == {"days": 1, "error": 1}  # the second day is never attempted
+    out = capsys.readouterr().out
+    assert "tue 01 sep 2026" in out
+    assert "  error: token refresh failed: timed out\n" in out
+    assert "! stopping: no valid session for the remaining dates\n" in out
+    assert "\n ● 1 day(s) · 1 error(s)" in out

@@ -6,8 +6,8 @@ email = "user@example.com"
 password = "your-password"
 
 [search_parameters]
-date_start = "2026-01-19"
-date_end = "2026-03-20"
+date_start = "2026-01-19"         # may already lie in the past: a run starts from today
+date_end = "2026-03-20"           # must not have passed
 time_leave = "05:29"
 time_return = "17:22"
 station_from = "Göteborg Central"

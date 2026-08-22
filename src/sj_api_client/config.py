@@ -120,7 +120,7 @@ class CfgManager:
 
         # Function replacements: a string replacement would have re.sub
         # re-process the backslashes toml_str just escaped.
-        template = self.EXAMPLE_PATH.read_text()
+        template = self.EXAMPLE_PATH.read_text(encoding="utf-8")
         content = re.sub(r'(?m)^email = ".*"$', lambda _m: f'email = "{toml_str(email)}"', template)
         content = re.sub(
             r'(?m)^password = ".*"$', lambda _m: f'password = "{toml_str(password)}"', content
@@ -129,7 +129,7 @@ class CfgManager:
             with spinner("writing config"):
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 self.path.touch(mode=0o600)  # create owner-only before the password is written
-                self.path.write_text(content)
+                self.path.write_text(content, encoding="utf-8")  # never the locale's encoding
                 self.path.chmod(0o600)
         except OSError as e:
             raise SJConfigError(f"could not write config at {self.path}: {e}") from e
@@ -145,14 +145,18 @@ class CfgManager:
         )
         return True
 
-    def verify_cfg(self, cfg: dict[str, Any], require_search: bool = True) -> None:
+    def verify_cfg(
+        self, cfg: dict[str, Any], require_search: bool = True, require_dates: bool = True
+    ) -> None:
         """
         Validates configuration fields.
 
         [auth] is always validated; [search_parameters] only when
         require_search is true — operations that never touch the route or
         dates (login, listing, cancelling by number) work with a config
-        holding only credentials. Collects all errors, reports them at once.
+        holding only credentials — and the date window only when
+        require_dates is true as well (--cancel-date needs the route, not
+        the dates). Collects all errors, reports them at once.
 
         Raises:
             SJConfigError: If any validation errors are found.
@@ -184,34 +188,19 @@ class CfgManager:
             if not params or not isinstance(params, dict):
                 errors.append("[search_parameters] section is missing")
             else:
-                self._validate_search_params(params, errors)
+                self._validate_search_params(params, errors, require_dates)
 
         if errors:
             raise SJConfigError(
                 "configuration errors:\n  - " + "\n  - ".join(errors), errors=errors
             )
 
-    def _validate_search_params(self, params: dict[str, Any], errors: list[str]) -> None:
+    def _validate_search_params(
+        self, params: dict[str, Any], errors: list[str], require_dates: bool = True
+    ) -> None:
         """Validate the [search_parameters] section."""
-        # date_start
-        date_start = self._validate_date(params.get("date_start", ""), "date_start", errors)
-
-        # date_end
-        date_end = self._validate_date(params.get("date_end", ""), "date_end", errors)
-
-        # Normalise native TOML dates back to strings for downstream code
-        if date_start:
-            params["date_start"] = date_start.isoformat()
-        if date_end:
-            params["date_end"] = date_end.isoformat()
-
-        # date_end >= date_start
-        if date_start and date_end and date_end < date_start:
-            errors.append("date_end must be >= date_start")
-
-        # date_start must be today or in the future
-        if date_start and date_start < sweden_now().date():
-            errors.append("date_start must be today or in the future")
+        if require_dates:
+            self._validate_window(params, errors)
 
         # time_leave
         t = self._validate_time(params.get("time_leave", ""), "time_leave", errors)
@@ -290,6 +279,28 @@ class CfgManager:
                     )
                 if "ALL" in st and len(st) > 1:
                     errors.append("service_types: 'ALL' cannot be combined with other values")
+
+    def _validate_window(self, params: dict[str, Any], errors: list[str]) -> None:
+        """
+        Validate date_start/date_end.
+
+        A date_start in the past is fine — a standing window keeps working on
+        later runs (the booking loop starts from today); only a window that
+        has passed entirely is an error.
+        """
+        date_start = self._validate_date(params.get("date_start", ""), "date_start", errors)
+        date_end = self._validate_date(params.get("date_end", ""), "date_end", errors)
+
+        # Normalise native TOML dates back to strings for downstream code
+        if date_start:
+            params["date_start"] = date_start.isoformat()
+        if date_end:
+            params["date_end"] = date_end.isoformat()
+
+        if date_start and date_end and date_end < date_start:
+            errors.append("date_end must be >= date_start")
+        if date_end and date_end < sweden_now().date():
+            errors.append("date_end must be today or in the future")
 
     def _validate_date(self, value: str | date, field_name: str, errors: list[str]) -> date | None:
         """

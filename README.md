@@ -83,8 +83,8 @@ email = "user@example.com"
 password = "your-password"
 
 [search_parameters]
-date_start = "2026-09-01"
-date_end = "2026-10-30"
+date_start = "2026-09-01"            # may already lie in the past: a run starts from today
+date_end = "2026-10-30"              # must not have passed
 time_leave = "06:59"                 # preferred outbound departure (HH:MM, Swedish time)
 time_return = "17:22"                # preferred return departure; required when roundtrip = true
 station_from = "Göteborg Central"
@@ -113,7 +113,7 @@ sj-tool --book --dry-run        # preview: show what would be booked, without bo
 sj-tool --book                  # book for real
 sj-tool --list-bookings         # active bookings as one card per travel day
 sj-tool --list-travelpasses     # passes with validity, days left and price
-sj-tool --cancel-date 2026-09-16                # cancel that day's bookings on the configured route
+sj-tool --cancel-date 2026-09-16                # cancel that day's journeys on the configured route (other days of a booking are kept)
 sj-tool --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
 sj-tool --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what would be cancelled, no prompts
 sj-tool --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
@@ -148,18 +148,19 @@ For each date in `[date_start, date_end]`:
    (with fallback), find the 0-price pass-holder offer. If the closest departure has no such
    offer, try one alternative — earlier for the outbound, later for the return.
 5. Check out. The day card ends with the booked legs exactly as `--list-bookings` will show them
-   (or the reason nothing was booked). Provisional bookings left behind by an interrupted run are
-   cancelled automatically at the start of the next `--book` run.
+   (or the reason nothing was booked). Provisional bookings left behind by an interrupted run —
+   on your route, older than ten minutes — are cancelled automatically at the start of the next
+   `--book` run; a cart you have open on sj.se is left alone.
 
 Retries: transient failures on reads are retried (1 s / 2 s / 4 s); booking/checkout requests are
 retried only when the request never reached the server, so a gateway hiccup can't create a
-duplicate booking. Full details, edge cases and message catalogue: [`SPEC.md`](SPEC.md).
+duplicate booking. Timeouts are generous (30 s) because the booking calls themselves take seconds. Full details, edge cases and message catalogue: [`SPEC.md`](SPEC.md).
 
 ## Development
 
 ```bash
 ./venv/bin/pip install -e . --group dev   # once: project + pytest, ruff, mypy
-./venv/bin/pytest                         # ~150 tests, <1 s, no network (scripted fake client)
+./venv/bin/pytest                         # ~250 tests, <1 s, no network (scripted fake client)
 ./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatting
 ./venv/bin/mypy                           # type check
 ```

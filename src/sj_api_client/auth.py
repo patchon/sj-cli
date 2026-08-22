@@ -5,7 +5,7 @@ import select
 import sys
 
 from sj_api_client.client import SJClient
-from sj_api_client.errors import SJAPIError, SJAuthError
+from sj_api_client.errors import SJAPIError, SJAuthError, error_text
 from sj_api_client.output import blank, print_status_card, prompt, pwarn, spinner
 from sj_api_client.tokens import TokenManager
 
@@ -22,18 +22,35 @@ def read_sms_code(timeout_seconds: int = SMS_TIMEOUT_SECONDS) -> str | None:
     Args:
         timeout_seconds: How long to wait for input (default 120s).
 
+    The timeout guards a human at a terminal. An empty line (an Enter
+    pressed while the spinners ran) is not an answer: it is re-asked. A
+    pipe is read line by line without select(): Python's read-ahead buffer
+    hides queued lines from it, and a pipe cannot time out meaningfully.
+
     Returns:
-        The entered code string, or None if timeout or empty input.
+        The entered code string, or None on timeout or end of input.
 
     """
-    prompt(f"enter sms code (timeout {timeout_seconds // 60}m): ")
-
-    ready, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
-    code = sys.stdin.readline().strip() if ready else ""
-    # Close the prompt line unless the user's Enter already echoed a newline
-    if not code or not sys.stdin.isatty():
-        print()
-    return code or None
+    text = f"enter sms code (timeout {timeout_seconds // 60}m): "
+    interactive = sys.stdin.isatty()
+    prompt(text)
+    while True:
+        if interactive:
+            ready, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
+            if not ready:
+                print()  # close the prompt line
+                return None
+        line = sys.stdin.readline()
+        # Close the prompt line unless the user's Enter already echoed a newline
+        if not interactive or not line:
+            print()
+        if not line:
+            return None  # end of input
+        code = line.strip()
+        if code:
+            return code
+        pwarn("no code entered, try again")
+        prompt(text)
 
 
 def perform_full_login(
@@ -136,7 +153,7 @@ def perform_full_login(
     except SJAuthError:
         raise
     except Exception as e:
-        raise SJAuthError(f"login failed: {e}") from e
+        raise SJAuthError(f"login failed: {error_text(e)}") from e
 
 
 def handle_logout(client: SJClient, token_manager: TokenManager) -> None:
@@ -178,7 +195,7 @@ def handle_logout(client: SJClient, token_manager: TokenManager) -> None:
     if server_error:
         # Caches are cleared; sj_tool renders the failure card from this.
         raise SJAuthError(
-            f"server-side logout failed: {server_error} (local caches cleared)"
+            f"server-side logout failed: {error_text(server_error)} (local caches cleared)"
         ) from server_error
 
     if printed_trail:
@@ -206,7 +223,10 @@ def ensure_authenticated(
         (silent refresh), or "full" (interactive/cookie full login).
 
     Raises:
-        SJAuthError: If all authentication methods fail.
+        SJAuthError: If all authentication methods fail — or if a refresh
+            that should have worked failed transiently (network, 5xx): that
+            is reported as such rather than turned into an SMS login the
+            refresh token makes unnecessary (SPEC §3.1).
 
     """
     token_data = token_manager.load()
@@ -221,30 +241,27 @@ def ensure_authenticated(
                 )
                 try:
                     new_token = client.refresh_token(token_data["refresh_token"])
-                    if new_token:
-                        token_manager.save(new_token)
-                        logger.info("session extended via proactive token refresh")
-                        return new_token["access_token"], "refreshed"
-                except Exception as e:
+                except SJAuthError as e:  # transient: the current token still works
                     logger.warning(f"proactive refresh failed: {e}")
-                # Still valid, use current token
+                    new_token = None
+                if new_token:
+                    token_manager.save(new_token)
+                    logger.info("session extended via proactive token refresh")
+                    return new_token["access_token"], "refreshed"
             logger.info("using cached access token")
             return token_data["access_token"], "cached"
 
-        # Expired but has refresh token → try refresh
+        # Expired but has refresh token → refresh. A transient failure
+        # propagates (re-run later); only a rejected refresh token (None)
+        # means a full login is due.
         if token_manager.has_refresh_token():
             logger.info("access token expired, refreshing ...")
-            try:
-                new_token = client.refresh_token(token_data["refresh_token"])
-                if new_token:
-                    token_manager.save(new_token)
-                    logger.info("token refreshed successfully")
-                    return new_token["access_token"], "refreshed"
-            except Exception as e:
-                logger.warning(f"token refresh failed: {e}")
-
-            # Refresh failed, fall through to full login
-            logger.info("token refresh failed, performing full login ...")
+            new_token = client.refresh_token(token_data["refresh_token"])
+            if new_token:
+                token_manager.save(new_token)
+                logger.info("token refreshed successfully")
+                return new_token["access_token"], "refreshed"
+            logger.info("refresh token rejected, performing full login ...")
         else:
             logger.info("refresh token expired, performing full login ...")
 
@@ -282,12 +299,13 @@ def ensure_valid_token(
             if token_data and "refresh_token" in token_data:
                 try:
                     new_token = client.refresh_token(token_data["refresh_token"])
+                except SJAuthError as e:  # transient: the current token still works
+                    logger.warning(f"proactive mid-run refresh failed: {e}")
+                else:
                     if new_token:
                         token_manager.save(new_token)
                         logger.info("session extended via proactive token refresh")
                         return new_token["access_token"]
-                except Exception as e:
-                    logger.warning(f"proactive mid-run refresh failed: {e}")
         return current_access_token
 
     logger.info("access token expired during run, attempting refresh ...")
@@ -299,15 +317,16 @@ def ensure_valid_token(
             "please re-run the tool to re-authenticate."
         )
 
-    try:
-        new_token = client.refresh_token(token_data["refresh_token"])
-        if new_token:
-            token_manager.save(new_token)
-            logger.info("token refreshed mid-run")
-            return new_token["access_token"]
-    except Exception as e:
-        logger.warning(f"mid-run token refresh failed: {e}")
+    # A transient failure (SJAuthError from the client) propagates with its
+    # cause: re-running later will refresh fine, which "re-authenticate"
+    # would not say. None means the refresh token itself was rejected.
+    new_token = client.refresh_token(token_data["refresh_token"])
+    if new_token:
+        token_manager.save(new_token)
+        logger.info("token refreshed mid-run")
+        return new_token["access_token"]
 
     raise SJAuthError(
-        "access token expired and refresh failed. please re-run the tool to re-authenticate."
+        "access token expired and the refresh token was rejected. "
+        "please re-run the tool to re-authenticate."
     )

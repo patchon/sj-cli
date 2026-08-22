@@ -117,7 +117,6 @@ def test_sms_prompt_inline_with_marker(monkeypatch, capsys):
 
     from sj_api_client import auth
 
-    monkeypatch.setattr(auth.select, "select", lambda *_: ([_sys.stdin], [], []))
     monkeypatch.setattr(_sys, "stdin", io.StringIO("534734\n"))
     assert auth.read_sms_code(timeout_seconds=120) == "534734"
     # inline prompt with the ? marker; newline added because stdin isn't a tty
@@ -125,11 +124,60 @@ def test_sms_prompt_inline_with_marker(monkeypatch, capsys):
 
 
 def test_sms_prompt_timeout_closes_line(monkeypatch, capsys):
+    import sys as _sys
+
     from sj_api_client import auth
 
+    monkeypatch.setattr(_sys.stdin, "isatty", lambda: True)  # the timeout guards a human
     monkeypatch.setattr(auth.select, "select", lambda *_: ([], [], []))
     assert auth.read_sms_code(timeout_seconds=120) is None
     assert capsys.readouterr().out == " ? enter sms code (timeout 2m): \n"
+
+
+def test_sms_prompt_reasks_on_an_empty_line(monkeypatch, capsys):
+    import io
+    import sys as _sys
+
+    from sj_api_client import auth
+
+    # an Enter queued while the spinners ran must not count as "timed out"
+    monkeypatch.setattr(_sys, "stdin", io.StringIO("\n123456\n"))
+    assert auth.read_sms_code(timeout_seconds=120) == "123456"
+    assert "! no code entered, try again" in capsys.readouterr().out
+
+
+def test_sms_prompt_on_a_pipe_reads_every_line(monkeypatch):
+    import io
+    import sys as _sys
+
+    import pytest
+
+    from sj_api_client import auth
+
+    # two codes piped in: the second sits in Python's read-ahead buffer where
+    # select() cannot see it — a pipe is read directly, only a tty is timed
+    monkeypatch.setattr(_sys, "stdin", io.StringIO("111111\n222222\n"))
+    monkeypatch.setattr(auth.select, "select", lambda *_: pytest.fail("select on a pipe"))
+    assert auth.read_sms_code() == "111111"
+    assert auth.read_sms_code() == "222222"
+    assert auth.read_sms_code() is None  # EOF
+
+
+def test_login_failure_text_is_one_line(monkeypatch):
+    import httpx
+    import pytest
+
+    from sj_api_client import auth
+    from sj_api_client.errors import SJAuthError
+
+    class Blocked(FakeLoginClient):
+        def initiate_login(self, email, password):
+            req = httpx.Request("GET", "https://www.sj.se/cb?code=SECRET&state=s")
+            raise httpx.HTTPStatusError("x", request=req, response=httpx.Response(403, request=req))
+
+    with pytest.raises(SJAuthError) as exc:
+        auth.perform_full_login(Blocked(), "e@x.se", "pw")
+    assert "\n" not in str(exc.value) and "SECRET" not in str(exc.value)
 
 
 def test_valid_cached_token_reports_cached(tmp_path, capsys):
@@ -197,3 +245,40 @@ def test_wrong_sms_code_exhausts_attempts(monkeypatch):
     with pytest.raises(SJAuthError, match="sms code rejected 3 times"):
         auth.perform_full_login(fc, "e@x.se", "pw")
     assert fc.calls.count(("verify", "910676")) == 3
+
+
+def test_refresh_errors_propagate_instead_of_forcing_an_sms_login(tmp_path, monkeypatch, capsys):
+    import pytest
+
+    from sj_api_client import auth
+    from sj_api_client.errors import SJAuthError
+
+    now = int(time.time())
+    tm = TokenManager(tmp_path / "token.json")
+    tm.save(
+        {
+            "access_token": "a",
+            "expires_on": now - 100,  # expired: a refresh is due
+            "refresh_token": "r",
+            "refresh_token_expires_on": now + 86400,
+        }
+    )
+
+    class Transient:
+        def refresh_token(self, _rt):
+            raise SJAuthError("token refresh failed: 503 Service Unavailable")
+
+    with pytest.raises(SJAuthError, match="token refresh failed: 503"):
+        ensure_authenticated(Transient(), tm, "e@x.se", "pw")  # no login attempted
+    tm.load()
+    with pytest.raises(SJAuthError, match="token refresh failed: 503"):
+        ensure_valid_token(Transient(), tm, "a")
+
+    class Rejected(FakeLoginClient):
+        def refresh_token(self, _rt):
+            return None  # the refresh token itself is dead → full login
+
+    monkeypatch.setattr(auth, "read_sms_code", lambda: "534734")
+    token, method = ensure_authenticated(Rejected(), tm, "e@x.se", "pw")
+    assert (token, method) == ("t", "full")
+    capsys.readouterr()

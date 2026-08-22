@@ -61,3 +61,28 @@ def test_httpcore_records_are_scrubbed_by_the_filter():
     )
     assert HttpxTraceLevelFilter(True).filter(rec)
     assert "SECRET" not in rec.getMessage() and rec.levelname == "TRACE"
+
+
+def test_redaction_covers_sms_codes_csrf_tokens_and_auth_codes():
+    import json
+
+    from sj_api_client.logger import log_json
+
+    data = {
+        "verification_code": "123456",
+        "X-CSRF-TOKEN": "csrf-abc",
+        "csrf_token": "csrf-def",
+        "code": "A" * 40,  # an OAuth authorization code
+        "status": {"code": 106},  # the API's numeric error code stays readable
+    }
+    out = json.loads(log_json(data))
+    assert out["verification_code"] == out["X-CSRF-TOKEN"] == out["csrf_token"] == out["code"]
+    assert out["code"] == "***redacted***"
+    assert out["status"]["code"] == 106
+
+
+def test_invalid_log_level_is_reported_on_stderr(capsys):
+    from sj_api_client.logger import setup_logging
+
+    setup_logging("bogus")
+    assert "invalid log level 'bogus' specified, defaulting to CRITICAL" in capsys.readouterr().err

@@ -290,3 +290,10 @@ def test_leg_lines_keep_arrows_when_the_subset_starts_with_the_return():
     out_ = {"departure": "06:59", "arrival": "11:36", "route": "A → B", "direction": "Outbound"}
     assert [line[0] for line in leg_lines([ret, out_])] == ["←", "→"]
     assert leg_lines([ret])[0].startswith("←")
+
+
+def test_zero_receipt_amount_is_a_price_not_unknown():
+    from sj_api_client.output import _extract_price
+
+    assert _extract_price({"totalAmount": {"amount": 0, "currency": "SEK"}}) == "0 SEK"
+    assert _extract_price({"amount": 0}) == "0 SEK"

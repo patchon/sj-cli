@@ -280,17 +280,19 @@ class _StubClient:
         return name
 
 
-def _logged_in_with_config(tmp_path, monkeypatch):
+def _logged_in_with_config(tmp_path, monkeypatch, **overrides):
     from sj_api_client import cli
     from sj_api_client.config import CfgManager
-    from tests.fakes import base_cfg
+    from sj_api_client.tokens import TokenManager
+    from tests.fakes import future_cfg
 
-    params = base_cfg()["search_parameters"]
+    params = future_cfg(**overrides)["search_parameters"]
     lines = ["[auth]", 'email = "a@b.se"', 'password = "x"', "", "[search_parameters]"]
     for k, v in params.items():
         lines.append(f"{k} = {str(v).lower() if isinstance(v, bool) else repr(v)}")
     (tmp_path / "config.toml").write_text("\n".join(lines) + "\n")
     monkeypatch.setattr(cli, "CfgManager", lambda: CfgManager(tmp_path / "config.toml"))
+    monkeypatch.setattr(cli, "TokenManager", lambda: TokenManager(tmp_path / "token.json"))
     monkeypatch.setattr(cli, "ensure_authenticated", lambda *_a: ("tok", "cached"))
     monkeypatch.setattr(cli, "fetch_all_bookings", lambda *_a, **_k: [])
     monkeypatch.setattr(cli, "cleanup_stale_provisionals", lambda *_a, **_k: [])
@@ -327,3 +329,217 @@ def test_cancel_booking_exit_code_follows_the_outcome(tmp_path, monkeypatch, ok,
         with pytest.raises(SystemExit) as exc:
             cli._run(parse_args(["--cancel-booking", "ABCD1234"]), _StubClient())
         assert exc.value.code == code
+
+
+# --- no hidden flag prefixes ------------------------------------------------
+
+
+def test_flag_prefixes_are_not_aliases(capsys):
+    # argparse would otherwise accept any unique prefix: `--logo` (a typo of
+    # --login) must not log the user out
+    for argv in (["--logo"], ["--list-t"], ["--login-s"], ["--dry", "--book"]):
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args(argv)
+        assert exc_info.value.code == 1
+        assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_empty_cancel_values_are_reported_as_invalid_not_as_no_operation(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--cancel-date", ""])
+    assert exc_info.value.code == 1
+    out = capsys.readouterr().out
+    assert "● invalid --cancel-date" in out and "empty entry in the date list" in out
+    with pytest.raises(SystemExit):
+        parse_args(["--cancel-booking", ""])
+    assert "● invalid --cancel-booking" in capsys.readouterr().out
+
+
+def test_cancel_date_range_guard_is_one_year_inclusive():
+    from sj_api_client.cli import parse_cancel_dates
+
+    assert parse_cancel_dates("2026-01-01..2026-12-31")[1] == []
+    assert parse_cancel_dates("2028-01-01..2028-12-31")[1] == []  # leap year: 366 days
+    assert "spans more than a year" in parse_cancel_dates("2026-01-01..2027-01-01")[1][0]
+
+
+# --- travel pass selection --------------------------------------------------
+
+
+def _pass(name, start, end):
+    return {
+        "name": name,
+        "travelPassId": name,
+        "startTravelValidityDateTime": f"{start}T00:00:00+01:00",
+        "endTravelValidityDateTime": f"{end}T00:00:00+01:00",
+    }
+
+
+def test_pass_covering_the_booking_window_is_picked_without_a_prompt(monkeypatch):
+    from datetime import date
+
+    from sj_api_client.cli import resolve_travel_pass
+
+    monkeypatch.setattr("builtins.input", lambda *_a: pytest.fail("prompted"))
+    a = _pass("A", "2026-01-01", "2027-01-01")
+    b = _pass("B", "2027-01-01", "2028-01-01")  # a renewal bought ahead
+    window = (date(2026, 9, 1), date(2026, 10, 30))
+    assert resolve_travel_pass([a, b], for_dates=window) is a
+    assert resolve_travel_pass([a, b], for_dates=(date(2027, 3, 1), date(2027, 3, 5))) is b
+
+
+def test_pass_prompt_needs_a_terminal_and_stops_on_eof(monkeypatch, capsys):
+    from sj_api_client import cli
+
+    a, b = _pass("A", "2026-01-01", "2027-01-01"), _pass("B", "2026-06-01", "2027-06-01")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    with pytest.raises(SystemExit) as exc:
+        cli.resolve_travel_pass([a, b])
+    assert exc.value.code == 1
+    assert "● 2 valid travel passes · run in a terminal to choose one" in capsys.readouterr().out
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "ask", lambda _t: "")  # EOF
+    with pytest.raises(SystemExit) as exc:
+        cli.resolve_travel_pass([a, b])
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "● no travel pass selected" in out
+    assert "1. A (2026-01-01 → 2026-12-31)" in out  # the last valid day, not the exclusive end
+
+    answers = iter(["x", "2"])
+    monkeypatch.setattr(cli, "ask", lambda _t: next(answers))
+    assert cli.resolve_travel_pass([a, b]) is b
+    assert "invalid selection, try again" in capsys.readouterr().out
+
+
+def test_no_valid_pass_closes_with_a_status_line(capsys):
+    from sj_api_client.cli import resolve_travel_pass
+
+    with pytest.raises(SystemExit):
+        resolve_travel_pass([_pass("Old", "2020-01-01", "2021-01-01")])
+    assert "● no valid travel pass found" in capsys.readouterr().out
+
+
+def test_listing_modes_never_prompt_for_a_pass(tmp_path, monkeypatch, capsys):
+    class TwoPasses(_StubClient):
+        def get_travel_passes(self, _token):
+            return [_pass("A", "2026-01-01", "2027-01-01"), _pass("B", "2026-06-01", "2027-06-01")]
+
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli, "handle_list_bookings", lambda *_a, **_k: None)
+    cli._run(parse_args(["--list-bookings"]), TwoPasses())
+    assert "travelpass   B" in capsys.readouterr().out  # the longest-lived pass sets the range
+    cli._run(parse_args(["--list-travelpasses"]), TwoPasses())
+    out = capsys.readouterr().out
+    assert "● 2 travel pass(es)" in out and "select pass" not in out
+
+
+def test_list_travelpasses_shows_expired_passes_instead_of_failing(tmp_path, monkeypatch, capsys):
+    class Expired(_StubClient):
+        def get_travel_passes(self, _token):
+            return [_pass("Old", "2020-01-01", "2021-01-01")]
+
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    cli._run(parse_args(["--list-travelpasses"]), Expired())
+    out = capsys.readouterr().out
+    assert "2020-01-01 – 2020-12-31 (expired)" in out and "● 1 travel pass(es)" in out
+
+
+def test_receipt_failure_does_not_hide_the_pass_cards(capsys):
+    from sj_api_client.cli import handle_list_travelpasses
+    from sj_api_client.errors import SJAPIError
+
+    class NoReceipts:
+        def get_receipt_search(self, _booking_id):
+            raise SJAPIError({"errorCode": "31100", "message": "trace disabled"})
+
+    tp = {**_pass("A", "2026-01-01", "2027-01-01"), "travelPassCreationBookingId": "B1"}
+    handle_list_travelpasses(NoReceipts(), [tp])
+    out = capsys.readouterr().out
+    assert "! could not fetch the receipt for A: 31100 · trace disabled" in out
+    assert "● 1 travel pass(es)" in out
+
+
+# --- dates: past date_start, --cancel-date needs only the route -------------
+
+
+def test_cancel_date_ignores_the_config_dates(tmp_path, monkeypatch):
+    cli = _logged_in_with_config(
+        tmp_path, monkeypatch, date_start="2020-01-01", date_end="2020-02-01"
+    )
+    monkeypatch.setattr(cli, "handle_cancel_mode", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        cli, "validate_dates_against_pass", lambda *_a, **_k: pytest.fail("dates checked")
+    )
+    cli._run(parse_args(["--cancel-date", "2026-09-15"]), _StubClient())  # exit 0
+
+
+def test_pass_validation_uses_the_effective_start(capsys):
+    from datetime import date
+
+    from sj_api_client.cli import validate_dates_against_pass
+    from tests.fakes import base_cfg
+
+    tp = _pass("A", "2026-06-01", "2027-01-01")
+    cfg = base_cfg(date_start="2026-01-01", date_end="2026-10-30")  # started before the pass
+    validate_dates_against_pass(cfg, tp, today=date(2026, 8, 22))  # today is inside: fine
+    with pytest.raises(SystemExit):
+        validate_dates_against_pass(cfg, tp, today=date(2026, 3, 1))
+    assert "● search dates (2026-03-01 – 2026-10-30) are outside travel pass validity" in (
+        capsys.readouterr().out
+    )
+
+
+# --- --login verdict and failure lines --------------------------------------
+
+
+def test_login_verdict_comes_from_the_session_just_established(tmp_path, monkeypatch, capsys):
+    import time
+
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+
+    def login(_client, tm, _email, _password):
+        now = int(time.time())
+        tm.token = {"access_token": "fresh", "expires_on": now + 900, "refresh_token": "r"}
+        tm.save_error = "disk full"  # the cache could not be written
+        return "fresh", "full"
+
+    monkeypatch.setattr(cli, "ensure_authenticated", login)
+    with pytest.raises(SystemExit) as exc:
+        cli._run(parse_args(["--login"]), _StubClient())
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "● logged in" in out  # not "no cached login found" from re-reading the disk
+    assert "! token cache not saved: disk full · the next run will need to log in again" in out
+
+
+def test_failures_close_with_a_status_line(tmp_path, monkeypatch, capsys):
+    from sj_api_client.errors import SJAuthError
+
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+
+    def down(*_a):
+        raise SJAuthError("token refresh failed: timed out")
+
+    monkeypatch.setattr(cli, "ensure_authenticated", down)
+    with pytest.raises(SystemExit) as exc:
+        cli._run(parse_args(["--book", "--dry-run"]), _StubClient())
+    assert exc.value.code == 1
+    assert "● token refresh failed: timed out" in capsys.readouterr().out
+
+    class NoMembership(_StubClient):
+        def get_membership(self, _token):
+            raise RuntimeError("503 Service Unavailable")
+
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    with pytest.raises(SystemExit):
+        cli._run(parse_args(["--book", "--dry-run"]), NoMembership())
+    assert "● initialization failed: 503 Service Unavailable" in capsys.readouterr().out
+
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "handle_list_bookings", lambda *_a, **_k: 1 / 0)
+    with pytest.raises(SystemExit):
+        cli._run(parse_args(["--list-bookings"]), _StubClient())
+    assert "● error: division by zero" in capsys.readouterr().out

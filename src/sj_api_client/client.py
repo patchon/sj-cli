@@ -12,10 +12,18 @@ from typing import Any
 
 import httpx
 
-from sj_api_client.errors import SJAPIError, SJAuthError
-from sj_api_client.logger import log_json, log_request, log_response
+from sj_api_client.errors import SJAPIError, SJAuthError, error_text
+from sj_api_client.logger import log_json, log_request, log_response, redact_url
 
 logger = logging.getLogger(__name__)
+
+# The recorded booking calls (create provisional, add leg) take 3.5-4.3 s;
+# httpx's 5 s default would cut them off on a slow day. Connecting is quick.
+HTTP_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
+# Request extension that lets a non-idempotent request opt into the GET retry
+# policy (the token refresh: replaying it is harmless).
+RETRY_EXTENSION = "sj_retry"
 
 # Module-level station name → UIC code map (single source of truth).
 STATION_MAP = {
@@ -69,6 +77,11 @@ def parse_json_response(response: httpx.Response, url: str) -> None:
         raise SJAPIError(msg) from None
     logger.debug(f"parsed json: as {log_json(resp_json)}")
 
+    if not isinstance(resp_json, dict):
+        # A list body (travel passes, receipts) carries no error envelope
+        response.raise_for_status()
+        return
+
     # Make sure the status key is 200 if it exists
     status = resp_json.get("status")
     if status:
@@ -121,6 +134,32 @@ def _raise_for_failure(response: httpx.Response) -> None:
     response.raise_for_status()
 
 
+def _json_or_raise(response: httpx.Response) -> Any:
+    """
+    The JSON body of a successful response, or raise.
+
+    The API's own error envelope wins over the status code (even behind an
+    HTTP 200); a non-2xx without one is an HTTPStatusError; a 2xx whose body
+    is empty or not JSON is an SJAPIError — the caller expected data. Every
+    data-returning endpoint goes through this, so an error never comes back
+    as a return value.
+
+    Raises:
+        SJAPIError: If the body reports an error, or a 2xx body is unusable.
+        httpx.HTTPStatusError: If the status is non-2xx without such a body.
+
+    """
+    _raise_for_failure(response)
+    if not response.content:
+        raise SJAPIError(f"empty response from {redact_url(response.url)}")
+    try:
+        return response.json()
+    except ValueError:
+        raise SJAPIError(
+            f"non-json response from {redact_url(response.url)}: {response.text[:200]}"
+        ) from None
+
+
 class RetryTransport(httpx.BaseTransport):
     """
     Transport wrapper that retries on transient failures.
@@ -144,20 +183,23 @@ class RetryTransport(httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         """Send request with retry logic for transient failures."""
-        idempotent = request.method.upper() in self.IDEMPOTENT_METHODS
+        idempotent = request.method.upper() in self.IDEMPOTENT_METHODS or bool(
+            request.extensions.get(RETRY_EXTENSION)
+        )
+        url = redact_url(request.url)
         for attempt in range(len(self.RETRY_DELAYS) + 1):
             try:
-                response = self._transport.handle_request(request)
+                response = self._read_fully(self._transport.handle_request(request))
             except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as e:
                 # Connection never established → the request was not sent → safe
                 # to retry for any method. Otherwise (read/write errors, a
-                # pooled connection the server closed, timeouts) only
-                # idempotent methods.
+                # pooled connection the server closed, timeouts, a body that
+                # stalls after the headers) only idempotent methods.
                 never_sent = isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
                 if (idempotent or never_sent) and attempt < len(self.RETRY_DELAYS):
                     delay = self.RETRY_DELAYS[attempt]
                     logger.warning(
-                        f"{type(e).__name__} for {request.method} {request.url}, "
+                        f"{type(e).__name__} for {request.method} {url}, "
                         f"retrying in {delay}s (attempt {attempt + 1}/{len(self.RETRY_DELAYS)})"
                     )
                     time.sleep(delay)
@@ -171,7 +213,7 @@ class RetryTransport(httpx.BaseTransport):
             ):
                 delay = self.RETRY_DELAYS[attempt]
                 logger.warning(
-                    f"got {response.status_code} from {request.method} {request.url}, "
+                    f"got {response.status_code} from {request.method} {url}, "
                     f"retrying in {delay}s (attempt {attempt + 1}/{len(self.RETRY_DELAYS)})"
                 )
                 time.sleep(delay)
@@ -180,6 +222,32 @@ class RetryTransport(httpx.BaseTransport):
 
         # Unreachable: the loop either returns a response or re-raises.
         raise AssertionError("retry loop exited without a result")
+
+    @staticmethod
+    def _read_fully(response: httpx.Response) -> httpx.Response:
+        """
+        Read the whole body now and hand back a response that already holds it.
+
+        A body that stalls or resets after the headers is then a transport
+        error of this attempt — retried for idempotent requests, raised as
+        itself otherwise — instead of surfacing from a later read as a
+        baffling StreamConsumed. Draining the stream also returns the pooled
+        connection, so a retried 502/503 never pins one.
+
+        The bytes are taken raw (still gzip-encoded, headers untouched) and
+        handed back in an unread response: httpx's client wraps that stream
+        itself and decodes, times (``elapsed``) and closes it as usual.
+        """
+        try:
+            raw = b"".join(response.stream)  # type: ignore[arg-type]
+        finally:
+            response.close()
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            stream=httpx.ByteStream(raw),
+            extensions=response.extensions,
+        )
 
     def close(self) -> None:
         """Close the underlying transport."""
@@ -237,6 +305,7 @@ class SJClient:
             transport=RetryTransport(base_transport),
             http2=False,
             follow_redirects=True,
+            timeout=HTTP_TIMEOUT,
             event_hooks={"request": [log_request], "response": [log_response]},
         )
 
@@ -528,7 +597,16 @@ class SJClient:
             refresh_token: The refresh token string.
 
         Returns:
-            The new token data as a dictionary if successful, None otherwise.
+            The new token data as a dictionary on success; None when B2C
+            rejected the refresh token itself (expired, revoked, malformed —
+            a 4xx with an error body), which means a full login is due.
+
+        Raises:
+            SJAuthError: On a transient failure — a network error or timeout
+                (the POST is retried like a GET first: replaying a refresh is
+                harmless), a 5xx, or an unexpected response — which says
+                nothing about the refresh token; the caller should not fall
+                back to an SMS login for it.
 
         """
         url_token = f"{self.URL_AUTH_FLOW_BASE}/oauth2/v2.0/token"
@@ -543,15 +621,25 @@ class SJClient:
 
         logger.info("attempting to refresh token ...")
 
-        resp = self.client.post(url_token, data=data)
+        try:
+            resp = self.client.post(url_token, data=data, extensions={RETRY_EXTENSION: True})
+        except httpx.HTTPError as e:
+            logger.error(f"error refreshing token: {error_text(e)}")
+            raise SJAuthError(f"token refresh failed: {error_text(e)}") from e
         logger.info(f"refresh response http code: {resp.status_code}")
 
-        # Try to parse json response
-        try:
-            parse_json_response(resp, url_token)
-        # If we have an error from the api
-        except SJAPIError as e:
-            err_desc = (e.payload or {}).get("error_description", "")
+        body = None
+        if resp.content:
+            with contextlib.suppress(ValueError):
+                body = resp.json()
+
+        if resp.is_success and isinstance(body, dict) and body.get("access_token"):
+            return body
+
+        if resp.is_client_error and isinstance(body, dict) and "error" in body:
+            # B2C's verdict on the refresh token: definitive, not transient
+            err = SJAPIError(body)
+            err_desc = str(body.get("error_description") or "")
             if "The provided grant has expired" in err_desc:
                 iss_match = re.search(r"Grant issued time: (\d+)", err_desc)
                 exp_match = re.search(r"Grant expiration time: (\d+)", err_desc)
@@ -563,15 +651,15 @@ class SJClient:
                         f"issued at {iss_dt} and expired: {exp_dt}"
                     )
                 logger.info("token refresh grant is expired, will do full login")
-                return None
-
-            logger.error(f"api error refreshing token: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"error refreshing token: {e}")
+            else:
+                logger.error(f"refresh token rejected: {err}")
             return None
 
-        return resp.json()
+        detail = f"{resp.status_code} {resp.reason_phrase}".strip()
+        if isinstance(body, dict):
+            detail = f"{detail} · {SJAPIError(body)}" if body else detail
+        logger.error(f"error refreshing token: {detail}")
+        raise SJAuthError(f"token refresh failed: {detail}")
 
     def sms_trigger(self) -> None:
         """
@@ -934,8 +1022,9 @@ class SJClient:
         steps.
 
         Raises:
-            SJAPIError: If the 'transId' cannot be found in the page content.
-            httpx.HTTPStatusError: If the HTTP status code is not 200.
+            SJAPIError: If the request fails (the message never carries the
+                callback URL's auth code) or the 'transId' cannot be found in
+                the page content.
 
         """
         logger.info("fetching login page ...")
@@ -950,19 +1039,25 @@ class SJClient:
             "state": self.state,
         }
 
-        # Get page content and verify http status code
         resp = self.client.get(self.AUTH_BASE, params=params)
-        resp.raise_for_status()
 
         # A live SSO session makes B2C skip the login page: the authorize
         # request is redirected straight back to the callback with a code
         # (silent login may still have failed, e.g. on the token exchange).
-        # Take the code instead of demanding a transId the page does not have.
+        # Take the code — before judging the status: it sits in the redirect
+        # history whatever www.sj.se answers to the bare callback GET (a WAF
+        # 403, an SPA 404), and the code is all this step needs.
         code = self._extract_auth_code(resp, log_missing=False)
         if code:
             logger.info("sso session still valid, authorize answered with a code")
             self._sso_auth_code = code
             return
+
+        if resp.is_error:
+            raise SJAPIError(
+                f"login page request failed: {resp.status_code} {resp.reason_phrase} "
+                f"for {redact_url(resp.url)}"
+            )
 
         # Extract transid
         content = resp.text
@@ -1208,12 +1303,7 @@ class SJClient:
 
         logger.info("exchanging code for token ...")
         resp = self.client.post(url_token, data=data)
-        if resp.status_code != 200:
-            logger.error("token exchange failed:")
-            logger.error(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def get_membership(self, access_token: str) -> dict[str, Any]:
         """
@@ -1239,12 +1329,7 @@ class SJClient:
 
         logger.info(f"fetching membership info from {url_api} ...")
         resp = self.client.get(url_api, headers=headers)
-        if resp.status_code != 200:
-            logger.error(f"membership api failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def get_bookings(
         self, access_token: str, start_date: str, end_date: str, page: int = 0
@@ -1283,13 +1368,7 @@ class SJClient:
 
         logger.info(f"fetching bookings (page {page}) from {start_date} to {end_date} ...")
         resp = self.client.get(url_api, params=params, headers=headers)
-
-        if resp.status_code != 200:
-            logger.error(f"bookings api failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def resolve_station(self, station_name: str) -> str:
         """
@@ -1338,13 +1417,7 @@ class SJClient:
 
         logger.info("fetching travel passes ...")
         resp = self.client.get(url_api, headers=headers)
-
-        if resp.status_code != 200:
-            logger.error(f"travel passes api failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def get_receipt_search(self, booking_id: str) -> list[dict[str, Any]]:
         """
@@ -1355,6 +1428,10 @@ class SJClient:
 
         Returns:
             A list of receipt summary dicts.
+
+        Raises:
+            SJAPIError: If the API reports an error.
+            httpx.HTTPError: On a non-2xx response or a network failure.
 
         """
         url_api = f"{self.URL_API_BOOKING}/receipts/search/{booking_id}"
@@ -1373,12 +1450,7 @@ class SJClient:
         logger.info(f"searching receipts for booking {booking_id} ...")
         resp = self.client.get(url_api, headers=headers)
 
-        if resp.status_code != 200:
-            logger.warning(f"receipt search failed: {resp.status_code}")
-            logger.debug(resp.text)
-            return []
-
-        data = resp.json()
+        data = _json_or_raise(resp)
         if isinstance(data, dict) and "data" in data:
             return data["data"] if isinstance(data["data"], list) else [data["data"]]
         return data if isinstance(data, list) else [data]
@@ -1459,13 +1531,7 @@ class SJClient:
             f"{destination_name} ({dest_id}) on {departure_date} ..."
         )
         resp = self.client.post(url_api, json=payload, headers=headers)
-
-        if resp.status_code != 200:
-            logger.error(f"search api failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()  # Raise here to catch early
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def get_search_results(self, access_token: str, search_id: str) -> dict[str, Any]:
         """
@@ -1494,13 +1560,7 @@ class SJClient:
 
         logger.info(f"fetching search results for id {search_id} ...")
         resp = self.client.get(url_api, headers=headers)
-
-        if resp.status_code != 200:
-            logger.error(f"search results api failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def get_offers(
         self, access_token: str, departure_id: str, passenger_token: str
@@ -1531,13 +1591,7 @@ class SJClient:
 
         logger.info(f"fetching offers for departure {departure_id} ...")
         resp = self.client.get(url_api, params=params, headers=headers)
-
-        if resp.status_code != 200:
-            logger.error(f"offers api failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def generate_trace_headers(self) -> dict[str, str]:
         """
@@ -1605,13 +1659,7 @@ class SJClient:
         logger.debug(f"creation payload:\n{log_json(payload)}")
         logger.debug(f"creation headers:\n{log_json(headers)}")
         resp = self.client.post(url_api, json=payload, headers=headers)
-
-        if resp.status_code not in [200, 201]:
-            logger.error(f"create booking failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def add_offer_to_booking(
         self, access_token: str, booking_id: str, offer_id: str, passenger_token: str
@@ -1658,20 +1706,14 @@ class SJClient:
         logger.info(f"adding offer {offer_id} to booking {booking_id} (patch) ...")
         # NOTE: Using PATCH, not POST
         resp = self.client.patch(url_api, json=payload, headers=headers)
-
-        if resp.status_code not in [200, 201]:
-            logger.error(f"add offer (patch) failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def update_booking_customer(
         self,
         access_token: str,
         booking_id: str,
         email: str,
-        phone: str,
+        phone: str | None = None,
     ) -> dict[str, Any]:
         """
         Updates customer details for the booking.
@@ -1680,7 +1722,8 @@ class SJClient:
             access_token: The OAuth2 access token.
             booking_id: The ID of the booking.
             email: The customer's email.
-            phone: The customer's phone number.
+            phone: The customer's phone number; None leaves the booking's
+                number as it is (the field is then not sent).
 
         Returns:
             The API response dictionary.
@@ -1688,10 +1731,9 @@ class SJClient:
         """
         url_api = f"{self.URL_API_BOOKING}/bookings/provisional/{booking_id}/customer"
 
-        payload = {
-            "email": email,
-            "phoneNumber": phone,
-        }
+        payload = {"email": email}
+        if phone:
+            payload["phoneNumber"] = phone
 
         headers = {
             "Authorization": f"Bearer {access_token}",
@@ -1704,13 +1746,7 @@ class SJClient:
 
         logger.info(f"updating customer for booking {booking_id} ...")
         resp = self.client.patch(url_api, json=payload, headers=headers)
-
-        if resp.status_code != 200:
-            logger.error(f"update customer failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def checkout_booking(self, access_token: str, booking_id: str) -> dict[str, Any]:
         """
@@ -1739,13 +1775,7 @@ class SJClient:
 
         logger.info(f"checking out booking {booking_id} ...")
         resp = self.client.post(url_api, json=payload, headers=headers)
-
-        if resp.status_code not in [200, 201]:
-            logger.error(f"checkout failed: {resp.status_code}")
-            logger.debug(resp.text)
-            resp.raise_for_status()
-
-        return resp.json()
+        return _json_or_raise(resp)
 
     def cancel_provisional_booking(self, access_token: str, booking_id: str) -> None:
         """

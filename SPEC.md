@@ -10,7 +10,7 @@ This is **not** a general-purpose booking tool. It handles one route, one passen
 
 ## 2. Architecture
 
-Plain venv, no package manager or build system. Modules organized by separation of concerns:
+Standard src layout declared in `pyproject.toml` (PEP 621, `pip install -e .`). Modules organized by separation of concerns:
 
 | Module | Role |
 |---|---|
@@ -21,7 +21,7 @@ Plain venv, no package manager or build system. Modules organized by separation 
 | `config.py` | Configuration loading and validation (`CfgManager`). |
 | `tokens.py` | Token cache management (`TokenManager`). Load, save, validate expiry, check refresh availability. |
 | `logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. |
-| `errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`). |
+| `errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`) and `error_text()`, the one-line, redacted rendering every printed exception goes through. |
 | `output.py` | User-facing output helpers. `pinfo()`/`pdim()`, ANSI styling, spinner, per-day booking cards, status cards (auth modes), travel-pass cards. |
 | `dates.py` | Swedish red-day calendar (Easter computed, no dependency). `skip_reason()` for weekend/holiday skipping. |
 
@@ -71,7 +71,7 @@ Follow industry-standard OAuth2 token handling:
 
 1. **Load cached token** from `~/.cache/sj-api-client/token.json`.
 2. **Validate access token**: check `expires_on` timestamp with a 5-minute safety buffer. If valid, use it.
-3. **Refresh**: if access token is expired but refresh token exists, call the B2C token endpoint with `grant_type=refresh_token`. On success, cache the new token set and proceed.
+3. **Refresh**: if access token is expired but refresh token exists, call the B2C token endpoint with `grant_type=refresh_token`. On success, cache the new token set and proceed. The refresh POST is retried like a read (replaying it is harmless). A *transient* failure — network error, timeout, 5xx — is reported as `● token refresh failed: …` and the run exits 1 (re-run later; the cache is untouched); only a refresh token that B2C rejects (a 4xx with an error body) falls through to the full login.
 4. **Full login**: if no cached token exists, or refresh fails, perform the interactive B2C login flow. This is the only path that requires user interaction.
 
 The tool must always attempt to use what it has before falling back to a more intrusive method. Never prompt for SMS if a valid or refreshable token exists.
@@ -86,7 +86,7 @@ Multi-step sequence against `id.sj.se` (Azure AD B2C):
 4. Send device fingerprint. B2C reports a rejected registration (stale CSRF token, bad transaction) as a JSON error with HTTP 200; it is raised as an `SJAPIError` with B2C's code and message here, not discovered one request later.
 5. Advance to MFA orchestration step.
 6. Trigger SMS MFA.
-7. Prompt user for SMS code (stdin). **Timeout: 2 minutes.** If no input within 2 minutes, print an error and exit.
+7. Prompt user for SMS code (stdin). **Timeout: 2 minutes.** If no input within 2 minutes, print an error and exit. An empty line (an Enter pressed while the spinners ran) is not an answer: `! no code entered, try again`, and the prompt returns. The timeout applies at a terminal; piped input is read line by line until end of input.
 8. Verify SMS code. A rejected code (B2C answers a bare `{"status": "449"}`, its "retry" signal) is re-prompted — 3 attempts in total against the same SMS, which is never re-sent. After the third rejection the run fails with `sms code rejected 3 times, re-run to try again`.
 9. Finalize login → extract authorization code from redirect.
 10. Exchange authorization code for tokens (access, refresh, id token) via PKCE.
@@ -95,7 +95,7 @@ No SMS re-send mechanism: if the code doesn't arrive, the user re-runs the tool.
 
 ### 3.3 Mid-run token expiry
 
-If the access token expires during a multi-date booking loop, attempt a transparent token refresh. If refresh fails, abort with an error message explaining that re-authentication is needed. (This scenario is unlikely given typical token lifetimes vs. run duration, but the code path should exist.)
+Access tokens live 15 minutes and the validity check keeps a 5-minute buffer, so any run longer than ~10 minutes refreshes mid-run — routine, not an edge case. The refresh is transparent. If it fails, that day's card shows `error: …` and `! stopping: no valid session for the remaining dates`, the summary line is still printed (the day counts as an error) and the run exits 1 — a transient failure says `token refresh failed: …` (re-run later), a rejected refresh token asks for a re-run to re-authenticate.
 
 ### 3.4 Credentials
 
@@ -136,14 +136,14 @@ service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 
 ### 4.3 Validation rules
 
-Validation runs at startup before any API calls, scoped to the operation: `[auth]` is always validated; `[search_parameters]` only for the operations that use it (`--book`, `--cancel-date`) — login, listing and cancel-by-number work with a config holding only credentials (e.g. one freshly written by the first-run setup). Fail fast: the errors render as a status card — `● invalid configuration` (red dot + bold verdict), a blank line, then one plain indented line per error — and the run exits 1. `SJConfigError` carries the individual messages as `.errors`; file-level failures (missing/unparsable config) render the same card with a single line.
+Validation runs at startup before any API calls, scoped to the operation: `[auth]` is always validated; `[search_parameters]` only for the operations that use it (`--book`, `--cancel-date`) — login, listing and cancel-by-number work with a config holding only credentials (e.g. one freshly written by the first-run setup) — and the date window (`date_start`/`date_end`) only for `--book`: `--cancel-date` takes its own dates and needs just the route. Fail fast: the errors render as a status card — `● invalid configuration` (red dot + bold verdict), a blank line, then one plain indented line per error — and the run exits 1. `SJConfigError` carries the individual messages as `.errors`; file-level failures (missing/unparsable config) render the same card with a single line.
 
 | Field | Rules |
 |---|---|
 | `email` | Required. Must match basic email format (`x@y.z`). |
 | `password` | Required. Non-empty string. |
-| `date_start` | Required. Quoted `"YYYY-MM-DD"` string or native (unquoted) TOML date — both accepted, normalised to a string. Must be today or in the future. Errors echo the received value and distinguish a wrong format from an impossible calendar date. |
-| `date_end` | Required. Same date rules as `date_start`. Must be ≥ `date_start`. |
+| `date_start` | Required. Quoted `"YYYY-MM-DD"` string or native (unquoted) TOML date — both accepted, normalised to a string. May lie in the past: the booking loop then starts from today (`! date_start … is in the past, starting from …`), so a standing window keeps working on later runs. Errors echo the received value and distinguish a wrong format from an impossible calendar date. |
+| `date_end` | Required. Same date rules as `date_start`. Must be ≥ `date_start` and today or in the future — a window that has passed entirely is an error. |
 | `time_leave` | Required. Quoted `"HH:MM"` string (24-hour) or native (unquoted) TOML time with seconds (`06:59:00`) — both accepted, normalised to `HH:MM`. Errors echo the received value and distinguish a wrong format from an impossible time of day. |
 | `time_return` | Required if `roundtrip = true`. Same time rules as `time_leave`. |
 | `station_from` | Required. Must exist in the station map. |
@@ -254,7 +254,7 @@ sj-tool --cancel-date 2026-01-20,2026-02-03..2026-02-05   # several dates, comma
 sj-tool --cancel-booking ERU0HWB2,8Y41N08J   # by booking number, any case
 ```
 
-For each matching booking: show its day card (same shape as §5.4, no title), then confirm. `y`/`yes` (any case) confirms; anything else aborts.
+For each matching booking: show its day card (same shape as §5.4, no title), then confirm. `y`/`yes` (any case) confirms; anything else aborts. `--cancel-date` cancels only that day's journeys: a booking made on sj.se may hold journeys on other days, which are neither shown nor touched — `1 other journey in booking X on other dates is kept` under the card, the prompt reads `cancel this journey from booking X?`, and the status line `1 of 2 journey(s) cancelled from booking X`.
 
 ```
 ╭────────────────────────────────────╮
@@ -327,11 +327,11 @@ mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
 | `--cancel-booking NUM[,NUM…]` | Cancel booking(s) by booking number, comma-separated, any case (deduplicated, order kept). Validated up front: a value that cannot be a booking number (anything beyond letters and digits) renders an `● invalid --cancel-booking` card echoing each bad value — with a `did you mean --cancel-date?` hint when the values look like dates — and exits 1 before any API call. One output section per booking, blank-line separated. | Yes (journey choice + confirmation). |
 | `--list-bookings` | Display all active bookings as per-day cards. | Only SMS on first login. |
 | `--list-travelpasses` | Display travel passes with validity and receipt details. | Only SMS on first login. |
-| `--login` | Header box (`operation   logging in` + config email), auth trail, then the login-status card. Verdict `● logged in` when a full login ran, `● already logged in` when the cached/refreshed session sufficed. | Only SMS on first login. |
+| `--login` | Header box (`operation   logging in` + config email), auth trail, then the login-status card. Verdict `● logged in` when a full login ran, `● already logged in` when the cached/refreshed session sufficed. The card judges the session just established, not the cache file; a cache that could not be written is said first (`! token cache not saved: … · the next run will need to log in again`). | Only SMS on first login. |
 | `--logout` | End the sj.se SSO session and delete the cached token and cookies. | No. |
 | `--login-status` | Exit 0 if logged in (valid or refreshable cached token), else 1. No network. | No. |
 
-Only the documented flags exist — no hidden aliases; renamed flags reject their old spellings with a usage error.
+Only the documented flags exist — no hidden aliases; renamed flags reject their old spellings with a usage error, and flag prefixes are not accepted either (`--logo` is `unrecognized arguments`, not `--logout`). An empty value (`--cancel-date ""`) is an invalid argument, not a missing operation.
 
 `--login-status` judges from the cache alone, using the same test the auth flow uses for its non-interactive path (§3.1 steps 2–3): exit 0 when the access token is valid **or** a refresh token is still usable. Cached SSO cookies are not considered — they cannot be verified without a network call. Output opens with the session-scoped **header box** (`operation   checking login status`, plus `account` — the email from the token's base64url `profile_info` blob, `preferred_username` claim, row omitted if undecodable), then the **status card**: a coloured dot (green/red) + bold verdict, a blank line, then dim-labelled facts:
 
@@ -347,7 +347,7 @@ Only the documented flags exist — no hidden aliases; renamed flags reject thei
   token     expired thu 21 aug 21:11 · renews automatically on next run
 ```
 
-`session` is the horizon in Swedish wall-clock time with a coarse relative distance — the refresh-token expiry (extended automatically by every run), or the access-token expiry if there is no refresh token, or `renews on next run` if unknown. `token` shows the access-token expiry, `valid until …` or `expired … · renews automatically on next run`. Not logged in: the red-dot card with `session   expired · log in with --login` or `session   no cached login found · log in with --login`. Not logged in: `not logged in · no usable session, log in with --login` or `… · no cached login found`.
+`session` is the horizon in Swedish wall-clock time with a coarse relative distance — the refresh-token expiry (extended automatically by every run), or the access-token expiry if there is no refresh token, or `renews on next run` if unknown. `token` shows the access-token expiry, `valid until …` or `expired … · renews automatically on next run`. Not logged in: the red-dot card with `session   expired · log in with --login` or `session   no cached login found · log in with --login`.
 
 Flags are mutually exclusive, and one mode flag is required — there is no implicit default mode. Every usage error (no flag, unknown flag/argument, conflicting flags) prints the **full help** followed by a red `●` status line naming the problem, and exits 1. Help output (also via `-h`) always ends with a blank line.
 
@@ -360,13 +360,15 @@ Flags are mutually exclusive, and one mode flag is required — there is no impl
 | 0 | Success. |
 | 1 | Any failure: config or auth error; a `--book` run in which any day's checkout failed or errored; a `--cancel-*` run in which any cancellation was refused by the API, declined at a prompt, or (`--cancel-booking`) the number was not found. A day with no offer, or a `--cancel-date` date with nothing to cancel, is not a failure. |
 
+Every failure that ends a run closes with a red `●` status line naming the cause (`● initialization failed: …`, `● error: …`, `● token refresh failed: …`, `● no valid travel pass found`). Error texts are one line (httpx's "for more information" line is dropped), never empty (an exception without a message shows its type) and never carry an auth code from a URL.
+
 ## 6. Booking Workflow
 
 ### 6.1 Per-date flow
 
 For each date in `[date_start, date_end]`:
 
-0. **Calendar filter**: if the date is a weekend (`skip_weekends`) or a Swedish red day (`skip_holidays`), print `skipping YYYY-MM-DD (reason)` and continue to the next date without any API calls (see §6.4).
+0. **Calendar filter**: if the date is a weekend (`skip_weekends`) or a Swedish red day (`skip_holidays`), print the one-line day note (bold date + dim reason, `sat 19 sep 2026   weekend`) and continue to the next date without any API calls (see §6.4). Dates before today are not walked at all: a `date_start` in the past is clamped to today with a note.
 1. **Duplicate check**: fetch existing bookings (from today to the end of the pass, so a `date_start` of today is covered) and check whether an active booking — not cancelled, not a stale provisional — already has a journey with this route's end points on this Swedish date (a journey with a change matches by its end points, not per segment). If fully booked (both legs for roundtrip, or single leg for one-way), skip with an info message.
 2. **Determine what to book**: outbound only, return only, or both — based on which legs are missing.
 3. **Search**: call `search_journey` with the appropriate parameters. For roundtrip where both legs are needed, use a single roundtrip search. For single missing legs, use a one-way search.
@@ -376,12 +378,12 @@ For each date in `[date_start, date_end]`:
 7. **Find 0-price offer**: locate an offer matching the requested class + flexibility with `amount == 0`. If not found, warn and skip (see §8).
 8. **Create provisional booking**: create the booking with the outbound offer.
 9. **Add return leg** (if roundtrip): get offers for the return departure and add to the existing booking via PATCH.
-10. **Update customer details**: set email and phone on the booking.
+10. **Update customer details**: set the config email and the phone number the API already placed on the provisional (`customer.phoneNumber` of the create response, the passenger's as a fallback). Never a placeholder: with no number on the booking the field is left out.
 11. **Checkout**: finalize the booking.
 
 ### 6.2 Provisional booking cleanup
 
-On startup (after auth, before the booking loop), fetch all existing bookings in the date range. Any booking with status `"NEW"` and `"CANCEL_JOURNEY"` in `possibleActions` is a stale provisional booking from a previous interrupted run. Cancel these automatically. This never runs under `--dry-run` (a dry run must not mutate anything); the duplicate check ignores such stale provisionals in both modes so dry-run and book agree on what is already booked, and `--list-bookings` / `--cancel-date` / `--cancel-booking` ignore them the same way (`is_active_booking`) — a leftover provisional is not a booking.
+On startup (after auth, before the booking loop), fetch all existing bookings in the date range. A booking with status `"NEW"` and `"CANCEL_JOURNEY"` in `possibleActions` is a provisional. Only the ones that look like this tool's own leftovers are cancelled: a journey on the configured route (either direction) **and** `created` more than 10 minutes ago (`STALE_PROVISIONAL_GRACE`). A cart the user has open on sj.se for another trip is never touched (or mentioned); a younger provisional on the route — a checkout in progress, the user's or a concurrent run's — is left alone with `! leaving recent provisional booking X alone (created 2m ago)`. A provisional on the route without a usable `created` timestamp counts as stale. This never runs under `--dry-run` (a dry run must not mutate anything); the duplicate check ignores such stale provisionals in both modes so dry-run and book agree on what is already booked, and `--list-bookings` / `--cancel-date` / `--cancel-booking` ignore them the same way (`is_active_booking`) — a leftover provisional is not a booking.
 
 ### 6.3 Timing between dates
 
@@ -452,7 +454,7 @@ If no 0-price offer exists for any class in the fallback chain (§7.2) — every
 If the outbound books successfully but the return leg fails (no offer, sold out, or an API error while searching or adding it — caught and reported as `return leg failed (…), booking outbound only`):
 - Keep the one-leg booking.
 - Proceed to checkout with just the outbound.
-- Inform the user clearly: `"Booked outbound only for 2026-01-20 (return leg unavailable)."`.
+- Inform the user: `no alternative found, booking outbound only`, `! no departure found for inbound, booking outbound only` or `! return leg failed (…), booking outbound only`; the day counts as `partly booked` in the summary.
 
 ### 8.3 Overlapping booking conflict
 
@@ -462,7 +464,7 @@ If the SJ API returns an error indicating an existing booking conflicts with the
 
 ### 8.4 Network failures & retries
 
-For transient HTTP errors (timeouts, 502, 503, connection errors, and transport errors such as a reset or a pooled connection closed by the server — `httpx.NetworkError` / `RemoteProtocolError`), in `RetryTransport`:
+Timeouts are explicit (`HTTP_TIMEOUT`: 30 s read/write/pool, 10 s connect) — the recorded booking calls take 3.5–4.3 s, httpx's 5 s default would cut them off on a slow day. The response body is read inside the retry loop, so a body that stalls or resets after the headers is a transport error of that attempt (retried for reads, raised as itself for writes), and a retried 502/503 releases its connection. Retry warnings never log an auth code. The token-refresh POST opts into the read policy (`RETRY_EXTENSION`). For transient HTTP errors (timeouts, 502, 503, connection errors, and transport errors such as a reset or a pooled connection closed by the server — `httpx.NetworkError` / `RemoteProtocolError`), in `RetryTransport`:
 - Idempotent requests (GET/HEAD/OPTIONS): retry up to 3 times with delays of 1s, 2s, 4s (exponential backoff).
 - Non-idempotent requests (POST/PATCH — provisional booking, add leg, checkout, cancel): retry only when the request provably never reached the server (connection error / connect timeout). A 502/503 or read timeout *after* sending is not retried — the server may already have acted on it, and a retry could create a duplicate provisional booking (which would only be cleaned up on the next `--book` run, §6.2).
 - After the retries are exhausted, the current operation fails and is logged; the date loop continues with the next date.
@@ -470,7 +472,7 @@ For transient HTTP errors (timeouts, 502, 503, connection errors, and transport 
 
 ### 8.5 Unknown API response shapes
 
-If the API returns a JSON response that doesn't match any known structure (no `status`, `errorCode`, or `error` keys, and no expected data keys):
+Every data endpoint goes through `_json_or_raise`: the API's own error envelope (`status` ≠ 200, `errorCode`/`error`, the SJ `code` + `message` + `validationErrors`) is raised as an `SJAPIError` — rendered `106 · Validation errors · outboundOfferId: OUTBOUND_OFFER_ID_MUST_BE_PROVIDED` — even behind an HTTP 200; a non-2xx without an envelope is an `HTTPStatusError`; an empty or non-JSON 2xx body is an `SJAPIError` too. An error never comes back as data. If the API returns a JSON response that doesn't match any known structure (no `status`, `errorCode`, or `error` keys, and no expected data keys):
 - Log the full response body at WARNING level.
 - Treat it as an error for the current operation and continue to the next date.
 
@@ -486,7 +488,7 @@ If the user does not enter the SMS code within 2 minutes:
 
 On startup, fetch all travel passes and drop expired ones (`endTravelValidityDateTime` in the past; passes that have not started yet are kept so future dates can be booked). Behavior:
 - **One valid pass**: use it automatically.
-- **Multiple valid passes**: display a numbered list and prompt the user to select one.
+- **Multiple valid passes**: for `--book`, the single pass whose validity covers the booking window is used without asking (a renewal bought ahead); otherwise a numbered list (`1. name (first day → last day)`) prompts for a choice — at a terminal only (`● 2 valid travel passes · run in a terminal to choose one`, exit 1, otherwise) and an empty answer ends the run (`● no travel pass selected`). The other pass-scoped modes need only a date range and take the longest-lived pass silently; `--list-travelpasses` lists every pass, expired ones included (`(expired)`), and never selects.
 - **No valid passes**: exit with an error.
 
 ### 9.2 Date range validation
@@ -505,7 +507,7 @@ The search response may also return a `passengerListId` which takes precedence o
 
 ### 10.1 Output channels
 
-- **stdout**: user-facing status messages only. Prefixed with ` > ` via `pinfo()`. This is what the user sees at default log level.
+- **stdout**: user-facing status messages only, through `output.py` (one-space margin, no prefix). This is what the user sees at default log level.
 - **stderr**: structured log output at all other levels.
 
 ### 10.2 User-facing output (stdout)
@@ -527,6 +529,8 @@ Everything the user sees goes through `output.py` and prints regardless of log l
 | INFO | Per-date progress, selected departures, offer details. |
 | DEBUG | HTTP request/response summaries, config values, token state. |
 | TRACE | Full httpx/httpcore internals (request headers, response bodies). Cookie / Set-Cookie / Authorization / X-CSRF-TOKEN header values and `code=` query values are scrubbed from these lines too. |
+
+`log_json()` redacts password/token values, the SMS `verification_code`, CSRF tokens and OAuth authorization `code` values (the API's numeric error `code` stays readable). An invalid `LOG_LEVEL` is reported on stderr directly (`invalid log level 'x' specified, defaulting to CRITICAL`) — the logger itself is about to be set to CRITICAL.
 
 ### 10.4 Log format
 

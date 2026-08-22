@@ -139,3 +139,50 @@ def test_clear_raises_when_a_cache_cannot_be_deleted(tmp_path):
     finally:
         cache.chmod(0o700)
     assert tm.path.exists()
+
+
+def test_concurrent_saves_never_share_a_temp_file(tmp_path):
+    # a fixed temp name lets two processes interleave into one inode; the
+    # temp file must be unique per writer, and a stray one is not ours
+    stray = tmp_path / ".token.json.tmp"
+    stray.write_text("garbage from another process")
+    tm = TokenManager(tmp_path / "token.json")
+    tm.save({"access_token": "a", "expires_on": 1})
+    assert json.loads(tm.path.read_text()) == {"access_token": "a", "expires_on": 1}
+    assert stray.read_text() == "garbage from another process"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".token.json.tmp", "token.json"]
+
+
+def test_save_records_a_write_failure(tmp_path, monkeypatch):
+    from sj_api_client import tokens as m
+
+    tm = TokenManager(tmp_path / "token.json")
+    assert tm.save_error is None
+
+    def explode(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(m, "_write_private_json", explode)
+    tm.save({"access_token": "a", "expires_on": 1})
+    assert tm.save_error == "disk full"
+    assert tm.token == {"access_token": "a", "expires_on": 1}
+
+
+def test_load_rejects_a_cache_that_is_not_an_object(tmp_path):
+    p = tmp_path / "token.json"
+    p.write_text("[1, 2]")
+    with pytest.raises(SJAuthError, match="is not a json object"):
+        TokenManager(p).load()
+    p.write_text('"just a string"')
+    with pytest.raises(SJAuthError, match="is not a json object"):
+        TokenManager(p).load()
+
+
+def test_malformed_cookie_cache_is_ignored_not_fatal(tmp_path):
+    tm = TokenManager(tmp_path / "token.json")
+    for bad in ('{"a": 1}', "[1, 2]", '[{"name": "n"}]', "not json"):
+        tm.cookie_path.write_text(bad)
+        assert tm.load_cookies() is None
+    good = [{"name": "x-ms-cpim-sso", "value": "v", "domain": "id.sj.se", "path": "/"}]
+    tm.save_cookies(good)
+    assert tm.load_cookies() == good
