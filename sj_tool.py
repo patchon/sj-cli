@@ -498,12 +498,15 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     # 1. Load and validate config; offer first-run setup when it is missing
     try:
         cm = CfgManager()
-        # First-run setup on a missing config; on success fall through and
-        # run the requested operation with the freshly written config.
-        if not cm.path.exists() and not (sys.stdin.isatty() and cm.create_interactive()):
+        # First-run setup on a missing config — offered only by --login, the
+        # one operation that makes sense without an existing session; on
+        # success fall through into the login itself.
+        if not cm.path.exists() and not (
+            args.login and sys.stdin.isatty() and cm.create_interactive()
+        ):
             print_status_card(False, "no configuration", lines=[
                 f"expected a config file at {cm.path}",
-                "run any command in a terminal to create it, or copy config.example.toml",
+                "run --login in a terminal to create it, or copy config.example.toml",
             ])
             sys.exit(1)
         cfg = cm.load()
