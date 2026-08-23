@@ -22,7 +22,13 @@ from sj_api_client.booking import (
 )
 from sj_api_client.client import SJClient
 from sj_api_client.config import CfgManager
-from sj_api_client.dates import SWEDEN, parse_api_datetime, sweden_now, to_sweden
+from sj_api_client.dates import (
+    SWEDEN,
+    parse_api_datetime,
+    parse_date_selection,
+    sweden_now,
+    to_sweden,
+)
 from sj_api_client.errors import SJAPIError, SJAuthError, SJConfigError, error_text
 from sj_api_client.logger import setup_logging
 from sj_api_client.output import (
@@ -48,31 +54,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _parse_one_date(token: str, errors: list[str]) -> date | None:
-    """Parse one YYYY-MM-DD token; echo the value in the error like sj_config does."""
-    try:
-        return datetime.strptime(token, "%Y-%m-%d").date()
-    except ValueError:
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", token):
-            errors.append(f"'{token}' is not a real calendar date")
-        else:
-            errors.append(f"'{token}' must be a date formatted YYYY-MM-DD")
-        return None
-
-
-def _anniversary(d: date) -> date:
-    """The same calendar date next year (29 Feb → 1 Mar)."""
-    try:
-        return d.replace(year=d.year + 1)
-    except ValueError:
-        return date(d.year + 1, 3, 1)
-
-
 def parse_cancel_dates(value: str) -> tuple[list[str], list[str]]:
     """
     Parse the --cancel-date value into individual dates.
 
-    Accepts a date, a comma-separated list, and/or inclusive start..end
+    The shared selection grammar (dates.parse_date_selection): dates, ISO
+    weeks (W43, 2027-W02), comma-separated lists and inclusive start..end
     ranges — mixed freely.
 
     Validate-first contract: every token is checked and ALL problems are
@@ -83,38 +70,8 @@ def parse_cancel_dates(value: str) -> tuple[list[str], list[str]]:
         when errors is empty.
 
     """
-    dates: set[date] = set()
-    errors: list[str] = []
-    for raw in value.split(","):
-        token = raw.strip()
-        if not token:
-            errors.append("empty entry in the date list")
-            continue
-        if ".." in token:
-            parts = token.split("..")
-            if len(parts) != 2:
-                errors.append(f"'{token}' must be a single range start..end")
-                continue
-            start = _parse_one_date(parts[0], errors)
-            end = _parse_one_date(parts[1], errors)
-            if not (start and end):
-                continue
-            if start > end:
-                errors.append(f"range '{token}' must run forwards (start before end)")
-            elif end >= _anniversary(start):  # a calendar year at most, leap day included
-                errors.append(f"range '{token}' spans more than a year")
-            else:
-                curr = start
-                while curr <= end:
-                    dates.add(curr)
-                    curr += timedelta(days=1)
-        else:
-            d = _parse_one_date(token, errors)
-            if d:
-                dates.add(d)
-    if errors:
-        return [], errors
-    return [d.isoformat() for d in sorted(dates)], []
+    dates, errors = parse_date_selection(value)
+    return [d.isoformat() for d in dates], errors
 
 
 def parse_booking_numbers(value: str) -> tuple[list[str], list[str]]:
@@ -202,9 +159,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--cancel-date",
         metavar="DATES",
         help=(
-            "Cancel bookings for one or more dates: a YYYY-MM-DD date, a "
-            "comma-separated list, and/or inclusive START..END ranges "
-            "(e.g. 2026-09-16,2026-09-21..2026-09-25)."
+            "Cancel bookings for one or more dates: a YYYY-MM-DD date, an ISO week "
+            "(W43; 2027-W02 for another year), a comma-separated list, and/or "
+            "inclusive START..END ranges (e.g. 2026-09-16,2026-09-21..2026-09-25 or W43,W45..46)."
         ),
     )
     group.add_argument(

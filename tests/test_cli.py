@@ -122,7 +122,7 @@ def test_parse_cancel_dates_collects_all_errors_before_anything_runs():
     )
     assert dates == []
     assert "'2026-09-31' is not a real calendar date" in errors
-    assert "'2026/09/16' must be a date formatted YYYY-MM-DD" in errors
+    assert "'2026/09/16' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)" in errors
     assert "range '2026-09-20..2026-09-18' must run forwards (start before end)" in errors
     assert "empty entry in the date list" in errors
     assert "'2026-09-16..2026-09-17..2026-09-18' must be a single range start..end" in errors
@@ -361,6 +361,25 @@ def test_cancel_date_range_guard_is_one_year_inclusive():
     assert parse_cancel_dates("2026-01-01..2026-12-31")[1] == []
     assert parse_cancel_dates("2028-01-01..2028-12-31")[1] == []  # leap year: 366 days
     assert "spans more than a year" in parse_cancel_dates("2026-01-01..2027-01-01")[1][0]
+
+
+def test_parse_cancel_dates_accepts_week_terms():
+    from datetime import date, timedelta
+
+    from sj_api_client.cli import parse_cancel_dates
+
+    monday = date(2026, 10, 19)  # 2026-W43
+    week = [(monday + timedelta(days=i)).isoformat() for i in range(7)]
+    assert parse_cancel_dates("2026-W43, 2026-10-28..2026-10-29") == (
+        [*week, "2026-10-28", "2026-10-29"],
+        [],
+    )
+    dates, errors = parse_cancel_dates("W43")  # bare week: this ISO year, 7 days
+    assert errors == [] and len(dates) == 7
+    assert parse_cancel_dates("W43..2026-10-25") == (
+        [],
+        ["range 'W43..2026-10-25' mixes a date and a week"],
+    )
 
 
 # --- travel pass selection --------------------------------------------------
