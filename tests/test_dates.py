@@ -102,14 +102,20 @@ def test_validate_dates_against_pass_boundaries(start, end, first_day, last_day)
     tp = {"startTravelValidityDateTime": start, "endTravelValidityDateTime": end}
     day_before = (date.fromisoformat(first_day) - timedelta(days=1)).isoformat()
     day_after = (date.fromisoformat(last_day) + timedelta(days=1)).isoformat()
-    # `today` pinned before the window: this test is about the boundaries,
-    # not about a past date_start being clamped to today
+    # today pinned before the window and every day bookable: this test is
+    # about the boundaries. The two boundary days are selected on their own
+    # (a range over a year-long pass would exceed the grammar's year limit).
     today = date.fromisoformat(day_before)
-    validate_dates_against_pass(base_cfg(date_start=first_day, date_end=last_day), tp, today)
+    every_day = {"skip_weekends": False, "skip_holidays": False}
+    validate_dates_against_pass(base_cfg(dates=f"{first_day}, {last_day}", **every_day), tp, today)
     with pytest.raises(SystemExit):
-        validate_dates_against_pass(base_cfg(date_start=day_before, date_end=last_day), tp, today)
+        validate_dates_against_pass(
+            base_cfg(dates=f"{day_before}, {last_day}", **every_day), tp, today
+        )
     with pytest.raises(SystemExit):
-        validate_dates_against_pass(base_cfg(date_start=first_day, date_end=day_after), tp, today)
+        validate_dates_against_pass(
+            base_cfg(dates=f"{first_day}, {day_after}", **every_day), tp, today
+        )
     validate_dates_against_pass(base_cfg(), {})  # no validity info → no check
 
 

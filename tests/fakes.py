@@ -157,8 +157,7 @@ class FakeTokenManager:
 
 def base_cfg(**overrides):
     params = {
-        "date_start": "2026-09-01",
-        "date_end": "2026-09-01",
+        "dates": "2026-09-01",
         "time_leave": "06:59",
         "time_return": "17:22",
         "station_from": "Göteborg Central",
@@ -173,12 +172,11 @@ def base_cfg(**overrides):
 
 
 def future_cfg(**overrides):
-    """base_cfg with a date window that validates whatever today is (today+30 .. today+60)."""
+    """base_cfg with a dates selection that validates whatever today is (today+30 .. today+60)."""
     from datetime import date, timedelta
 
     today = date.today()
-    dates = {
-        "date_start": (today + timedelta(days=30)).isoformat(),
-        "date_end": (today + timedelta(days=60)).isoformat(),
-    }
-    return base_cfg(**{**dates, **overrides})
+    window = (
+        f"{(today + timedelta(days=30)).isoformat()}..{(today + timedelta(days=60)).isoformat()}"
+    )
+    return base_cfg(**{"dates": window, **overrides})

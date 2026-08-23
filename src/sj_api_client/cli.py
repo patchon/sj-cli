@@ -24,8 +24,10 @@ from sj_api_client.client import SJClient
 from sj_api_client.config import CfgManager
 from sj_api_client.dates import (
     SWEDEN,
+    booking_dates,
     parse_api_datetime,
     parse_date_selection,
+    skip_reason,
     sweden_now,
     to_sweden,
 )
@@ -343,20 +345,26 @@ def resolve_travel_pass(
         pinfo("invalid selection, try again")
 
 
-def booking_window(params: dict, today: date | None = None) -> tuple[date, date]:
-    """The dates a --book run will actually walk: date_start clamped to today, date_end."""
-    today = today or sweden_now().date()
-    start = date.fromisoformat(params["date_start"])
-    end = date.fromisoformat(params["date_end"])
-    return max(start, today), end
+def booking_window(params: dict, today: date | None = None) -> tuple[date, date] | None:
+    """
+    First and last date a --book run can book.
+
+    The selection from today on, minus the days the calendar filter skips.
+    None when every day is skipped.
+    """
+    skip_w, skip_h = params.get("skip_weekends", True), params.get("skip_holidays", True)
+    bookable = [d for d in booking_dates(params, today) if not skip_reason(d, skip_w, skip_h)]
+    return (bookable[0], bookable[-1]) if bookable else None
 
 
 def validate_dates_against_pass(cfg: dict, travel_pass: dict, today: date | None = None) -> None:
     """
     Validate that the booking window falls within the travel pass validity.
 
-    The window starts today when date_start lies in the past (the booking
-    loop does the same), so a standing config keeps working on later runs.
+    The window covers bookable days only: it starts today when the selection
+    began earlier (the booking loop does the same) and ignores the days the
+    calendar filter skips, so a week ending on a Sunday after a pass that
+    ends on the Friday is fine.
 
     Raises:
         SystemExit: If dates are outside validity.
@@ -371,7 +379,10 @@ def validate_dates_against_pass(cfg: dict, travel_pass: dict, today: date | None
     # datetime comparison would reject the pass's first day. The end instant
     # is exclusive — the day after the last valid day — exactly as
     # --list-travelpasses shows it.
-    s_start, s_end = booking_window(cfg.get("search_parameters", {}), today)
+    window = booking_window(cfg.get("search_parameters", {}), today)
+    if window is None:
+        return
+    s_start, s_end = window
 
     if s_start < vp_start or s_end > vp_end:
         pstatus(
@@ -727,7 +738,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
 
             # Fetch existing bookings for the duplicate check (quietly: a
             # routine step, not part of the day-by-day trail). From today:
-            # date_start may be today, and today's stale provisional must be
+            # the selection may start today, and today's stale provisional must be
             # visible to the cleanup too.
             b_start, b_end = booking_date_range(active_pass)
             with spinner("fetching existing bookings", trail=False):

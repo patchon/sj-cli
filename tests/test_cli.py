@@ -496,13 +496,11 @@ def test_receipt_failure_does_not_hide_the_pass_cards(capsys):
     assert "● 1 travel pass(es)" in out
 
 
-# --- dates: past date_start, --cancel-date needs only the route -------------
+# --- dates: past selections, --cancel-date needs only the route -------------
 
 
 def test_cancel_date_ignores_the_config_dates(tmp_path, monkeypatch):
-    cli = _logged_in_with_config(
-        tmp_path, monkeypatch, date_start="2020-01-01", date_end="2020-02-01"
-    )
+    cli = _logged_in_with_config(tmp_path, monkeypatch, dates="2020-01-01..2020-02-01")
     monkeypatch.setattr(cli, "handle_cancel_mode", lambda *_a, **_k: True)
     monkeypatch.setattr(
         cli, "validate_dates_against_pass", lambda *_a, **_k: pytest.fail("dates checked")
@@ -517,13 +515,36 @@ def test_pass_validation_uses_the_effective_start(capsys):
     from tests.fakes import base_cfg
 
     tp = _pass("A", "2026-06-01", "2027-01-01")
-    cfg = base_cfg(date_start="2026-01-01", date_end="2026-10-30")  # started before the pass
+    cfg = base_cfg(dates="2026-01-01..2026-10-30")  # started before the pass
     validate_dates_against_pass(cfg, tp, today=date(2026, 8, 22))  # today is inside: fine
     with pytest.raises(SystemExit):
         validate_dates_against_pass(cfg, tp, today=date(2026, 3, 1))
-    assert "● search dates (2026-03-01 – 2026-10-30) are outside travel pass validity" in (
+    # 1 mar 2026 is a Sunday: the window starts on the first bookable day
+    assert "● search dates (2026-03-02 – 2026-10-30) are outside travel pass validity" in (
         capsys.readouterr().out
     )
+
+
+def test_booking_window_counts_only_bookable_days():
+    from datetime import date
+
+    from sj_api_client.cli import booking_window, validate_dates_against_pass
+    from tests.fakes import base_cfg
+
+    today = date(2026, 8, 1)
+    # a weekend-only selection has nothing to book: no window, the pass check passes
+    weekend = base_cfg(dates="2026-09-05..2026-09-06")  # Sat..Sun
+    assert booking_window(weekend["search_parameters"], today) is None
+    validate_dates_against_pass(weekend, _pass("A", "2026-06-01", "2026-06-02"), today)
+    # week 46 ends on Sunday 15 nov; a pass whose last valid day is Friday 13 nov covers it
+    week = base_cfg(dates="2026-W46")
+    assert booking_window(week["search_parameters"], today) == (
+        date(2026, 11, 9),
+        date(2026, 11, 13),
+    )
+    validate_dates_against_pass(week, _pass("A", "2026-06-01", "2026-11-14"), today)
+    with pytest.raises(SystemExit):
+        validate_dates_against_pass(week, _pass("A", "2026-06-01", "2026-11-13"), today)
 
 
 # --- --login verdict and failure lines --------------------------------------

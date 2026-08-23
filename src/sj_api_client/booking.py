@@ -8,7 +8,7 @@ from typing import Any
 from sj_api_client.auth import ensure_valid_token
 from sj_api_client.client import SJClient
 from sj_api_client.config import SERVICE_TYPE_NAMES
-from sj_api_client.dates import skip_reason, sweden_now, to_sweden
+from sj_api_client.dates import selected_dates, skip_reason, sweden_now, to_sweden
 from sj_api_client.errors import SJAuthError, error_text
 from sj_api_client.output import (
     ask,
@@ -1324,35 +1324,43 @@ def _booked_rows(booking: dict, booking_number: str | None) -> list[dict]:
     return rows
 
 
-def _span_label(start: datetime, end: datetime) -> str:
+def _span_label(start: date, end: date) -> str:
     """Span label: "18 - 21 sep 2026", "1 sep - 30 oct 2026", "29 dec 2026 - 9 jan 2027"."""
 
-    def day(d: datetime, with_year: bool) -> str:
+    def day(d: date, with_year: bool) -> str:
         txt = f"{d.day} {d.strftime('%b').lower()}"
         return f"{txt} {d.year}" if with_year else txt
 
-    if start.date() == end.date():
+    if start == end:
         return day(start, True)
     if (start.year, start.month) == (end.year, end.month):
         return f"{start.day} \u2013 {day(end, True)}"
     return f"{day(start, start.year != end.year)} \u2013 {day(end, True)}"
 
 
-def describe_run(params: dict) -> list[tuple[str, str]]:
+def describe_run(params: dict, today: date | None = None) -> list[tuple[str, str]]:
     """
     Run-header facts derived from the config, in the shared card grammar.
+
+    Args:
+        params: The validated [search_parameters] section.
+        today: Swedish date deciding the ISO year of bare week terms (defaults to now).
 
     Example:
         route     Göteborg Central ⇄ Stockholm Central
         days      1 sep - 30 oct 2026 · weekdays only
+        days      W43, W45..46 (19 oct - 15 nov 2026) · weekdays only
         times     out 06:59 · back 17:22
         ticket    2 class calm · FULLFLEX · SJ High-speed train
 
     """
     roundtrip = params.get("roundtrip", False)
     arrow = "\u21c4" if roundtrip else "\u2192"
-    start = datetime.strptime(params["date_start"], "%Y-%m-%d")
-    end = datetime.strptime(params["date_end"], "%Y-%m-%d")
+    selected = selected_dates(params, today)
+    first, last = selected[0], selected[-1]
+    contiguous = (last - first).days + 1 == len(selected)
+    span = _span_label(first, last)
+    days_value = span if contiguous else f"{params['dates']} ({span})"
     skip_w, skip_h = params.get("skip_weekends", True), params.get("skip_holidays", True)
     days = {
         (True, True): "weekdays only",
@@ -1376,7 +1384,7 @@ def describe_run(params: dict) -> list[tuple[str, str]]:
         parts.append("partial ok")
     return [
         ("route", f"{params['station_from']} {arrow} {params['station_to']}"),
-        ("days", f"{_span_label(start, end)} \u00b7 {days}"),
+        ("days", f"{days_value} \u00b7 {days}"),
         ("times", " \u00b7 ".join(times)),
         ("ticket", " \u00b7 ".join(p for p in parts if p)),
     ]
@@ -1412,7 +1420,7 @@ def process_date_range(
     today: date | None = None,
 ) -> dict[str, int]:
     """
-    Process all dates in the configured range, printing one card per day.
+    Process every selected date, printing one card per day.
 
     Each day is a card: bold date + route header, the progress trail and
     messages indented beneath it, then the booked (or bookable) legs in the
@@ -1428,8 +1436,8 @@ def process_date_range(
         tp_token_id: Travel pass token ID.
         existing_bookings: List of existing bookings.
         dry_run: If True, collect results without booking.
-        today: Today's Swedish date (defaults to now); a date_start before it
-            is clamped to it with a note, so a standing window keeps working
+        today: Today's Swedish date (defaults to now); selected dates before
+            it are dropped with a note, so a standing selection keeps working
             on later runs.
 
     Returns:
@@ -1440,13 +1448,10 @@ def process_date_range(
 
     """
     params = cfg["search_parameters"]
-    start_date = datetime.strptime(params["date_start"], "%Y-%m-%d")
-    end_date = datetime.strptime(params["date_end"], "%Y-%m-%d")
     skip_weekends = params.get("skip_weekends", True)
     skip_holidays = params.get("skip_holidays", True)
 
     counts: dict[str, int] = {"days": 0}
-    curr = start_date
 
     def count(key: str) -> None:
         counts[key] = counts.get(key, 0) + 1
@@ -1454,23 +1459,28 @@ def process_date_range(
     # No leading blank: the caller prints one after the run-header facts,
     # before the bookings fetch, so the live spinner is already separated.
     today = today or sweden_now().date()
-    if start_date.date() < today:
+    selected = selected_dates(params, today)
+    dates = [d for d in selected if d >= today]
+    if not dates:  # validated at startup; only a run straddling midnight gets here
+        pwarn("all selected days have passed")
+        return counts
+    if len(dates) < len(selected):
         pwarn(
-            f"date_start {params['date_start']} is in the past, starting from {today.isoformat()}"
+            f"{len(selected) - len(dates)} selected day(s) have passed, "
+            f"starting from {dates[0].isoformat()}"
         )
         blank()
-        curr = datetime.combine(today, datetime.min.time())
 
-    while curr <= end_date:
-        date_str = curr.strftime("%Y-%m-%d")
+    for i, day in enumerate(dates):
+        curr = datetime.combine(day, datetime.min.time())  # process_booking_flow takes a datetime
+        date_str = day.isoformat()
         counts["days"] += 1
 
-        reason = skip_reason(curr.date(), skip_weekends, skip_holidays)
+        reason = skip_reason(day, skip_weekends, skip_holidays)
         if reason:
             print_day_note(date_str, reason)
             blank()
             count("skipped")
-            curr += timedelta(days=1)
             continue
 
         # Mid-run token refresh. Without a session nothing more can be
@@ -1496,13 +1506,11 @@ def process_date_range(
                 pinfo(f"error: {error_text(e)}")
             count("error")
             blank()
-            curr += timedelta(days=1)
             continue
         if not (need_outbound or need_inbound):
             print_day_note(date_str, "tickets already booked")
             blank()
             count("already")
-            curr += timedelta(days=1)
             continue
 
         print_day_header(date_str, day_route(params, need_outbound, need_inbound))
@@ -1559,8 +1567,7 @@ def process_date_range(
                 count("unavailable")
         blank()
 
-        curr += timedelta(days=1)
-        if curr <= end_date:
+        if i + 1 < len(dates):
             with spinner("waiting before next date", trail=False):
                 time.sleep(2)
 
