@@ -170,7 +170,7 @@ def test_describe_run():
         "search_parameters"
     ]
     assert describe_run(p) == [
-        ("route", "Linköping Central ⇄ Stockholm Central"),
+        ("route", "Göteborg Central ⇄ Stockholm Central"),
         ("days", "1 sep – 30 oct 2026 · weekdays only"),
         ("times", "out 06:59 · back 17:22"),
         ("ticket", "2 class calm · FULLFLEX · SJ High-speed train"),
@@ -184,7 +184,7 @@ def test_describe_run():
         book_partial=True,
     )["search_parameters"]
     assert describe_run(p) == [
-        ("route", "Linköping Central → Stockholm Central"),
+        ("route", "Göteborg Central → Stockholm Central"),
         ("days", "1 sep 2026 · every day except red days"),
         ("times", "out 06:59"),
         ("ticket", "2 class calm · FULLFLEX · exact time only · no class fallback · partial ok"),

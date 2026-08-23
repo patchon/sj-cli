@@ -54,7 +54,7 @@ class FakeClient:
     from the departure whose offer was used.
     """
 
-    STATIONS = {"Linköping Central": "740000009", "Stockholm Central": "740000001"}
+    STATIONS = {"Göteborg Central": "740000002", "Stockholm Central": "740000001"}
 
     def __init__(self, departures=None, offers_by_dep=None, *, checkout_ok=True, search_ids=None):
         self.departures = departures or {}
@@ -80,7 +80,7 @@ class FakeClient:
         if return_date:
             return {"passengerListId": "PT", **self.search_ids}
         # one-way: the flow reads departureSearchId regardless of direction
-        sid = "OUT" if origin == "Linköping Central" else "IN"
+        sid = "OUT" if origin == "Göteborg Central" else "IN"
         return {"passengerListId": "PT", "departureSearchId": sid}
 
     def get_search_results(self, token, search_id):
@@ -97,7 +97,7 @@ class FakeClient:
 
     def _segment(self, direction):
         dep = self._last_dep or {}
-        a, b = ("Linköping Central", "Stockholm Central")
+        a, b = ("Göteborg Central", "Stockholm Central")
         if direction == "INBOUND":
             a, b = b, a
         return {
@@ -161,7 +161,7 @@ def base_cfg(**overrides):
         "date_end": "2026-09-01",
         "time_leave": "06:59",
         "time_return": "17:22",
-        "station_from": "Linköping Central",
+        "station_from": "Göteborg Central",
         "station_to": "Stockholm Central",
         "comfort_class": "2 class calm",
         "flexibility": "FULLFLEX",
