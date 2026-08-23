@@ -243,10 +243,10 @@ def test_trail_marks_are_coloured(monkeypatch, capsys):
     with output.spinner("step"):
         pass
     out = capsys.readouterr().out
-    assert "\x1b[32m✓\x1b[0m \x1b[2mstep\x1b[0m" in out  # green mark, dim text
+    assert "\x1b[92m✓\x1b[0m \x1b[2mstep\x1b[0m" in out  # green mark, dim text
     with pytest.raises(ValueError, match="boom"), output.spinner("bad"):
         raise ValueError("boom")
-    assert "\x1b[31m✗\x1b[0m \x1b[2mbad\x1b[0m" in capsys.readouterr().out
+    assert "\x1b[91m✗\x1b[0m \x1b[2mbad\x1b[0m" in capsys.readouterr().out
 
 
 def test_pwarn_yellow_mark_dim_text(monkeypatch, capsys):
@@ -256,7 +256,7 @@ def test_pwarn_yellow_mark_dim_text(monkeypatch, capsys):
     assert capsys.readouterr().out == " ! outbound class fallback: 1 class → 2 class calm\n"
     monkeypatch.setattr(output, "color_enabled", lambda: True)
     output.pwarn("careful")
-    assert capsys.readouterr().out == " \x1b[33m!\x1b[0m \x1b[2mcareful\x1b[0m\n"
+    assert capsys.readouterr().out == " \x1b[93m!\x1b[0m \x1b[2mcareful\x1b[0m\n"
 
 
 def test_pstatus_dot_by_outcome(monkeypatch, capsys):
@@ -264,13 +264,26 @@ def test_pstatus_dot_by_outcome(monkeypatch, capsys):
 
     output.pstatus(True, "22 day(s) · 34 booking(s)")
     output.pstatus(False, "cancellation aborted")
-    assert capsys.readouterr().out == " ● 22 day(s) · 34 booking(s)\n ● cancellation aborted\n"
+    output.pstatus(None, "1 travel pass(es)")
+    assert capsys.readouterr().out == (
+        " ● 22 day(s) · 34 booking(s)\n ● cancellation aborted\n ● 1 travel pass(es)\n"
+    )
     monkeypatch.setattr(output, "color_enabled", lambda: True)
     output.pstatus(True, "done")
     output.pstatus(False, "failed")
+    output.pstatus(None, "nothing changed")
     out = capsys.readouterr().out
-    assert "\x1b[32m●\x1b[0m \x1b[2mdone\x1b[0m" in out
-    assert "\x1b[31m●\x1b[0m \x1b[2mfailed\x1b[0m" in out
+    assert "\x1b[92m●\x1b[0m \x1b[2mdone\x1b[0m" in out
+    assert "\x1b[91m●\x1b[0m \x1b[2mfailed\x1b[0m" in out
+    assert "\x1b[2m●\x1b[0m \x1b[2mnothing changed\x1b[0m" in out  # dim: it only reported
+
+
+def test_travelpass_footer_dot_is_dim_it_only_reports(monkeypatch, capsys):
+    from sj_cli import output
+
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    output.print_travelpasses([{"name": "P", "code": "1"}])
+    assert "\x1b[2m●\x1b[0m \x1b[2m1 travel pass(es)\x1b[0m" in capsys.readouterr().out
 
 
 def test_travelpass_holder_without_email_has_no_empty_parentheses(capsys):

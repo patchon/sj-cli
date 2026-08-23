@@ -1414,6 +1414,20 @@ def _run_summary(counts: dict[str, int], dry_run: bool) -> str:
     return " \u00b7 ".join(parts)
 
 
+def _run_outcome(counts: dict[str, int], dry_run: bool) -> bool | None:
+    """
+    Colour of the closing ●: green only when the run really booked something.
+
+    A dry run changes nothing, and neither does a run where every day was
+    already booked or skipped — those close dim, not green.
+    """
+    if counts.get("failed") or counts.get("error"):
+        return False
+    if dry_run:
+        return None
+    return True if (counts.get("booked") or counts.get("partial")) else None
+
+
 def process_date_range(
     client: SJClient,
     access_token: str,
@@ -1574,7 +1588,7 @@ def process_date_range(
             with spinner("waiting before next date", trail=False):
                 time.sleep(2)
 
-    pstatus(not (counts.get("failed") or counts.get("error")), _run_summary(counts, dry_run))
+    pstatus(_run_outcome(counts, dry_run), _run_summary(counts, dry_run))
     return counts
 
 
@@ -1717,7 +1731,7 @@ def handle_cancel_booking(
         if dry_run:
             blank()
             pstatus(
-                True,
+                None,
                 f"dry run · booking {booking_number} has a pending cancellation, nothing done",
             )
             return True
@@ -1805,7 +1819,7 @@ def handle_cancel_booking(
 
     if dry_run:
         pstatus(
-            True,
+            None,
             f"dry run · {len(segments_to_cancel)} journey(s) "
             f"would be cancelled from booking {booking_number}",
         )
