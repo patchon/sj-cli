@@ -7,9 +7,10 @@ password = "your-password"
 
 [search_parameters]
 # Which days to book: dates (YYYY-MM-DD), ISO weeks (W43; 2027-W02 for another year),
-# comma-separated, with inclusive START..END ranges (W45..46). Days already gone are skipped.
+# comma-separated, with inclusive START..END ranges (W45..46). Days already gone are
+# skipped — put your own window here: a selection entirely in the past is rejected.
 dates = "2026-09-01..2026-10-30"
-# dates = "W36, W38..40"
+# or, by week:  dates = "W36, W38..40"
 time_leave = "05:29"
 time_return = "17:22"
 station_from = "Göteborg Central"

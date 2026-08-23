@@ -1325,7 +1325,7 @@ def _booked_rows(booking: dict, booking_number: str | None) -> list[dict]:
 
 
 def _span_label(start: date, end: date) -> str:
-    """Span label: "18 - 21 sep 2026", "1 sep - 30 oct 2026", "29 dec 2026 - 9 jan 2027"."""
+    """Span label: "18 – 21 sep 2026", "1 sep – 30 oct 2026", "29 dec 2026 – 9 jan 2027"."""
 
     def day(d: date, with_year: bool) -> str:
         txt = f"{d.day} {d.strftime('%b').lower()}"
@@ -1348,8 +1348,8 @@ def describe_run(params: dict, today: date | None = None) -> list[tuple[str, str
 
     Example:
         route     Göteborg Central ⇄ Stockholm Central
-        days      1 sep - 30 oct 2026 · weekdays only
-        days      W43, W45..46 (19 oct - 15 nov 2026) · weekdays only
+        days      1 sep – 30 oct 2026 · weekdays only
+        days      W43, W45..46 (19 oct – 15 nov 2026) · weekdays only
         times     out 06:59 · back 17:22
         ticket    2 class calm · FULLFLEX · SJ High-speed train
 

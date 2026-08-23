@@ -109,6 +109,9 @@ convention = "google"
 "src/sj_api_client/client.py" = [
     "N806",     # Non-lowercase variable (STATION_MAP used locally)
 ]
+"src/sj_api_client/booking.py" = [
+    "RUF002",   # Docstrings quote the real en dash the span/days output renders
+]
 "tests/*" = [
     "D",        # Docstrings: test names are the documentation
     "E501",     # Long lines in fixtures/assertions
