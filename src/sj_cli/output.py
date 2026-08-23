@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
-from sj_api_client.dates import parse_api_datetime, sweden_now, to_sweden
+from sj_cli.dates import parse_api_datetime, sweden_now, to_sweden
 
 logger = logging.getLogger(__name__)
 

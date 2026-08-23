@@ -1,7 +1,7 @@
 import json
 import logging
 
-from sj_api_client.logger import HttpxTraceLevelFilter, log_json, redact, redact_http_trace
+from sj_cli.logger import HttpxTraceLevelFilter, log_json, redact, redact_http_trace
 
 
 def test_redact_masks_secret_keys_recursively():
@@ -66,7 +66,7 @@ def test_httpcore_records_are_scrubbed_by_the_filter():
 def test_redaction_covers_sms_codes_csrf_tokens_and_auth_codes():
     import json
 
-    from sj_api_client.logger import log_json
+    from sj_cli.logger import log_json
 
     data = {
         "verification_code": "123456",
@@ -82,7 +82,7 @@ def test_redaction_covers_sms_codes_csrf_tokens_and_auth_codes():
 
 
 def test_invalid_log_level_is_reported_on_stderr(capsys):
-    from sj_api_client.logger import setup_logging
+    from sj_cli.logger import setup_logging
 
     setup_logging("bogus")
     assert "invalid log level 'bogus' specified, defaulting to CRITICAL" in capsys.readouterr().err

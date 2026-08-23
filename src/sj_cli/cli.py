@@ -9,8 +9,8 @@ import sys
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, NoReturn, override
 
-from sj_api_client.auth import ensure_authenticated, handle_logout
-from sj_api_client.booking import (
+from sj_cli.auth import ensure_authenticated, handle_logout
+from sj_cli.booking import (
     booking_date_range,
     cleanup_stale_provisionals,
     describe_run,
@@ -20,9 +20,9 @@ from sj_api_client.booking import (
     handle_list_bookings,
     process_date_range,
 )
-from sj_api_client.client import SJClient
-from sj_api_client.config import CfgManager
-from sj_api_client.dates import (
+from sj_cli.client import SJClient
+from sj_cli.config import CfgManager
+from sj_cli.dates import (
     SWEDEN,
     booking_dates,
     parse_api_datetime,
@@ -31,9 +31,9 @@ from sj_api_client.dates import (
     sweden_now,
     to_sweden,
 )
-from sj_api_client.errors import SJAPIError, SJAuthError, SJConfigError, error_text
-from sj_api_client.logger import setup_logging
-from sj_api_client.output import (
+from sj_cli.errors import SJAPIError, SJAuthError, SJConfigError, error_text
+from sj_cli.logger import setup_logging
+from sj_cli.output import (
     DIM,
     RED,
     ask,
@@ -48,7 +48,7 @@ from sj_api_client.output import (
     spinner,
     style,
 )
-from sj_api_client.tokens import TokenManager
+from sj_cli.tokens import TokenManager
 
 if TYPE_CHECKING:
     from _typeshed import SupportsWrite

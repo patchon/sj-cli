@@ -4,10 +4,10 @@ import logging
 import select
 import sys
 
-from sj_api_client.client import SJClient
-from sj_api_client.errors import SJAPIError, SJAuthError, error_text
-from sj_api_client.output import blank, print_status_card, prompt, pwarn, spinner
-from sj_api_client.tokens import TokenManager
+from sj_cli.client import SJClient
+from sj_cli.errors import SJAPIError, SJAuthError, error_text
+from sj_cli.output import blank, print_status_card, prompt, pwarn, spinner
+from sj_cli.tokens import TokenManager
 
 logger = logging.getLogger(__name__)
 

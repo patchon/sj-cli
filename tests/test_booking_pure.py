@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sj_api_client.booking import (
+from sj_cli.booking import (
     _dry_run_note,
     _find_departure_by_time,
     _resolve_class_for_departure,
@@ -195,7 +195,7 @@ def test_describe_run():
     # non-contiguous: the selection as validation normalised it, then its span
     from datetime import date
 
-    from sj_api_client.config import CfgManager
+    from sj_cli.config import CfgManager
 
     cfg = base_cfg(dates=" w43 ,w45..46")
     CfgManager().verify_cfg(cfg)  # normalises the written value in place
@@ -206,7 +206,7 @@ def test_describe_run():
 
 
 def test_confirm_uses_question_prompt(monkeypatch, capsys):
-    from sj_api_client.booking import _confirm
+    from sj_cli.booking import _confirm
 
     monkeypatch.setattr("builtins.input", lambda: "Y")
     assert _confirm("cancel booking ERU0HWB2? [y/n]: ") is True
@@ -240,7 +240,7 @@ def test_find_offer_id_honours_allow_fallback_flag():
 
 
 def test_segment_date_is_the_swedish_calendar_date():
-    from sj_api_client.booking import _segment_date
+    from sj_cli.booking import _segment_date
 
     assert _segment_date("2026-10-24T22:30:00Z") == "2026-10-25"  # 00:30 Swedish
     assert _segment_date("2026-09-01T06:59:00+02:00") == "2026-09-01"
@@ -248,7 +248,7 @@ def test_segment_date_is_the_swedish_calendar_date():
 
 
 def test_duplicate_check_matches_a_journey_with_a_change():
-    from sj_api_client.booking import check_existing_booking
+    from sj_cli.booking import check_existing_booking
 
     def seg(origin, dest, when):
         return {
@@ -281,12 +281,12 @@ def test_duplicate_check_matches_a_journey_with_a_change():
 def test_display_row_and_availability_survive_explicit_nulls():
     from datetime import datetime
 
-    from sj_api_client.booking import (
+    from sj_cli.booking import (
         _journey_endpoints,
         _segment_to_display_row,
         is_active_booking,
     )
-    from sj_api_client.dates import SWEDEN
+    from sj_cli.dates import SWEDEN
 
     seg = {
         "direction": "OUTBOUND",

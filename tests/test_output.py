@@ -1,4 +1,4 @@
-from sj_api_client.output import (
+from sj_cli.output import (
     _group_route,
     _reverse_route,
     day_header,
@@ -150,7 +150,7 @@ def test_bookings_card_groups_by_day_and_infers_return_arrow(capsys):
 
 
 def test_travelpass_cards(capsys):
-    from sj_api_client.output import print_travelpasses
+    from sj_cli.output import print_travelpasses
 
     tp = {
         "name": "SJ Årskort Silver",
@@ -173,7 +173,7 @@ def test_travelpass_cards(capsys):
 
 
 def test_travelpass_card_omits_unknown_facts(capsys):
-    from sj_api_client.output import print_travelpasses
+    from sj_cli.output import print_travelpasses
 
     print_travelpasses([{"name": "SJ Årskort", "code": "123"}], None)
     out = capsys.readouterr().out
@@ -183,7 +183,7 @@ def test_travelpass_card_omits_unknown_facts(capsys):
 
 
 def test_status_card_with_plain_lines(capsys):
-    from sj_api_client.output import print_status_card
+    from sj_cli.output import print_status_card
 
     print_status_card(
         False, "invalid configuration", lines=["time_leave must be a valid time (HH:MM, 24-hour)"]
@@ -194,7 +194,7 @@ def test_status_card_with_plain_lines(capsys):
 
 
 def test_ask_inline_prompt_reads_and_closes_line(monkeypatch, capsys):
-    from sj_api_client.output import ask
+    from sj_cli.output import ask
 
     monkeypatch.setattr("builtins.input", lambda: "a")
     assert ask("select [1/2/a]: ") == "a"
@@ -203,7 +203,7 @@ def test_ask_inline_prompt_reads_and_closes_line(monkeypatch, capsys):
 
 
 def test_ask_returns_empty_on_eof(monkeypatch, capsys):
-    from sj_api_client.output import ask
+    from sj_cli.output import ask
 
     def _raise_eof():
         raise EOFError
@@ -214,7 +214,7 @@ def test_ask_returns_empty_on_eof(monkeypatch, capsys):
 
 
 def test_header_box(capsys):
-    from sj_api_client.output import print_header_box
+    from sj_cli.output import print_header_box
 
     print_header_box(
         [
@@ -237,7 +237,7 @@ def test_header_box(capsys):
 def test_trail_marks_are_coloured(monkeypatch, capsys):
     import pytest
 
-    from sj_api_client import output
+    from sj_cli import output
 
     monkeypatch.setattr(output, "color_enabled", lambda: True)
     with output.spinner("step"):
@@ -250,7 +250,7 @@ def test_trail_marks_are_coloured(monkeypatch, capsys):
 
 
 def test_pwarn_yellow_mark_dim_text(monkeypatch, capsys):
-    from sj_api_client import output
+    from sj_cli import output
 
     output.pwarn("outbound class fallback: 1 class → 2 class calm")
     assert capsys.readouterr().out == " ! outbound class fallback: 1 class → 2 class calm\n"
@@ -260,7 +260,7 @@ def test_pwarn_yellow_mark_dim_text(monkeypatch, capsys):
 
 
 def test_pstatus_dot_by_outcome(monkeypatch, capsys):
-    from sj_api_client import output
+    from sj_cli import output
 
     output.pstatus(True, "22 day(s) · 34 booking(s)")
     output.pstatus(False, "cancellation aborted")
@@ -274,7 +274,7 @@ def test_pstatus_dot_by_outcome(monkeypatch, capsys):
 
 
 def test_travelpass_holder_without_email_has_no_empty_parentheses(capsys):
-    from sj_api_client.output import print_travelpasses
+    from sj_cli.output import print_travelpasses
 
     print_travelpasses(
         [{"name": "P", "code": "1", "holder": {"firstName": "Anna", "lastName": "B"}}]
@@ -284,7 +284,7 @@ def test_travelpass_holder_without_email_has_no_empty_parentheses(capsys):
 
 
 def test_leg_lines_keep_arrows_when_the_subset_starts_with_the_return():
-    from sj_api_client.output import leg_lines
+    from sj_cli.output import leg_lines
 
     ret = {"departure": "17:22", "arrival": "21:53", "route": "B → A", "direction": "Return"}
     out_ = {"departure": "06:59", "arrival": "11:36", "route": "A → B", "direction": "Outbound"}
@@ -293,7 +293,7 @@ def test_leg_lines_keep_arrows_when_the_subset_starts_with_the_return():
 
 
 def test_zero_receipt_amount_is_a_price_not_unknown():
-    from sj_api_client.output import _extract_price
+    from sj_cli.output import _extract_price
 
     assert _extract_price({"totalAmount": {"amount": 0, "currency": "SEK"}}) == "0 SEK"
     assert _extract_price({"amount": 0}) == "0 SEK"

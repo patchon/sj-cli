@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# sj-api-client
+# sj-cli
 
 Python CLI tool for automated SJ (Swedish Railways) train ticket booking using travel pass benefits (e.g., SJ Annual Card). Reverse-engineers the sj.se web app's API to authenticate, search, and book journeys.
 
@@ -16,46 +16,46 @@ Python CLI tool for automated SJ (Swedish Railways) train ticket booking using t
 source venv/bin/activate
 
 # Preview a booking run — --dry-run modifies --book and the cancel flags (nothing real happens)
-sj-tool --book --dry-run
+sj-cli --book --dry-run
 
 # Book tickets for real — prints one result line per day
-sj-tool --book
+sj-cli --book
 
 # List all active bookings (one card per travel day)
-sj-tool --list-bookings
+sj-cli --list-bookings
 
 # List travel passes (validity, days left, price from receipt)
-sj-tool --list-travelpasses
+sj-cli --list-travelpasses
 
 # Cancel that day's journeys on the configured route (other days of a booking are kept): one date,
 # an ISO week, a comma list, and/or START..END ranges
-sj-tool --cancel-date 2026-01-20
-sj-tool --cancel-date 2026-01-20,2026-02-03..2026-02-05
-sj-tool --cancel-date W43   # a whole ISO week
-sj-tool --cancel-date 2026-01-20 --dry-run   # preview: cards + would-cancel status, no prompts
+sj-cli --cancel-date 2026-01-20
+sj-cli --cancel-date 2026-01-20,2026-02-03..2026-02-05
+sj-cli --cancel-date W43   # a whole ISO week
+sj-cli --cancel-date 2026-01-20 --dry-run   # preview: cards + would-cancel status, no prompts
 
 # Cancel booking(s) by number, comma-separated, any case
-sj-tool --cancel-booking 3HT2NEIL,ABCD1234
+sj-cli --cancel-booking 3HT2NEIL,ABCD1234
 
 # Authenticate and cache the token, then exit
-sj-tool --login
+sj-cli --login
 
 # Log out: end the sj.se session and delete cached token + cookies (next login needs SMS)
-sj-tool --logout
+sj-cli --logout
 
 # Exit 0 if logged in (valid or refreshable cached token), 1 otherwise (for scripting; no config/network needed)
-sj-tool --login-status
+sj-cli --login-status
 
 # Verbose logging (logs go to stderr; secrets are redacted)
-LOG_LEVEL=DEBUG sj-tool --book --dry-run
-LOG_LEVEL=TRACE sj-tool --book --dry-run   # includes httpx request/response details
+LOG_LEVEL=DEBUG sj-cli --book --dry-run
+LOG_LEVEL=TRACE sj-cli --book --dry-run   # includes httpx request/response details
 ```
 
-Log levels: TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL. Default: CRITICAL (silent). Flags are mutually exclusive and one mode flag is required — a bare `sj-tool` prints the help and exits 1; exit 0 success, 1 any failure, 130 Ctrl-C. `sj-tool` is the console script installed by `pip install -e .` (with the venv activated, or `./venv/bin/sj-tool`); `python -m sj_api_client` is equivalent.
+Log levels: TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL. Default: CRITICAL (silent). Flags are mutually exclusive and one mode flag is required — a bare `sj-cli` prints the help and exits 1; exit 0 success, 1 any failure, 130 Ctrl-C. `sj-cli` is the console script installed by `pip install -e .` (with the venv activated, or `./venv/bin/sj-cli`); `python -m sj_cli` is equivalent.
 
 The tool requires interactive SMS input during first login (B2C MFA, 2-minute timeout). Subsequent runs use cached/refreshed tokens; cached SSO cookies let a later full login usually skip the SMS step.
 
-A read-only smoke test against the live API that cannot block on the SMS prompt: `LOG_LEVEL=WARNING ./venv/bin/sj-tool --book --dry-run </dev/null`, likewise `--list-bookings` / `--list-travelpasses`.
+A read-only smoke test against the live API that cannot block on the SMS prompt: `LOG_LEVEL=WARNING ./venv/bin/sj-cli --book --dry-run </dev/null`, likewise `--list-bookings` / `--list-travelpasses`.
 
 If `venv/` breaks (e.g. Homebrew Python was upgraded and the interpreter symlink dangles), recreate it:
 
@@ -66,19 +66,19 @@ rm -rf venv && python3 -m venv venv && ./venv/bin/pip install -e . --group dev
 ## Repository layout
 
 ```
-src/sj_api_client/    the package (standard src layout): one module per concern (table below),
-                      __main__.py for `python -m sj_api_client`, config.example.toml (package data:
+src/sj_cli/    the package (standard src layout): one module per concern (table below),
+                      __main__.py for `python -m sj_cli`, config.example.toml (package data:
                       the documented config template; the real config lives in ~/.config, never commit it)
 tests/                pytest suite, no network (conftest.py: autouse fixture; fakes.py: FakeClient, builders, base config)
 pyproject.toml        project metadata, dependencies, console script and the ruff/pytest/mypy configuration
-config.toml           gitignored local copy — NOT read by the tool (it reads ~/.config/sj-api-client/)
+config.toml           gitignored local copy — NOT read by the tool (it reads ~/.config/sj-cli/)
 SPEC.md, README.md, CLAUDE.md
 curl-traces/          gitignored raw HAR/curl logs from reverse-engineering (contain tokens; grep, don't commit)
 ```
 
 ## Architecture
 
-Modules in `src/sj_api_client/`, organized by separation of concerns; imports are absolute (`from sj_api_client.errors import ...`):
+Modules in `src/sj_cli/`, organized by separation of concerns; imports are absolute (`from sj_cli.errors import ...`):
 
 | Module | Role |
 |---|---|
@@ -109,7 +109,7 @@ Modules in `src/sj_api_client/`, organized by separation of concerns; imports ar
 
 ## Configuration
 
-Config path: `~/.config/sj-api-client/config.toml` (or `$XDG_CONFIG_HOME/sj-api-client/config.toml`). Template: `src/sj_api_client/config.example.toml` (package data next to `config.py`, read by first-run setup). Missing config: `--login` on a terminal (stdin and stdout) → first-run setup (`CfgManager.create_interactive`): asks credentials, writes the template with them filled in (0600, TOML-escaped via a function replacement — a string `re.sub` replacement would mangle backslashes), then logs in; any other operation, a non-interactive run, or a declined offer → `● no configuration` card, exit 1 (a write failure → `● config not created`). `verify_cfg(cfg, require_search=..., require_dates=...)`: [auth] always, [search_parameters] only for --book/--cancel-date, the `dates` selection only for --book.
+Config path: `~/.config/sj-cli/config.toml` (or `$XDG_CONFIG_HOME/sj-cli/config.toml`). Template: `src/sj_cli/config.example.toml` (package data next to `config.py`, read by first-run setup). Missing config: `--login` on a terminal (stdin and stdout) → first-run setup (`CfgManager.create_interactive`): asks credentials, writes the template with them filled in (0600, TOML-escaped via a function replacement — a string `re.sub` replacement would mangle backslashes), then logs in; any other operation, a non-interactive run, or a declined offer → `● no configuration` card, exit 1 (a write failure → `● config not created`). `verify_cfg(cfg, require_search=..., require_dates=...)`: [auth] always, [search_parameters] only for --book/--cancel-date, the `dates` selection only for --book.
 
 ```toml
 [auth]
@@ -136,7 +136,7 @@ service_types = ["SJ_HIGH", "SJ_IC"]  # optional, filter train types (omit or ["
 
 All fields are validated at startup before any API calls. See SPEC.md §4.3 for full validation rules.
 
-Caches: `~/.cache/sj-api-client/token.json` (tokens) and `cookies.json` (SSO cookies), auto-created on first login; delete the directory to force a fresh login.
+Caches: `~/.cache/sj-cli/token.json` (tokens) and `cookies.json` (SSO cookies), auto-created on first login; delete the directory to force a fresh login.
 
 ## Dependencies
 
@@ -146,7 +146,7 @@ Declared in `pyproject.toml` (PEP 621; dev tools in a PEP 735 dependency group):
 - `httpx` — HTTP client (the only runtime dependency)
 - dev group: `pytest`, `ruff`, `mypy`
 
-Install into the venv with `./venv/bin/pip install -e . --group dev` (editable install also provides the `sj-tool` console script). Standard src layout: `[tool.setuptools.packages.find] where = ["src"]` discovers the package, `config.example.toml` ships as package data, so the tool runs only installed (editable or not) — never from the working tree directly.
+Install into the venv with `./venv/bin/pip install -e . --group dev` (editable install also provides the `sj-cli` console script). Standard src layout: `[tool.setuptools.packages.find] where = ["src"]` discovers the package, `config.example.toml` ships as package data, so the tool runs only installed (editable or not) — never from the working tree directly.
 
 ## Tests and lint
 
@@ -165,4 +165,4 @@ Definition of done for a change: `ruff check .`, `ruff format --check .` and `my
 
 - The real config (with the SJ password) must stay in `~/.config`; `config.toml` in the repo is gitignored. Git history was scrubbed of it on 2026-08-19 with `git filter-repo` — keep it that way.
 - `curl-traces/` holds raw request/response logs with live tokens; it is gitignored.
-- DEBUG/TRACE logs are redacted, but the raw token/cookie cache files are not — they are written owner-only (0600 in a 0700 directory); still treat `~/.cache/sj-api-client/` as sensitive.
+- DEBUG/TRACE logs are redacted, but the raw token/cookie cache files are not — they are written owner-only (0600 in a 0700 directory); still treat `~/.cache/sj-cli/` as sensitive.

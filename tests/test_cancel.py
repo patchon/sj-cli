@@ -3,8 +3,8 @@ no cancellation API calls (the client below forbids every call)."""
 
 import pytest
 
-from sj_api_client import booking
-from sj_api_client.booking import handle_cancel_booking
+from sj_cli import booking
+from sj_cli.booking import handle_cancel_booking
 
 
 def _seg(direction, service_id):
@@ -97,7 +97,7 @@ def test_cancel_return_values_drive_the_exit_code(monkeypatch, capsys):
 
 
 def test_stale_provisional_is_not_a_booking_for_list_and_cancel(monkeypatch, capsys):
-    from sj_api_client.booking import handle_list_bookings
+    from sj_cli.booking import handle_list_bookings
 
     stale = _bookings("PROV1")
     stale[0]["booking"]["bookingStatus"] = "NEW"  # NEW + CANCEL_JOURNEY = leftover
@@ -109,7 +109,7 @@ def test_stale_provisional_is_not_a_booking_for_list_and_cancel(monkeypatch, cap
 
 
 def test_cancel_date_with_nothing_to_cancel_is_not_a_failure(monkeypatch, capsys):
-    from sj_api_client.booking import handle_cancel_mode
+    from sj_cli.booking import handle_cancel_mode
     from tests.fakes import FakeClient, base_cfg
 
     monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: [])
@@ -125,12 +125,12 @@ class RefusingCancelClient:
 
     def cancel_booking_with_patch(self, token, booking_id, payload):
         if self.refuse_patch:
-            from sj_api_client.errors import SJAPIError
+            from sj_cli.errors import SJAPIError
 
             raise SJAPIError({"errorCode": "E42", "message": "segment already departed"})
 
     def finalize_cancellation(self, token, booking_id):
-        from sj_api_client.errors import SJAPIError
+        from sj_cli.errors import SJAPIError
 
         raise SJAPIError({"errorCode": "E43", "message": "checkout refused"})
 
@@ -154,11 +154,11 @@ def test_cancel_failures_name_the_cause(monkeypatch, capsys):
 
 
 def test_stale_provisional_cleanup_reports_the_cause_and_continues(capsys):
-    from sj_api_client.booking import cleanup_stale_provisionals
+    from sj_cli.booking import cleanup_stale_provisionals
 
     class RefusingProvisionalClient:
         def cancel_provisional_booking(self, token, booking_id):
-            from sj_api_client.errors import SJAPIError
+            from sj_cli.errors import SJAPIError
 
             raise SJAPIError({"errorCode": "E7", "message": "not cancellable"})
 
@@ -202,8 +202,8 @@ def _provisional(number, origin, dest, created):
 def test_stale_cleanup_spares_other_routes_and_fresh_provisionals(capsys):
     from datetime import datetime, timedelta
 
-    from sj_api_client.booking import cleanup_stale_provisionals
-    from sj_api_client.dates import SWEDEN
+    from sj_cli.booking import cleanup_stale_provisionals
+    from sj_cli.dates import SWEDEN
 
     now = datetime(2026, 9, 1, 12, 0, tzinfo=SWEDEN)
     old = (now - timedelta(minutes=30)).isoformat()
@@ -250,7 +250,7 @@ def _two_day_booking():
 
 
 def test_cancel_date_only_cancels_the_journeys_on_that_date(monkeypatch, capsys):
-    from sj_api_client.booking import handle_cancel_mode
+    from sj_cli.booking import handle_cancel_mode
     from tests.fakes import base_cfg
 
     monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: _two_day_booking())
@@ -269,7 +269,7 @@ def test_cancel_date_only_cancels_the_journeys_on_that_date(monkeypatch, capsys)
 
 
 def test_cancel_date_dry_run_counts_only_that_date(monkeypatch, capsys):
-    from sj_api_client.booking import handle_cancel_mode
+    from sj_cli.booking import handle_cancel_mode
     from tests.fakes import base_cfg
 
     monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: _two_day_booking())

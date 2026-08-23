@@ -11,8 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sj_api_client.errors import SJAuthError
-from sj_api_client.logger import log_json
+from sj_cli.errors import SJAuthError
+from sj_cli.logger import log_json
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class TokenManager:
 
     """
 
-    DEFAULT_PATH = Path.home() / ".cache" / "sj-api-client" / "token.json"
+    DEFAULT_PATH = Path.home() / ".cache" / "sj-cli" / "token.json"
 
     def __init__(self, cache_path: str | Path | None = None) -> None:
         """

@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sj-api-client"
+name = "sj-cli"
 version = "0.1.0"
 description = "Book SJ (Swedish Railways) commuter trips on a travel pass from the command line."
 readme = "README.md"
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sj-tool = "sj_api_client.cli:main"
+sj-cli = "sj_cli.cli:main"
 
 [dependency-groups]
 dev = [
@@ -26,7 +26,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-sj_api_client = ["config.example.toml"]
+sj_cli = ["config.example.toml"]
 
 # --- ruff: lint + format (target version follows requires-python) ---------
 
@@ -107,7 +107,7 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"src/sj_api_client/client.py" = [
+"src/sj_cli/client.py" = [
     "N806",     # Non-lowercase variable (STATION_MAP used locally)
 ]
 "tests/*" = [
