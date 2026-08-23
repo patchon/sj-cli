@@ -1,12 +1,22 @@
 """Timezone rules: API timestamps are Swedish wall-clock; 'now' comparisons are aware."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from sj_api_client.booking import _segment_to_display_row, booking_date_range
 from sj_api_client.cli import _is_expired, validate_dates_against_pass
-from sj_api_client.dates import SWEDEN, parse_api_datetime, sweden_now, to_sweden
+from sj_api_client.dates import (
+    SWEDEN,
+    booking_dates,
+    normalise_date_selection,
+    parse_api_datetime,
+    parse_date_selection,
+    selected_dates,
+    sweden_now,
+    to_sweden,
+)
+from sj_api_client.errors import SJConfigError
 from sj_api_client.output import _days_remaining, _format_tp_date
 from tests.fakes import base_cfg
 
@@ -107,20 +117,14 @@ def test_validate_dates_against_pass_boundaries(start, end, first_day, last_day)
 
 
 def _week(year, week):
-    from datetime import date, timedelta
-
     monday = date.fromisocalendar(year, week, 1)
     return [monday + timedelta(days=i) for i in range(7)]
 
 
-TODAY = datetime(2026, 8, 23).date()  # ISO year 2026, week 34
+TODAY = date(2026, 8, 23)  # ISO year 2026, week 34
 
 
 def test_selection_dates_lists_and_ranges():
-    from datetime import date
-
-    from sj_api_client.dates import parse_date_selection
-
     assert parse_date_selection("2026-09-16", today=TODAY) == ([date(2026, 9, 16)], [])
     dates, errors = parse_date_selection("2026-09-18, 2026-09-16,2026-09-16", today=TODAY)
     assert errors == [] and dates == [date(2026, 9, 16), date(2026, 9, 18)]
@@ -131,15 +135,20 @@ def test_selection_dates_lists_and_ranges():
 
 
 def test_selection_week_terms_and_range_inheritance():
-    from sj_api_client.dates import parse_date_selection
-
     w43 = _week(2026, 43)
     assert parse_date_selection("W43", today=TODAY) == (w43, [])
     assert parse_date_selection("w43", today=TODAY) == (w43, [])  # case-insensitive W
     assert parse_date_selection("2026-W43", today=TODAY) == (w43, [])
+    assert parse_date_selection("2026-W43", today=TODAY)[0][0] == date(2026, 10, 19)
+    assert parse_date_selection("W43..W43", today=TODAY) == (w43, [])  # single-week range
     two_weeks = _week(2026, 43) + _week(2026, 44)
     for spec in ("W43..44", "W43..W44", "2026-W43..44", "2026-W43..2026-W44", "W44, W43"):
         assert parse_date_selection(spec, today=TODAY) == (two_weeks, []), spec
+    # a year seam: today in ISO week 2026-W01, the range's own start decides the end's year
+    assert parse_date_selection("W1..2", today=date(2025, 12, 29)) == (
+        [*_week(2026, 1), *_week(2026, 2)],
+        [],
+    )
     # mixed term kinds in one selection are fine; only a single range may not mix
     mixed, errors = parse_date_selection("2026-10-28..2026-10-29, W43", today=TODAY)
     assert errors == [] and mixed == [
@@ -150,28 +159,21 @@ def test_selection_week_terms_and_range_inheritance():
 
 
 def test_bare_week_uses_todays_iso_year():
-    from datetime import date
-
-    from sj_api_client.dates import parse_date_selection
-
     # 29 dec 2025 already belongs to ISO week 2026-W01
     assert parse_date_selection("W1", today=date(2025, 12, 29)) == (_week(2026, 1), [])
     assert parse_date_selection("2027-W02..03", today=TODAY)[0][0] == date(2027, 1, 11)
 
 
 def test_week_53_only_in_years_that_have_it():
-    from sj_api_client.dates import parse_date_selection
-
     assert parse_date_selection("2026-W53", today=TODAY) == (_week(2026, 53), [])
     assert parse_date_selection("2027-W53", today=TODAY) == ([], ["2027 has no week 53"])
 
 
 def test_selection_errors_are_all_collected():
-    from sj_api_client.dates import parse_date_selection
-
     dates, errors = parse_date_selection(
         "2026-09-31, foo, W54, 2026-10-19..W43, W43..2026-10-25, W44..43, "
-        "2026-01-01..2027-01-01, 2026-W01..2027-W10, ,2026-09-16..2026-09-17..2026-09-18, 46",
+        "2026-01-01..2027-01-01, 2026-W01..2027-W10, ,2026-09-16..2026-09-17..2026-09-18, 46, "
+        "9999-W52, 9999-12-01..9999-12-31, ..2026-09-01",
         today=TODAY,
     )
     assert dates == []
@@ -187,27 +189,28 @@ def test_selection_errors_are_all_collected():
         "empty entry in the date list",
         "'2026-09-16..2026-09-17..2026-09-18' must be a single range start..end",
         "'46' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)",
+        "9999 has no week 52",
+        "range '9999-12-01..9999-12-31' spans more than a year",
+        "'..2026-09-01' must be a single range start..end",
     ]
     # a leap day inside a year-long range is still "a year"
     assert parse_date_selection("2028-01-01..2028-12-31", today=TODAY)[1] == []
+    # a range end with a year but no W is not a recognised week shape
+    assert parse_date_selection("W43..2026-46", today=TODAY)[1] == [
+        "'2026-46' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)"
+    ]
 
 
 def test_normalise_date_selection():
-    from sj_api_client.dates import normalise_date_selection
-
     assert normalise_date_selection(" w43 ,W45..46 ") == "W43, W45..46"
     assert normalise_date_selection("2026-09-01..2026-10-30") == "2026-09-01..2026-10-30"
 
 
 def test_selected_and_booking_dates():
-    from datetime import date
-
-    from sj_api_client.dates import booking_dates, selected_dates
-    from sj_api_client.errors import SJConfigError
-
     p = {"dates": "2026-08-20..2026-08-25"}
     assert selected_dates(p, TODAY)[0] == date(2026, 8, 20)
     assert booking_dates(p, TODAY) == [date(2026, 8, 23), date(2026, 8, 24), date(2026, 8, 25)]
     assert booking_dates({"dates": "W43"}, TODAY) == _week(2026, 43)
+    assert booking_dates({"dates": "2099-01-01"}) == [date(2099, 1, 1)]  # default today
     with pytest.raises(SJConfigError, match="dates: 'nope' is not a date"):
         selected_dates({"dates": "nope"}, TODAY)
