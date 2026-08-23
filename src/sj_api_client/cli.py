@@ -62,7 +62,7 @@ def parse_cancel_dates(value: str) -> tuple[list[str], list[str]]:
     weeks (W43, 2027-W02), comma-separated lists and inclusive start..end
     ranges — mixed freely.
 
-    Validate-first contract: every token is checked and ALL problems are
+    Validate-first contract: every term is checked and ALL problems are
     collected before any cancellation work may start.
 
     Returns:
@@ -95,11 +95,14 @@ def parse_booking_numbers(value: str) -> tuple[list[str], list[str]]:
         if not token:
             errors.append("empty entry in the booking number list")
             continue
-        if not token.isalnum():
+        looks_like_a_date = ".." in token or re.search(
+            r"\d{4}-\d{2}-\d{2}|^\d{4}-W\d{1,2}$|^W\d{1,2}$", token, re.IGNORECASE
+        )
+        if not token.isalnum() or looks_like_a_date:
             errors.append(
                 f"'{token}' is not a booking number (letters and digits only, e.g. 3HT2NEIL)"
             )
-            if ".." in token or re.search(r"\d{4}-\d{2}-\d{2}", token):
+            if looks_like_a_date:
                 date_like = True
             continue
         if token.upper() not in numbers:

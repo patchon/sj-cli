@@ -163,6 +163,14 @@ def test_cancel_booking_rejects_dates_with_a_hint(capsys):
     assert "these look like dates — did you mean --cancel-date?" in out
 
 
+def test_booking_numbers_week_terms_get_the_cancel_date_hint():
+    from sj_api_client.cli import parse_booking_numbers
+
+    for value in ("W43", "2027-W02", "w43,ABCD1234"):
+        numbers, errors = parse_booking_numbers(value)
+        assert numbers == [] and "did you mean --cancel-date?" in " ".join(errors), value
+
+
 def test_cancel_booking_rejects_empty_entries(capsys):
     with pytest.raises(SystemExit) as exc_info:
         parse_args(["--cancel-booking", "3HT2NEIL,,ABCD1234"])
@@ -367,6 +375,7 @@ def test_parse_cancel_dates_accepts_week_terms():
     from datetime import date, timedelta
 
     from sj_api_client.cli import parse_cancel_dates
+    from sj_api_client.dates import sweden_now
 
     monday = date(2026, 10, 19)  # 2026-W43
     week = [(monday + timedelta(days=i)).isoformat() for i in range(7)]
@@ -374,8 +383,14 @@ def test_parse_cancel_dates_accepts_week_terms():
         [*week, "2026-10-28", "2026-10-29"],
         [],
     )
-    dates, errors = parse_cancel_dates("W43")  # bare week: this ISO year, 7 days
+    dates, errors = parse_cancel_dates("W43")  # bare week: this ISO year, Monday first
     assert errors == [] and len(dates) == 7
+    first = date.fromisoformat(dates[0]).isocalendar()
+    assert (first.year, first.week, first.weekday) == (
+        sweden_now().date().isocalendar().year,
+        43,
+        1,
+    )
     assert parse_cancel_dates("W43..2026-10-25") == (
         [],
         ["range 'W43..2026-10-25' mixes a date and a week"],
