@@ -6,8 +6,10 @@ email = "user@example.com"
 password = "your-password"
 
 [search_parameters]
-date_start = "2026-01-19"         # may already lie in the past: a run starts from today
-date_end = "2026-03-20"           # must not have passed
+# Which days to book: dates (YYYY-MM-DD), ISO weeks (W43; 2027-W02 for another year),
+# comma-separated, with inclusive START..END ranges (W45..46). Days already gone are skipped.
+dates = "2026-09-01..2026-10-30"
+# dates = "W36, W38..40"
 time_leave = "05:29"
 time_return = "17:22"
 station_from = "Göteborg Central"

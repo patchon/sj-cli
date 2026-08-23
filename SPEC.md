@@ -117,8 +117,7 @@ email = "user@example.com"
 password = "your-password"
 
 [search_parameters]
-date_start = "2026-01-19"
-date_end = "2026-03-20"
+dates = "2026-09-01..2026-10-30"     # or e.g. "W36, W38..40"
 time_leave = "05:29"
 time_return = "17:22"
 station_from = "Göteborg Central"
@@ -136,14 +135,13 @@ service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 
 ### 4.3 Validation rules
 
-Validation runs at startup before any API calls, scoped to the operation: `[auth]` is always validated; `[search_parameters]` only for the operations that use it (`--book`, `--cancel-date`) — login, listing and cancel-by-number work with a config holding only credentials (e.g. one freshly written by the first-run setup) — and the date window (`date_start`/`date_end`) only for `--book`: `--cancel-date` takes its own dates and needs just the route. Fail fast: the errors render as a status card — `● invalid configuration` (red dot + bold verdict), a blank line, then one plain indented line per error — and the run exits 1. `SJConfigError` carries the individual messages as `.errors`; file-level failures (missing/unparsable config) render the same card with a single line.
+Validation runs at startup before any API calls, scoped to the operation: `[auth]` is always validated; `[search_parameters]` only for the operations that use it (`--book`, `--cancel-date`) — login, listing and cancel-by-number work with a config holding only credentials (e.g. one freshly written by the first-run setup) — and the `dates` selection only for `--book`: `--cancel-date` takes its own dates and needs just the route. Fail fast: the errors render as a status card — `● invalid configuration` (red dot + bold verdict), a blank line, then one plain indented line per error — and the run exits 1. `SJConfigError` carries the individual messages as `.errors`; file-level failures (missing/unparsable config) render the same card with a single line.
 
 | Field | Rules |
 |---|---|
 | `email` | Required. Must match basic email format (`x@y.z`). |
 | `password` | Required. Non-empty string. |
-| `date_start` | Required. Quoted `"YYYY-MM-DD"` string or native (unquoted) TOML date — both accepted, normalised to a string. May lie in the past: the booking loop then starts from today (`! date_start … is in the past, starting from …`), so a standing window keeps working on later runs. Errors echo the received value and distinguish a wrong format from an impossible calendar date. |
-| `date_end` | Required. Same date rules as `date_start`. Must be ≥ `date_start` and today or in the future — a window that has passed entirely is an error. |
+| `dates` | Required for `--book`. A string: comma-separated units and inclusive `START..END` ranges, mixed freely. A unit is a date (`2026-09-14`) or an ISO week — `W43` (week 43 of today's ISO year, Swedish date; around New Year write the year) or `2027-W02`. A week expands to Monday..Sunday; the end of a week range may omit year and `W` (`W43..46`, `2027-W02..03`, inheriting the start's year); both ends of a date range are full dates. Ranges must run forwards and span ≤ 1 year; a range may not mix a date and a week; `W53` only in years that have it. Whitespace is trimmed, `w` upper-cased, duplicates collapse; the value is normalised in place (`"W43, W45..46"`). Dates already gone are skipped at run time (`! 7 selected day(s) have passed, starting from …`); a selection that has passed entirely is an error (`dates: all selected dates have passed`); empty → `dates is required`; a native (unquoted) TOML date → `dates must be a string like "2026-09-01..2026-10-30"`. Grammar errors are prefixed `dates:` and echo the value: `dates: '2026-09-31' is not a real calendar date`, `dates: 'foo' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)`, `dates: range 'W44..43' must run forwards (start before end)`, `dates: range '…' spans more than a year`, `dates: range 'W43..2026-10-25' mixes a date and a week`, `dates: week 54 is out of range 1..53`, `dates: 2027 has no week 53`, `dates: '..2026-09-01' must be a single range start..end`, `dates: empty entry in the date list` (the full list is in `dates.parse_date_selection`). A config still using `date_start`/`date_end` gets `date_start/date_end were replaced by dates = "START..END"`. |
 | `time_leave` | Required. Quoted `"HH:MM"` string (24-hour) or native (unquoted) TOML time with seconds (`06:59:00`) — both accepted, normalised to `HH:MM`. Errors echo the received value and distinguish a wrong format from an impossible time of day. |
 | `time_return` | Required if `roundtrip = true`. Same time rules as `time_leave`. |
 | `station_from` | Required. Must exist in the station map. |
@@ -172,7 +170,7 @@ Report all validation errors at once (don't stop at the first one).
 sj-tool --book
 ```
 
-Reads config, authenticates, and books tickets for every date in the configured range. No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): green/red ● by outcome, dim summary text.
+Reads config, authenticates, and books tickets for every date in the configured range. No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only` — a contiguous selection renders as `1 sep – 30 oct 2026`, anything else as `W43, W45..46 (19 oct – 15 nov 2026)`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): green/red ● by outcome, dim summary text.
 
 ```
 ╭──────────────────────────────────╮
@@ -251,6 +249,7 @@ sat 19 sep 2026   weekend
 ```bash
 sj-tool --cancel-date 2026-01-20              # all bookings on the configured route that day
 sj-tool --cancel-date 2026-01-20,2026-02-03..2026-02-05   # several dates, comma list + ranges
+sj-tool --cancel-date W43                      # a whole ISO week
 sj-tool --cancel-booking ERU0HWB2,8Y41N08J   # by booking number, any case
 ```
 
@@ -322,8 +321,8 @@ mon 31 aug 2026   Göteborg Central ⇄ Stockholm Central
 | Flag | Description | Interactive? |
 |---|---|---|
 | `--dry-run` | Modifier for `--book`/`--cancel-date`/`--cancel-booking`: preview only, nothing booked or cancelled, no prompts. Usage error alone or with any other flag. | Only SMS on first login. |
-| `--book` | Book tickets for the configured date range. | Only SMS on first login. |
-| `--cancel-date DATES` | Cancel bookings on the configured route for one or more dates: a `YYYY-MM-DD` date, a comma-separated list, and/or inclusive `START..END` ranges, mixed freely. Every token is validated up front (real calendar dates, ranges must run forwards and span ≤ 1 year); any problem renders an `● invalid --cancel-date` card echoing each bad value and exits 1 before any API call. Dates are deduplicated and processed in order, one section per date. | Yes (journey choice + confirmation). |
+| `--book` | Book tickets for the configured dates (`dates`, §4.3). | Only SMS on first login. |
+| `--cancel-date DATES` | Cancel bookings on the configured route for one or more dates: a `YYYY-MM-DD` date, an ISO week (`W43`, `2027-W02`; a bare week is this ISO year), a comma-separated list, and/or inclusive `START..END` ranges, mixed freely. Every token is validated up front (the same grammar as the config's `dates` key, §4.3); any problem renders an `● invalid --cancel-date` card echoing each bad value and exits 1 before any API call. Dates are deduplicated and processed in order, one section per date. | Yes (journey choice + confirmation). |
 | `--cancel-booking NUM[,NUM…]` | Cancel booking(s) by booking number, comma-separated, any case (deduplicated, order kept). Validated up front: a value that cannot be a booking number (anything beyond letters and digits) renders an `● invalid --cancel-booking` card echoing each bad value — with a `did you mean --cancel-date?` hint when the values look like dates — and exits 1 before any API call. One output section per booking, blank-line separated. | Yes (journey choice + confirmation). |
 | `--list-bookings` | Display all active bookings as per-day cards. | Only SMS on first login. |
 | `--list-travelpasses` | Display travel passes with validity and receipt details. | Only SMS on first login. |
@@ -366,10 +365,10 @@ Every failure that ends a run closes with a red `●` status line naming the cau
 
 ### 6.1 Per-date flow
 
-For each date in `[date_start, date_end]`:
+For each selected date (`dates`, §4.3) from today on:
 
-0. **Calendar filter**: if the date is a weekend (`skip_weekends`) or a Swedish red day (`skip_holidays`), print the one-line day note (bold date + dim reason, `sat 19 sep 2026   weekend`) and continue to the next date without any API calls (see §6.4). Dates before today are not walked at all: a `date_start` in the past is clamped to today with a note.
-1. **Duplicate check**: fetch existing bookings (from today to the end of the pass, so a `date_start` of today is covered) and check whether an active booking — not cancelled, not a stale provisional — already has a journey with this route's end points on this Swedish date (a journey with a change matches by its end points, not per segment). If fully booked (both legs for roundtrip, or single leg for one-way), skip with an info message.
+0. **Calendar filter**: if the date is a weekend (`skip_weekends`) or a Swedish red day (`skip_holidays`), print the one-line day note (bold date + dim reason, `sat 19 sep 2026   weekend`) and continue to the next date without any API calls (see §6.4). Dates before today are not walked at all: they are dropped with one note (`! 7 selected day(s) have passed, starting from 2026-10-21`); if every selected day has passed by the time the loop runs, the run ends with `● all selected days have passed` (exit 1). Unselected days between selected ones print nothing.
+1. **Duplicate check**: fetch existing bookings (from today to the end of the pass, so a selection starting today is covered) and check whether an active booking — not cancelled, not a stale provisional — already has a journey with this route's end points on this Swedish date (a journey with a change matches by its end points, not per segment). If fully booked (both legs for roundtrip, or single leg for one-way), skip with an info message.
 2. **Determine what to book**: outbound only, return only, or both — based on which legs are missing.
 3. **Search**: call `search_journey` with the appropriate parameters. For roundtrip where both legs are needed, use a single roundtrip search. For single missing legs, use a one-way search.
 4. **Poll results**: poll `get_search_results` up to 5 times with 1-second intervals until departures appear.
@@ -493,7 +492,7 @@ On startup, fetch all travel passes and drop expired ones (`endTravelValidityDat
 
 ### 9.2 Date range validation
 
-If the travel pass has validity dates (`startTravelValidityDateTime`, `endTravelValidityDateTime`), validate that the configured `date_start` and `date_end` fall within the pass validity period, compared as **Swedish calendar dates**: the API's validity instants are midnight UTC (01:00/02:00 Swedish), and `endTravelValidityDateTime` is exclusive — the day after the last valid day, which is what `--list-travelpasses` shows as the end. Exit 1 with both ranges printed if not.
+If the travel pass has validity dates (`startTravelValidityDateTime`, `endTravelValidityDateTime`), validate that the bookable window — first and last selected date from today on that the calendar filter does not skip — falls within the pass validity period (a week ending on a Sunday after a pass that ends on the Friday is fine; a selection with no bookable day skips the check), compared as **Swedish calendar dates**: the API's validity instants are midnight UTC (01:00/02:00 Swedish), and `endTravelValidityDateTime` is exclusive — the day after the last valid day, which is what `--list-travelpasses` shows as the end. Exit 1 with both ranges printed if not.
 
 ### 9.3 IDs
 

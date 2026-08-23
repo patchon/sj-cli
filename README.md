@@ -83,8 +83,7 @@ email = "user@example.com"
 password = "your-password"
 
 [search_parameters]
-date_start = "2026-09-01"            # may already lie in the past: a run starts from today
-date_end = "2026-10-30"              # must not have passed
+dates = "2026-09-01..2026-10-30"     # dates and/or ISO weeks: "W36, W38..40", "2027-W02..03"; past days are skipped
 time_leave = "06:59"                 # preferred outbound departure (HH:MM, Swedish time)
 time_return = "17:22"                # preferred return departure; required when roundtrip = true
 station_from = "Göteborg Central"
@@ -102,7 +101,8 @@ service_types = ["SJ_HIGH", "SJ_IC"] # optional train-type filter; omit or ["ALL
 
 Every field is validated before any network call, and all problems are reported at once. Valid
 stations are the ones in `STATION_MAP` in `src/sj_api_client/client.py` (Stockholm, Linköping, Göteborg, Malmö,
-Uppsala, Lund — "Central"/"C" spellings, case-insensitive).
+Uppsala, Lund — "Central"/"C" spellings, case-insensitive). A config still using the old
+`date_start`/`date_end` keys gets a one-line migration hint.
 
 ## Usage
 
@@ -115,6 +115,7 @@ sj-tool --list-bookings         # active bookings as one card per travel day
 sj-tool --list-travelpasses     # passes with validity, days left and price
 sj-tool --cancel-date 2026-09-16                # cancel that day's journeys on the configured route (other days of a booking are kept)
 sj-tool --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
+sj-tool --cancel-date W43                       # a whole ISO week (same grammar as dates)
 sj-tool --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what would be cancelled, no prompts
 sj-tool --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
 sj-tool --login                 # authenticate, cache the token, exit
@@ -137,7 +138,7 @@ session and deletes both caches — the next login then needs the SMS step again
 
 ## How a day is booked
 
-For each date in `[date_start, date_end]`:
+For each selected date (`dates`) from today on:
 
 1. Skip weekends / red days (configurable) — no API call.
 2. Duplicate check against your existing bookings: skip the day if both legs (or the single leg)
