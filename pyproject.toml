@@ -8,9 +8,17 @@ version = "0.1.0"
 description = "Book SJ (Swedish Railways) commuter trips on a travel pass from the command line."
 readme = "README.md"
 requires-python = ">=3.13"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Patrik Martinsson", email = "patrik@redlin.se" }]
 dependencies = [
     "httpx>=0.28",
 ]
+
+[project.urls]
+Homepage = "https://github.com/patchon/sj-cli"
+Repository = "https://github.com/patchon/sj-cli"
+Issues = "https://github.com/patchon/sj-cli/issues"
 
 [project.scripts]
 sj-cli = "sj_cli.cli:main"

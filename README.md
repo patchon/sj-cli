@@ -59,7 +59,7 @@ a green/red dot + verdict, then labelled facts (account, session horizon, token 
 ## Setup
 
 ```bash
-git clone <this repo> && cd sj-cli
+git clone https://github.com/patchon/sj-cli.git && cd sj-cli
 python3 -m venv venv
 ./venv/bin/pip install -e .                 # runtime only; add `--group dev` for the dev tools
 
@@ -180,5 +180,14 @@ level.
 
 ## Disclaimer
 
-Unofficial. It uses sj.se's internal web API, which can change without notice. Use it for your
-own account and pass only; you are responsible for whatever it books.
+Unofficial, and not affiliated with or endorsed by SJ. It drives sj.se's internal web API — the
+one the web app uses — which can change without notice, and automating it may not be something
+SJ's terms of use allow: running this is your decision and your risk, including any consequence
+for your account. Use it for your own account and pass only; you are responsible for whatever it
+books.
+
+## Licence
+
+[GNU AGPL v3 or later](LICENSE). You may use, study, change and share it; if you distribute a
+modified version — or run one as a network service that other people use — you must release your
+changes under the same licence. It comes with no warranty.

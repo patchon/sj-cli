@@ -72,7 +72,7 @@ src/sj_cli/    the package (standard src layout): one module per concern (table 
 tests/                pytest suite, no network (conftest.py: autouse fixture; fakes.py: FakeClient, builders, base config)
 pyproject.toml        project metadata, dependencies, console script and the ruff/pytest/mypy configuration
 config.toml           gitignored local copy — NOT read by the tool (it reads ~/.config/sj-cli/)
-SPEC.md, README.md, CLAUDE.md
+SPEC.md, README.md, CLAUDE.md, LICENSE (GNU AGPL v3 or later)
 curl-traces/          gitignored raw HAR/curl logs from reverse-engineering (contain tokens; grep, don't commit)
 ```
 
