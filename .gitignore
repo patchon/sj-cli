@@ -18,3 +18,4 @@ venv/
 .claude/
 config.toml
 curl-traces/
+*.log
