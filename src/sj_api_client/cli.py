@@ -101,11 +101,13 @@ def parse_booking_numbers(value: str) -> tuple[list[str], list[str]]:
             r"\d{4}-\d{2}-\d{2}|^\d{4}-W\d{1,2}$|^W\d{1,2}$", token, re.IGNORECASE
         )
         if not token.isalnum() or looks_like_a_date:
-            errors.append(
-                f"'{token}' is not a booking number (letters and digits only, e.g. 3HT2NEIL)"
-            )
             if looks_like_a_date:
+                errors.append(f"'{token}' looks like a date or week, not a booking number")
                 date_like = True
+            else:
+                errors.append(
+                    f"'{token}' is not a booking number (letters and digits only, e.g. 3HT2NEIL)"
+                )
             continue
         if token.upper() not in numbers:
             numbers.append(token.upper())
