@@ -76,6 +76,16 @@ cancelling need `[search_parameters]` (route, dates, times) edited first.
 The config lives **outside** the repo on purpose — it contains your SJ password. `config.toml` in
 the repo root is gitignored; only the template `src/sj_cli/config.example.toml` is tracked.
 
+The install puts an `sj-cli` command inside the venv. Activate the venv once per shell and call it
+by name, or skip activation and use the full path — the two are equivalent:
+
+```bash
+source venv/bin/activate   # leave it again with `deactivate`
+sj-cli --login-status
+
+./venv/bin/sj-cli --login-status   # same thing, no activation needed
+```
+
 ### Configuration
 
 ```toml
