@@ -97,8 +97,8 @@ def parse_booking_numbers(value: str) -> tuple[list[str], list[str]]:
         if not token:
             errors.append("empty entry in the booking number list")
             continue
-        looks_like_a_date = ".." in token or re.search(
-            r"\d{4}-\d{2}-\d{2}|^\d{4}-W\d{1,2}$|^W\d{1,2}$", token, re.IGNORECASE
+        looks_like_a_date = ".." in token or bool(
+            re.search(r"\d{4}-\d{2}-\d{2}|^\d{4}-W\d{1,2}$|^W\d{1,2}$", token, re.IGNORECASE)
         )
         if not token.isalnum() or looks_like_a_date:
             if looks_like_a_date:
@@ -598,7 +598,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     try:
         cfg = cm.load()
         # Route/dates are only needed by the booking-shaped operations, the
-        # date window only by --book (--cancel-date takes its own dates)
+        # dates selection only by --book (--cancel-date takes its own dates)
         cm.verify_cfg(
             cfg, require_search=args.book or args.cancel_date is not None, require_dates=args.book
         )
@@ -696,8 +696,8 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             handle_list_bookings(client, access_token, active_pass)
 
         elif args.cancel_date is not None:
-            # Cancelling needs the route only: the config's date window and
-            # the pass validity say nothing about the dates given here.
+            # Cancelling needs the route only: the config's dates selection
+            # and the pass validity say nothing about the dates given here.
             operation = ("dry run · " if args.dry_run else "") + "cancelling bookings"
             print_header_box([("operation", operation), *pass_rows])
             blank()

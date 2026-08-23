@@ -164,6 +164,21 @@ def test_selection_week_terms_and_range_inheritance():
     ]
 
 
+def test_spaces_around_a_range_are_accepted():
+    assert parse_date_selection("2026-09-16 .. 2026-09-17", today=TODAY) == (
+        [date(2026, 9, 16), date(2026, 9, 17)],
+        [],
+    )
+    assert parse_date_selection("W43 .. 44", today=TODAY) == (
+        [*_week(2026, 43), *_week(2026, 44)],
+        [],
+    )
+    assert parse_date_selection("2026-09-16 .. ", today=TODAY) == (
+        [],
+        ["'2026-09-16 ..' must be a single range start..end"],
+    )
+
+
 def test_bare_week_uses_todays_iso_year():
     # 29 dec 2025 already belongs to ISO week 2026-W01
     assert parse_date_selection("W1", today=date(2025, 12, 29)) == (_week(2026, 1), [])
@@ -179,7 +194,7 @@ def test_selection_errors_are_all_collected():
     dates, errors = parse_date_selection(
         "2026-09-31, foo, W54, 2026-10-19..W43, W43..2026-10-25, W44..43, "
         "2026-01-01..2027-01-01, 2026-W01..2027-W10, ,2026-09-16..2026-09-17..2026-09-18, 46, "
-        "9999-W52, 9999-12-01..9999-12-31, ..2026-09-01",
+        "9999-W52, ..2026-09-01",
         today=TODAY,
     )
     assert dates == []
@@ -196,11 +211,12 @@ def test_selection_errors_are_all_collected():
         "'2026-09-16..2026-09-17..2026-09-18' must be a single range start..end",
         "'46' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)",
         "9999 has no week 52",
-        "range '9999-12-01..9999-12-31' spans more than a year",
         "'..2026-09-01' must be a single range start..end",
     ]
     # a leap day inside a year-long range is still "a year"
     assert parse_date_selection("2028-01-01..2028-12-31", today=TODAY)[1] == []
+    # the calendar's last year has no next year: the span check is skipped, not failed
+    assert parse_date_selection("9999-12-01..9999-12-31", today=TODAY)[1] == []
     # a range end with a year but no W is not a recognised week shape
     assert parse_date_selection("W43..2026-46", today=TODAY)[1] == [
         "'2026-46' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)"

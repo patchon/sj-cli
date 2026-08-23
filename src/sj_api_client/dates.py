@@ -132,12 +132,19 @@ _WEEK_END_SHAPE = re.compile(
 _NOT_A_UNIT = "'{}' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)"
 
 
-def _anniversary(d: date) -> date:
-    """The same calendar date next year (29 Feb → 1 Mar); date.max at the end of the calendar."""
+def _anniversary(d: date) -> date | None:
+    """
+    The same calendar date next year (29 Feb → 1 Mar).
+
+    None in the calendar's last year, where no next year exists: the span
+    check is then skipped rather than reported as longer than a year.
+    """
+    if d.year >= date.max.year:
+        return None
     try:
         return d.replace(year=d.year + 1)
     except ValueError:
-        return date(d.year + 1, 3, 1) if d.year < date.max.year else date.max
+        return date(d.year + 1, 3, 1)
 
 
 def _parse_date(token: str, errors: list[str]) -> date | None:
@@ -168,7 +175,7 @@ def _parse_unit(
     """One unit → (kind, first day, last day); kind is "date" or "week"."""
     if _DATE_SHAPE.fullmatch(token):
         d = _parse_date(token, errors)
-        return ("date", d, d) if d else None
+        return ("date", d, d) if d is not None else None
     m = _WEEK_SHAPE.fullmatch(token)
     if m:
         span = _week_span(int(m.group(1) or year), int(m.group(2)), errors)
@@ -179,7 +186,7 @@ def _parse_unit(
 
 def _parse_range(token: str, errors: list[str], year: int) -> tuple[date, date] | None:
     """A start..end range → (first day, last day), or None with errors appended."""
-    parts = token.split("..")
+    parts = [part.strip() for part in token.split("..")]
     if len(parts) != 2 or not all(parts):
         errors.append(f"'{token}' must be a single range start..end")
         return None
@@ -211,7 +218,8 @@ def _parse_range(token: str, errors: list[str], year: int) -> tuple[date, date] 
     if first > last:
         errors.append(f"range '{token}' must run forwards (start before end)")
         return None
-    if last >= _anniversary(first):  # a calendar year at most, leap day included
+    anniversary = _anniversary(first)  # a calendar year at most, leap day included
+    if anniversary is not None and last >= anniversary:
         errors.append(f"range '{token}' spans more than a year")
         return None
     return first, last
@@ -271,7 +279,7 @@ def selected_dates(params: dict, today: date | None = None) -> list[date]:
     The selection was validated at startup; an error here is a programming
     error and raises SJConfigError rather than booking the wrong days.
     """
-    dates, errors = parse_date_selection(params["dates"], today=today)
+    dates, errors = parse_date_selection(params.get("dates", ""), today=today)
     if errors:
         raise SJConfigError("dates: " + "; ".join(errors), errors=errors)
     return dates
