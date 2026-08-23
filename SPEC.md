@@ -69,7 +69,7 @@ Mode dispatch:
 
 Follow industry-standard OAuth2 token handling:
 
-1. **Load cached token** from `~/.cache/sj-api-client/token.json`.
+1. **Load cached token** from `~/.cache/sj-cli/token.json`.
 2. **Validate access token**: check `expires_on` timestamp with a 5-minute safety buffer. If valid, use it.
 3. **Refresh**: if access token is expired but refresh token exists, call the B2C token endpoint with `grant_type=refresh_token`. On success, cache the new token set and proceed. The refresh POST is retried like a read (replaying it is harmless). A *transient* failure — network error, timeout, 5xx — is reported as `● token refresh failed: …` and the run exits 1 (re-run later; the cache is untouched); only a refresh token that B2C rejects (a 4xx with an error body) falls through to the full login.
 4. **Full login**: if no cached token exists, or refresh fails, perform the interactive B2C login flow. This is the only path that requires user interaction.
@@ -105,7 +105,7 @@ Email and password stored in plaintext in `config.toml`. Acceptable for this use
 
 ### 4.1 File location
 
-`~/.config/sj-api-client/config.toml` (or `$XDG_CONFIG_HOME/sj-api-client/config.toml`)
+`~/.config/sj-cli/config.toml` (or `$XDG_CONFIG_HOME/sj-cli/config.toml`)
 
 **First run**: when the file does not exist, `--login` (and only `--login` — every other operation presupposes a session) run in a terminal offers to create it — `? create it now? [y/n]`, then asks for the SJ email (validated, re-asked) and password (via `getpass`, never echoed, re-asked if empty), writes the documented template (`config.example.toml`) with the credentials filled in (TOML-escaped), chmods it to `0600`, and closes with a `● config created` card pointing at `[search_parameters]`; the run then **continues into the login**. The offer requires both stdin and stdout to be terminals (the prompts go to stdout). Declined: a `● no configuration` card that only points back at `--login` (the wizard already named the path); non-interactive or any other operation: the card names the expected path and points at `--login`; exit 1 in all cases. Ctrl-D at the password prompt counts as an empty answer and is re-asked; a write failure (permissions, a file where the directory should be) shows `● config not created` with the OS error, exit 1. A missing file is reported as missing, an unreadable one as `cannot read config` — `failed to parse` is reserved for real TOML errors.
 
@@ -160,14 +160,14 @@ Report all validation errors at once (don't stop at the first one).
 
 ### 4.4 Token cache
 
-`~/.cache/sj-api-client/token.json` — auto-created on first successful login. Contains `access_token`, `refresh_token`, `expires_on`, etc. SSO cookies for silent re-login are cached next to it in `cookies.json`. Both are deleted by `--logout`.
+`~/.cache/sj-cli/token.json` — auto-created on first successful login. Contains `access_token`, `refresh_token`, `expires_on`, etc. SSO cookies for silent re-login are cached next to it in `cookies.json`. Both are deleted by `--logout`.
 
 ## 5. CLI Interface
 
 ### 5.1 Book mode
 
 ```bash
-sj-tool --book
+sj-cli --book
 ```
 
 Reads config, authenticates, and books tickets for every selected date (`dates`, §4.3). No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only` — a contiguous selection renders as `1 sep – 30 oct 2026`, anything else as `W43, W45..46 (19 oct – 15 nov 2026)`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): green/red ● by outcome, dim summary text.
@@ -213,7 +213,7 @@ The booked legs are rendered from the booking object the API returns (train, car
 ### 5.2 Dry-run mode
 
 ```bash
-sj-tool --book --dry-run
+sj-cli --book --dry-run
 ```
 
 `--dry-run` is a **modifier**, not an operation: it composes with `--book`, `--cancel-date` and `--cancel-booking`, and means nothing real happens. Bare `--dry-run`, or `--dry-run` with any other flag, is a usage error. With `--book` it performs the full search flow for each date but does **not** create bookings (and skips the stale-provisional cleanup). Same run header and day cards as §5.1, with the operation prefixed `dry run · `; each leg line shows the departure that would be booked — time range, duration, train, class, flexibility — or, dimmed in place of the flexibility cell, why it cannot be booked (`no 0-price offer`, `no departure found`). The footer starts with `dry run` and counts bookable / partly bookable / unavailable days.
@@ -247,10 +247,10 @@ sat 19 sep 2026   weekend
 ### 5.3 Cancel mode
 
 ```bash
-sj-tool --cancel-date 2026-01-20              # all bookings on the configured route that day
-sj-tool --cancel-date 2026-01-20,2026-02-03..2026-02-05   # several dates, comma list + ranges
-sj-tool --cancel-date W43                      # a whole ISO week
-sj-tool --cancel-booking ERU0HWB2,8Y41N08J   # by booking number, any case
+sj-cli --cancel-date 2026-01-20              # all bookings on the configured route that day
+sj-cli --cancel-date 2026-01-20,2026-02-03..2026-02-05   # several dates, comma list + ranges
+sj-cli --cancel-date W43                      # a whole ISO week
+sj-cli --cancel-booking ERU0HWB2,8Y41N08J   # by booking number, any case
 ```
 
 For each matching booking: show its day card (same shape as §5.4, no title), then confirm. `y`/`yes` (any case) confirms; anything else aborts. `--cancel-date` cancels only that day's journeys: a booking made on sj.se may hold journeys on other days, which are neither shown nor touched — `1 other journey in booking X on other dates is kept` under the card, the prompt reads `cancel this journey from booking X?`, and the status line `1 of 2 journey(s) cancelled from booking X`.
@@ -279,7 +279,7 @@ If the booking has several future journeys, they are listed as numbered leg line
 ### 5.4 List current bookings
 
 ```bash
-sj-tool --list-bookings
+sj-cli --list-bookings
 ```
 
 Fetches all active bookings within the travel pass validity period and displays them as one card per travel day, legs indented beneath:
@@ -553,6 +553,6 @@ Color-coded by level in terminal.
 
 - Python 3.13+
 - `httpx` — HTTP client (the only runtime dependency)
-- Declared in `pyproject.toml` (PEP 621) together with the `sj-tool` console script and the
+- Declared in `pyproject.toml` (PEP 621) together with the `sj-cli` console script and the
   ruff/pytest/mypy configuration; install with `pip install -e .` (`--group dev` adds the dev tools)
 - `pytest`, `ruff`, `mypy` (dev group only) — unit tests in `tests/`, no network

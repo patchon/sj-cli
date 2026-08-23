@@ -1,7 +1,7 @@
 """SJAPIError turns API error bodies into readable messages (code · message),
 keeping the raw payload and parsed fields as attributes."""
 
-from sj_api_client.errors import SJAPIError, SJAuthError, SJConfigError, SJError
+from sj_cli.errors import SJAPIError, SJAuthError, SJConfigError, SJError
 
 
 def test_b2c_error_dict_is_humanized():
@@ -47,7 +47,7 @@ def test_every_error_shares_the_sjerror_base():
 
 
 def test_api_error_reads_the_sj_envelope_code_and_validation_details():
-    from sj_api_client.errors import SJAPIError
+    from sj_cli.errors import SJAPIError
 
     e = SJAPIError(
         {
@@ -66,7 +66,7 @@ def test_api_error_reads_the_sj_envelope_code_and_validation_details():
 def test_error_text_is_one_line_redacted_and_never_empty():
     import httpx
 
-    from sj_api_client.errors import SJAPIError, error_text
+    from sj_cli.errors import SJAPIError, error_text
 
     req = httpx.Request("GET", "https://www.sj.se/cb?code=SECRET1&state=s")
     resp = httpx.Response(403, request=req)

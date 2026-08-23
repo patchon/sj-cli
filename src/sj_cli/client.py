@@ -12,8 +12,8 @@ from typing import Any
 
 import httpx
 
-from sj_api_client.errors import SJAPIError, SJAuthError, error_text
-from sj_api_client.logger import log_json, log_request, log_response, redact_url
+from sj_cli.errors import SJAPIError, SJAuthError, error_text
+from sj_cli.logger import log_json, log_request, log_response, redact_url
 
 logger = logging.getLogger(__name__)
 

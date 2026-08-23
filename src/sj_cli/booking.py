@@ -5,18 +5,18 @@ import time
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sj_api_client.auth import ensure_valid_token
-from sj_api_client.client import SJClient
-from sj_api_client.config import SERVICE_TYPE_NAMES
-from sj_api_client.dates import (
+from sj_cli.auth import ensure_valid_token
+from sj_cli.client import SJClient
+from sj_cli.config import SERVICE_TYPE_NAMES
+from sj_cli.dates import (
     booking_dates,
     selected_dates,
     skip_reason,
     sweden_now,
     to_sweden,
 )
-from sj_api_client.errors import SJAuthError, error_text
-from sj_api_client.output import (
+from sj_cli.errors import SJAuthError, error_text
+from sj_cli.output import (
     ask,
     blank,
     format_class_name,
@@ -33,7 +33,7 @@ from sj_api_client.output import (
     pwarn,
     spinner,
 )
-from sj_api_client.tokens import TokenManager
+from sj_cli.tokens import TokenManager
 
 logger = logging.getLogger(__name__)
 

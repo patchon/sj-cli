@@ -1,16 +1,17 @@
-# sj-api-client
+# sj-cli
 
 Command-line tool that books SJ (Swedish Railways) commuter trips on a travel pass — e.g. an
-*SJ Årskort* — the way the sj.se app does, but for a whole date range at once. It talks to the same
-API as the web app (reverse-engineered), so it can authenticate, search, pick the right departure,
-find the 0-price pass-holder offer and check out, day after day, skipping weekends and Swedish red
-days and never double-booking a day that is already covered.
+*SJ Årskort* — the way the sj.se app does, but for many days at once: a date range, single days
+or whole ISO weeks. It talks to the same API as the web app (reverse-engineered), so it can
+authenticate, search, pick the right departure, find the 0-price pass-holder offer and check out,
+day after day, skipping weekends and Swedish red days and never double-booking a day that is
+already covered.
 
 Nothing real happens with `--dry-run` present: it previews `--book` and both cancel flags.
 A mode flag is always required — running the tool bare just prints the help.
 
 ```
-$ sj-tool --book
+$ sj-cli --book
 ╭──────────────────────────────────╮
 │  operation    booking tickets    │
 │  account      user@example.com   │
@@ -58,13 +59,13 @@ a green/red dot + verdict, then labelled facts (account, session horizon, token 
 ## Setup
 
 ```bash
-git clone <this repo> && cd sj-api-client
+git clone <this repo> && cd sj-cli
 python3 -m venv venv
 ./venv/bin/pip install -e .                 # runtime only; add `--group dev` for the dev tools
 
-mkdir -p ~/.config/sj-api-client
-cp src/sj_api_client/config.example.toml ~/.config/sj-api-client/config.toml
-$EDITOR ~/.config/sj-api-client/config.toml      # credentials, route, dates, times
+mkdir -p ~/.config/sj-cli
+cp src/sj_cli/config.example.toml ~/.config/sj-cli/config.toml
+$EDITOR ~/.config/sj-cli/config.toml      # credentials, route, dates, times
 ```
 
 Or skip the copy: run `--login` in a terminal and the tool offers to create the config for you —
@@ -73,7 +74,7 @@ them filled in (file mode 0600), and logs you in right away. Only booking and da
 cancelling need `[search_parameters]` (route, dates, times) edited first.
 
 The config lives **outside** the repo on purpose — it contains your SJ password. `config.toml` in
-the repo root is gitignored; only the template `src/sj_api_client/config.example.toml` is tracked.
+the repo root is gitignored; only the template `src/sj_cli/config.example.toml` is tracked.
 
 ### Configuration
 
@@ -100,7 +101,7 @@ service_types = ["SJ_HIGH", "SJ_IC"] # optional train-type filter; omit or ["ALL
 ```
 
 Every field is validated before any network call, and all problems are reported at once. Valid
-stations are the ones in `STATION_MAP` in `src/sj_api_client/client.py` (Stockholm, Linköping, Göteborg, Malmö,
+stations are the ones in `STATION_MAP` in `src/sj_cli/client.py` (Stockholm, Linköping, Göteborg, Malmö,
 Uppsala, Lund — "Central"/"C" spellings, case-insensitive). A config still using the old
 `date_start`/`date_end` keys gets a one-line migration hint.
 
@@ -109,21 +110,21 @@ Uppsala, Lund — "Central"/"C" spellings, case-insensitive). A config still usi
 ```bash
 source venv/bin/activate
 
-sj-tool --book --dry-run        # preview: show what would be booked, without booking
-sj-tool --book                  # book for real
-sj-tool --list-bookings         # active bookings as one card per travel day
-sj-tool --list-travelpasses     # passes with validity, days left and price
-sj-tool --cancel-date 2026-09-16                # cancel that day's journeys on the configured route (other days of a booking are kept)
-sj-tool --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
-sj-tool --cancel-date W43                       # a whole ISO week (same grammar as dates)
-sj-tool --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what would be cancelled, no prompts
-sj-tool --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
-sj-tool --login                 # authenticate, cache the token, exit
-sj-tool --logout                # end the sj.se session, delete cached token + cookies
-sj-tool --login-status          # exit 0 if logged in — valid or refreshable token (scripting)
+sj-cli --book --dry-run        # preview: show what would be booked, without booking
+sj-cli --book                  # book for real
+sj-cli --list-bookings         # active bookings as one card per travel day
+sj-cli --list-travelpasses     # passes with validity, days left and price
+sj-cli --cancel-date 2026-09-16                # cancel that day's journeys on the configured route (other days of a booking are kept)
+sj-cli --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
+sj-cli --cancel-date W43                       # a whole ISO week (same grammar as dates)
+sj-cli --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what would be cancelled, no prompts
+sj-cli --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
+sj-cli --login                 # authenticate, cache the token, exit
+sj-cli --logout                # end the sj.se session, delete cached token + cookies
+sj-cli --login-status          # exit 0 if logged in — valid or refreshable token (scripting)
 
-LOG_LEVEL=DEBUG sj-tool --book --dry-run   # diagnostics on stderr (TRACE adds httpx wire logs)
-NO_COLOR=1 sj-tool --book --dry-run        # plain output (also automatic when piped)
+LOG_LEVEL=DEBUG sj-cli --book --dry-run   # diagnostics on stderr (TRACE adds httpx wire logs)
+NO_COLOR=1 sj-cli --book --dry-run        # plain output (also automatic when piped)
 ```
 
 Flags are mutually exclusive and one mode flag is required (a bare run prints the help and
@@ -132,7 +133,7 @@ exits 1). Exit code 0 on success, 1 on any failure, 130 on Ctrl-C.
 ### First login
 
 The first run performs the sj.se B2C login and asks for an SMS code (2-minute timeout). Tokens
-are cached in `~/.cache/sj-api-client/token.json` and refreshed automatically; SSO cookies are
+are cached in `~/.cache/sj-cli/token.json` and refreshed automatically; SSO cookies are
 cached next to it so later full logins usually skip the SMS step. `--logout` ends the sj.se
 session and deletes both caches — the next login then needs the SMS step again.
 
@@ -167,10 +168,10 @@ duplicate booking. Timeouts are generous (30 s) because the booking calls themse
 ```
 
 Everything is configured in `pyproject.toml` (ruff selects ALL with documented ignores). The
-editable install puts the `sj-tool` console script on the venv's path; `python -m sj_api_client`
+editable install puts the `sj-cli` console script on the venv's path; `python -m sj_cli`
 is equivalent.
 
-Layout: standard src layout — the package is `src/sj_api_client/`, one module per concern (`cli`
+Layout: standard src layout — the package is `src/sj_cli/`, one module per concern (`cli`
 entry point, `auth`, `client` HTTP only, `booking` business logic, `config`, `tokens`, `logger`,
 `output`, `dates`, `errors`) — see the architecture table in [`CLAUDE.md`](CLAUDE.md).
 `tests/test_booking_flow.py` pins the booking flow's API call sequence and return contract; run it

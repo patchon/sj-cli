@@ -9,11 +9,11 @@ from datetime import time as dt_time
 from pathlib import Path
 from typing import Any
 
-from sj_api_client.client import STATION_MAP
-from sj_api_client.dates import normalise_date_selection, parse_date_selection, sweden_now
-from sj_api_client.errors import SJConfigError
-from sj_api_client.logger import log_json
-from sj_api_client.output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
+from sj_cli.client import STATION_MAP
+from sj_cli.dates import normalise_date_selection, parse_date_selection, sweden_now
+from sj_cli.errors import SJConfigError
+from sj_cli.logger import log_json
+from sj_cli.output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ SERVICE_TYPE_NAMES = {
 
 class CfgManager:
     """
-    Manages the loading and validation of configuration for sj-api-client.
+    Manages the loading and validation of configuration for sj-cli.
 
     Attributes:
         DEFAULT_PATH: The default system path for the configuration file.
@@ -43,9 +43,7 @@ class CfgManager:
     """
 
     DEFAULT_PATH = (
-        Path(os.getenv("XDG_CONFIG_HOME") or Path.home() / ".config")
-        / "sj-api-client"
-        / "config.toml"
+        Path(os.getenv("XDG_CONFIG_HOME") or Path.home() / ".config") / "sj-cli" / "config.toml"
     )
     EXAMPLE_PATH = Path(__file__).parent / "config.example.toml"
 

@@ -11,8 +11,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from sj_api_client.cli import handle_login_status
-from sj_api_client.tokens import TokenManager
+from sj_cli.cli import handle_login_status
+from sj_cli.tokens import TokenManager
 
 
 def _profile(email):
@@ -97,7 +97,7 @@ def test_expired_access_with_valid_refresh_keeps_expiry_time(tmp_path, capsys):
 
 
 def test_cached_email_reads_profile_offline(tmp_path):
-    from sj_api_client.cli import _cached_email
+    from sj_cli.cli import _cached_email
 
     tm = _tm(tmp_path, {"access_token": "a", "profile_info": _profile("user@example.com")})
     assert _cached_email(tm) == "user@example.com"
@@ -138,8 +138,8 @@ def test_no_cache_is_not_logged_in(tmp_path, capsys):
 
 
 def test_login_failed_card_from_api_error(capsys):
-    from sj_api_client.cli import print_login_failed
-    from sj_api_client.errors import SJAPIError, SJAuthError
+    from sj_cli.cli import print_login_failed
+    from sj_cli.errors import SJAPIError, SJAuthError
 
     err = SJAuthError("login failed: AADB2C90054 · Fel uppgifter.")
     err.__cause__ = SJAPIError(
@@ -157,8 +157,8 @@ def test_login_failed_card_from_api_error(capsys):
 
 
 def test_login_failed_card_without_api_cause(capsys):
-    from sj_api_client.cli import print_login_failed
-    from sj_api_client.errors import SJAuthError
+    from sj_cli.cli import print_login_failed
+    from sj_cli.errors import SJAuthError
 
     print_login_failed(SJAuthError("sms code not provided or timed out after 2 minutes"))
     out = capsys.readouterr().out

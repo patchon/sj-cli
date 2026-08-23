@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from sj_api_client.cli import parse_args
+from sj_cli.cli import parse_args
 
 
 def test_no_args_prints_help_and_exits_1(capsys):
@@ -98,7 +98,7 @@ def test_other_modes_still_parse_alone():
 
 
 def test_parse_cancel_dates_single_list_and_ranges():
-    from sj_api_client.cli import parse_cancel_dates
+    from sj_cli.cli import parse_cancel_dates
 
     assert parse_cancel_dates("2026-09-16") == (["2026-09-16"], [])
     # comma list: deduped and sorted
@@ -115,7 +115,7 @@ def test_parse_cancel_dates_single_list_and_ranges():
 
 
 def test_parse_cancel_dates_collects_all_errors_before_anything_runs():
-    from sj_api_client.cli import parse_cancel_dates
+    from sj_cli.cli import parse_cancel_dates
 
     dates, errors = parse_cancel_dates(
         "2026-09-31,2026/09/16,2026-09-20..2026-09-18,,2026-09-16..2026-09-17..2026-09-18"
@@ -129,7 +129,7 @@ def test_parse_cancel_dates_collects_all_errors_before_anything_runs():
 
 
 def test_parse_cancel_dates_refuses_ranges_over_a_year():
-    from sj_api_client.cli import parse_cancel_dates
+    from sj_cli.cli import parse_cancel_dates
 
     dates, errors = parse_cancel_dates("2026-01-01..2027-06-01")
     assert dates == []
@@ -164,7 +164,7 @@ def test_cancel_booking_rejects_dates_with_a_hint(capsys):
 
 
 def test_booking_numbers_non_alnum_gets_no_date_hint():
-    from sj_api_client.cli import parse_booking_numbers
+    from sj_cli.cli import parse_booking_numbers
 
     numbers, errors = parse_booking_numbers("AB-12")
     assert numbers == []
@@ -173,7 +173,7 @@ def test_booking_numbers_non_alnum_gets_no_date_hint():
 
 
 def test_booking_numbers_week_terms_get_the_cancel_date_hint():
-    from sj_api_client.cli import parse_booking_numbers
+    from sj_cli.cli import parse_booking_numbers
 
     for value in ("W43", "2027-W02", "w43,ABCD1234"):
         numbers, errors = parse_booking_numbers(value)
@@ -184,7 +184,7 @@ def test_booking_numbers_week_terms_get_the_cancel_date_hint():
 
 
 def test_booking_numbers_mixed_week_and_non_alnum():
-    from sj_api_client.cli import parse_booking_numbers
+    from sj_cli.cli import parse_booking_numbers
 
     numbers, errors = parse_booking_numbers("W43,AB-12")
     assert numbers == []
@@ -212,8 +212,8 @@ class _NoCallClient:
 
 def _missing_config(tmp_path, monkeypatch, *, tty, create):
     """Point the cli at a missing config under tmp_path; `create` replaces the wizard."""
-    from sj_api_client import cli
-    from sj_api_client.config import CfgManager
+    from sj_cli import cli
+    from sj_cli.config import CfgManager
 
     monkeypatch.setattr(cli, "CfgManager", lambda: CfgManager(tmp_path / "config.toml"))
     monkeypatch.setattr(CfgManager, "create_interactive", create)
@@ -259,7 +259,7 @@ def test_missing_config_login_declined_hints_without_repeating_the_path(
 
 
 def test_missing_config_login_created_continues_into_the_login(tmp_path, monkeypatch, capsys):
-    from sj_api_client.errors import SJAuthError
+    from sj_cli.errors import SJAuthError
 
     def create(self):
         self.path.write_text('[auth]\nemail = "a@b.se"\npassword = "x"\n')
@@ -280,7 +280,7 @@ def test_missing_config_login_created_continues_into_the_login(tmp_path, monkeyp
 
 
 def test_missing_config_write_failure_shows_its_own_card(tmp_path, monkeypatch, capsys):
-    from sj_api_client.errors import SJConfigError
+    from sj_cli.errors import SJConfigError
 
     def create(_self):
         raise SJConfigError("could not write config at /x: Permission denied")
@@ -311,9 +311,9 @@ class _StubClient:
 
 
 def _logged_in_with_config(tmp_path, monkeypatch, **overrides):
-    from sj_api_client import cli
-    from sj_api_client.config import CfgManager
-    from sj_api_client.tokens import TokenManager
+    from sj_cli import cli
+    from sj_cli.config import CfgManager
+    from sj_cli.tokens import TokenManager
     from tests.fakes import future_cfg
 
     params = future_cfg(**overrides)["search_parameters"]
@@ -386,7 +386,7 @@ def test_empty_cancel_values_are_reported_as_invalid_not_as_no_operation(capsys)
 
 
 def test_cancel_date_range_guard_is_one_year_inclusive():
-    from sj_api_client.cli import parse_cancel_dates
+    from sj_cli.cli import parse_cancel_dates
 
     assert parse_cancel_dates("2026-01-01..2026-12-31")[1] == []
     assert parse_cancel_dates("2028-01-01..2028-12-31")[1] == []  # leap year: 366 days
@@ -396,8 +396,8 @@ def test_cancel_date_range_guard_is_one_year_inclusive():
 def test_parse_cancel_dates_accepts_week_terms():
     from datetime import date, timedelta
 
-    from sj_api_client.cli import parse_cancel_dates
-    from sj_api_client.dates import sweden_now
+    from sj_cli.cli import parse_cancel_dates
+    from sj_cli.dates import sweden_now
 
     monday = date(2026, 10, 19)  # 2026-W43
     week = [(monday + timedelta(days=i)).isoformat() for i in range(7)]
@@ -434,7 +434,7 @@ def _pass(name, start, end):
 def test_pass_covering_the_booking_window_is_picked_without_a_prompt(monkeypatch):
     from datetime import date
 
-    from sj_api_client.cli import resolve_travel_pass
+    from sj_cli.cli import resolve_travel_pass
 
     monkeypatch.setattr("builtins.input", lambda *_a: pytest.fail("prompted"))
     a = _pass("A", "2026-01-01", "2027-01-01")
@@ -445,7 +445,7 @@ def test_pass_covering_the_booking_window_is_picked_without_a_prompt(monkeypatch
 
 
 def test_pass_prompt_needs_a_terminal_and_stops_on_eof(monkeypatch, capsys):
-    from sj_api_client import cli
+    from sj_cli import cli
 
     a, b = _pass("A", "2026-01-01", "2027-01-01"), _pass("B", "2026-06-01", "2027-06-01")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
@@ -470,7 +470,7 @@ def test_pass_prompt_needs_a_terminal_and_stops_on_eof(monkeypatch, capsys):
 
 
 def test_no_valid_pass_closes_with_a_status_line(capsys):
-    from sj_api_client.cli import resolve_travel_pass
+    from sj_cli.cli import resolve_travel_pass
 
     with pytest.raises(SystemExit):
         resolve_travel_pass([_pass("Old", "2020-01-01", "2021-01-01")])
@@ -504,8 +504,8 @@ def test_list_travelpasses_shows_expired_passes_instead_of_failing(tmp_path, mon
 
 
 def test_receipt_failure_does_not_hide_the_pass_cards(capsys):
-    from sj_api_client.cli import handle_list_travelpasses
-    from sj_api_client.errors import SJAPIError
+    from sj_cli.cli import handle_list_travelpasses
+    from sj_cli.errors import SJAPIError
 
     class NoReceipts:
         def get_receipt_search(self, _booking_id):
@@ -533,7 +533,7 @@ def test_cancel_date_ignores_the_config_dates(tmp_path, monkeypatch):
 def test_pass_validation_uses_the_effective_start(capsys):
     from datetime import date
 
-    from sj_api_client.cli import validate_dates_against_pass
+    from sj_cli.cli import validate_dates_against_pass
     from tests.fakes import base_cfg
 
     tp = _pass("A", "2026-06-01", "2027-01-01")
@@ -550,7 +550,7 @@ def test_pass_validation_uses_the_effective_start(capsys):
 def test_booking_window_counts_only_bookable_days():
     from datetime import date
 
-    from sj_api_client.cli import booking_window, validate_dates_against_pass
+    from sj_cli.cli import booking_window, validate_dates_against_pass
     from tests.fakes import base_cfg
 
     today = date(2026, 8, 1)
@@ -593,7 +593,7 @@ def test_login_verdict_comes_from_the_session_just_established(tmp_path, monkeyp
 
 
 def test_failures_close_with_a_status_line(tmp_path, monkeypatch, capsys):
-    from sj_api_client.errors import SJAuthError
+    from sj_cli.errors import SJAuthError
 
     cli = _logged_in_with_config(tmp_path, monkeypatch)
 

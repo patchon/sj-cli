@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from sj_api_client.errors import SJAuthError
-from sj_api_client.tokens import TokenManager
+from sj_cli.errors import SJAuthError
+from sj_cli.tokens import TokenManager
 
 
 def test_load_missing_returns_none(tmp_path):
@@ -106,7 +106,7 @@ def test_save_tightens_the_mode_of_an_existing_cache(tmp_path):
 def test_failed_write_keeps_the_previous_cache_and_the_in_memory_token(tmp_path, monkeypatch):
     import json as json_mod
 
-    from sj_api_client import tokens as m
+    from sj_cli import tokens as m
 
     tm = TokenManager(tmp_path / "token.json")
     tm.save({"access_token": "old", "expires_on": 1})
@@ -154,7 +154,7 @@ def test_concurrent_saves_never_share_a_temp_file(tmp_path):
 
 
 def test_save_records_a_write_failure(tmp_path, monkeypatch):
-    from sj_api_client import tokens as m
+    from sj_cli import tokens as m
 
     tm = TokenManager(tmp_path / "token.json")
     assert tm.save_error is None

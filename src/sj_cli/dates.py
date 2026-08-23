@@ -19,7 +19,7 @@ from functools import cache
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from sj_api_client.errors import SJConfigError
+from sj_cli.errors import SJConfigError
 
 SWEDEN = ZoneInfo("Europe/Stockholm")
 

@@ -4,8 +4,8 @@ or a result card is printed (SPEC §10.2)."""
 
 import time
 
-from sj_api_client.auth import ensure_authenticated, ensure_valid_token
-from sj_api_client.tokens import TokenManager
+from sj_cli.auth import ensure_authenticated, ensure_valid_token
+from sj_cli.tokens import TokenManager
 
 
 class FakeRefreshClient:
@@ -92,7 +92,7 @@ class FakeLoginClient:
 
 
 def test_full_login_trail_is_human(monkeypatch, capsys):
-    from sj_api_client import auth
+    from sj_cli import auth
 
     monkeypatch.setattr(auth, "read_sms_code", lambda: "534734")
     fc = FakeLoginClient()
@@ -115,7 +115,7 @@ def test_sms_prompt_inline_with_marker(monkeypatch, capsys):
     import io
     import sys as _sys
 
-    from sj_api_client import auth
+    from sj_cli import auth
 
     monkeypatch.setattr(_sys, "stdin", io.StringIO("534734\n"))
     assert auth.read_sms_code(timeout_seconds=120) == "534734"
@@ -126,7 +126,7 @@ def test_sms_prompt_inline_with_marker(monkeypatch, capsys):
 def test_sms_prompt_timeout_closes_line(monkeypatch, capsys):
     import sys as _sys
 
-    from sj_api_client import auth
+    from sj_cli import auth
 
     monkeypatch.setattr(_sys.stdin, "isatty", lambda: True)  # the timeout guards a human
     monkeypatch.setattr(auth.select, "select", lambda *_: ([], [], []))
@@ -138,7 +138,7 @@ def test_sms_prompt_reasks_on_an_empty_line(monkeypatch, capsys):
     import io
     import sys as _sys
 
-    from sj_api_client import auth
+    from sj_cli import auth
 
     # an Enter queued while the spinners ran must not count as "timed out"
     monkeypatch.setattr(_sys, "stdin", io.StringIO("\n123456\n"))
@@ -152,7 +152,7 @@ def test_sms_prompt_on_a_pipe_reads_every_line(monkeypatch):
 
     import pytest
 
-    from sj_api_client import auth
+    from sj_cli import auth
 
     # two codes piped in: the second sits in Python's read-ahead buffer where
     # select() cannot see it — a pipe is read directly, only a tty is timed
@@ -167,8 +167,8 @@ def test_login_failure_text_is_one_line(monkeypatch):
     import httpx
     import pytest
 
-    from sj_api_client import auth
-    from sj_api_client.errors import SJAuthError
+    from sj_cli import auth
+    from sj_cli.errors import SJAuthError
 
     class Blocked(FakeLoginClient):
         def initiate_login(self, email, password):
@@ -198,7 +198,7 @@ def test_valid_cached_token_reports_cached(tmp_path, capsys):
 
 
 def test_full_login_reports_full(monkeypatch, tmp_path):
-    from sj_api_client import auth
+    from sj_cli import auth
 
     monkeypatch.setattr(auth, "read_sms_code", lambda: "534734")
     tm = TokenManager(tmp_path / "token.json")  # empty cache → full login
@@ -208,8 +208,8 @@ def test_full_login_reports_full(monkeypatch, tmp_path):
 
 
 def test_wrong_sms_code_retries_then_succeeds(monkeypatch, capsys):
-    from sj_api_client import auth
-    from sj_api_client.errors import SJAPIError
+    from sj_cli import auth
+    from sj_cli.errors import SJAPIError
 
     class RejectFirstClient(FakeLoginClient):
         def sms_verify(self, code):
@@ -232,8 +232,8 @@ def test_wrong_sms_code_retries_then_succeeds(monkeypatch, capsys):
 def test_wrong_sms_code_exhausts_attempts(monkeypatch):
     import pytest
 
-    from sj_api_client import auth
-    from sj_api_client.errors import SJAPIError, SJAuthError
+    from sj_cli import auth
+    from sj_cli.errors import SJAPIError, SJAuthError
 
     class WrongCodeClient(FakeLoginClient):
         def sms_verify(self, code):
@@ -250,8 +250,8 @@ def test_wrong_sms_code_exhausts_attempts(monkeypatch):
 def test_refresh_errors_propagate_instead_of_forcing_an_sms_login(tmp_path, monkeypatch, capsys):
     import pytest
 
-    from sj_api_client import auth
-    from sj_api_client.errors import SJAuthError
+    from sj_cli import auth
+    from sj_cli.errors import SJAuthError
 
     now = int(time.time())
     tm = TokenManager(tmp_path / "token.json")

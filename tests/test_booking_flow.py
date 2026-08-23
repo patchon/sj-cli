@@ -7,7 +7,7 @@ and the user-facing messages, so the flow can be refactored safely.
 
 from datetime import datetime
 
-from sj_api_client.booking import (
+from sj_cli.booking import (
     day_route,
     handle_booking_process,
     plan_day,
@@ -515,7 +515,7 @@ def test_non_contiguous_selection_walks_only_the_selected_days(capsys):
 
 
 def test_render_failure_after_checkout_does_not_lose_the_booking(monkeypatch, capsys):
-    from sj_api_client import booking as m
+    from sj_cli import booking as m
 
     def explode(*_a, **_k):
         raise TypeError("'NoneType' object has no attribute 'get'")
@@ -529,7 +529,7 @@ def test_render_failure_after_checkout_does_not_lose_the_booking(monkeypatch, ca
 
 
 def test_midrun_refresh_failure_stops_the_run_with_a_summary(capsys):
-    from sj_api_client.errors import SJAuthError
+    from sj_cli.errors import SJAuthError
 
     class ExpiredTokenManager(FakeTokenManager):
         def is_valid(self):

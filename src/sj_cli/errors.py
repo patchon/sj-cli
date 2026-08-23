@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from sj_api_client.logger import redact_url
+from sj_cli.logger import redact_url
 
 
 class SJError(Exception):

@@ -4,9 +4,9 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from sj_api_client.booking import _segment_to_display_row, booking_date_range
-from sj_api_client.cli import _is_expired, validate_dates_against_pass
-from sj_api_client.dates import (
+from sj_cli.booking import _segment_to_display_row, booking_date_range
+from sj_cli.cli import _is_expired, validate_dates_against_pass
+from sj_cli.dates import (
     SWEDEN,
     booking_dates,
     normalise_date_selection,
@@ -16,8 +16,8 @@ from sj_api_client.dates import (
     sweden_now,
     to_sweden,
 )
-from sj_api_client.errors import SJConfigError
-from sj_api_client.output import _days_remaining, _format_tp_date
+from sj_cli.errors import SJConfigError
+from sj_cli.output import _days_remaining, _format_tp_date
 from tests.fakes import base_cfg
 
 

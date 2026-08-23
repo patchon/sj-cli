@@ -1,7 +1,7 @@
 import pytest
 
-from sj_api_client.config import SERVICE_TYPE_NAMES, CfgManager
-from sj_api_client.errors import SJConfigError
+from sj_cli.config import SERVICE_TYPE_NAMES, CfgManager
+from sj_cli.errors import SJConfigError
 from tests.fakes import base_cfg, future_cfg
 
 
@@ -146,7 +146,7 @@ def test_load_missing_file_says_so_not_parse_error(tmp_path):
 
 
 def test_create_interactive_writes_template_with_credentials(tmp_path, monkeypatch, capsys):
-    from sj_api_client import config as m
+    from sj_cli import config as m
 
     answers = iter(["y", "not-an-email", "user@example.com"])
     monkeypatch.setattr(m, "ask", lambda _t: next(answers))
@@ -167,7 +167,7 @@ def test_create_interactive_writes_template_with_credentials(tmp_path, monkeypat
 
 
 def test_create_interactive_declined_leaves_nothing(tmp_path, monkeypatch):
-    from sj_api_client import config as m
+    from sj_cli import config as m
 
     monkeypatch.setattr(m, "ask", lambda _t: "n")
     cm = CfgManager(tmp_path / "config.toml")
@@ -178,7 +178,7 @@ def test_create_interactive_declined_leaves_nothing(tmp_path, monkeypatch):
 @pytest.mark.parametrize("secret", ["p\\ass", "x\\ny", "back\\\\slash", 'q"uo\\te', "tab\\there"])
 def test_create_interactive_round_trips_backslashes_and_quotes(tmp_path, monkeypatch, secret):
     # re.sub with a string replacement would re-process the escaped backslashes
-    from sj_api_client import config as m
+    from sj_cli import config as m
 
     monkeypatch.setattr(m, "ask", lambda _t: "y" if "create" in _t else "user@example.com")
     monkeypatch.setattr(m.getpass, "getpass", lambda _p="": secret)
@@ -188,7 +188,7 @@ def test_create_interactive_round_trips_backslashes_and_quotes(tmp_path, monkeyp
 
 
 def test_create_interactive_ctrl_d_on_password_reasks(tmp_path, monkeypatch, capsys):
-    from sj_api_client import config as m
+    from sj_cli import config as m
 
     monkeypatch.setattr(m, "ask", lambda _t: "y" if "create" in _t else "user@example.com")
     attempts = iter([EOFError(), "pw"])
@@ -207,7 +207,7 @@ def test_create_interactive_ctrl_d_on_password_reasks(tmp_path, monkeypatch, cap
 
 
 def test_create_interactive_write_failure_is_a_config_error(tmp_path, monkeypatch, capsys):
-    from sj_api_client import config as m
+    from sj_cli import config as m
 
     monkeypatch.setattr(m, "ask", lambda _t: "y" if "create" in _t else "user@example.com")
     monkeypatch.setattr(m.getpass, "getpass", lambda _p="": "pw")

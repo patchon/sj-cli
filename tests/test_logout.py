@@ -5,9 +5,9 @@ card — the header box is printed by the cli before handle_logout runs."""
 
 import pytest
 
-from sj_api_client.auth import handle_logout
-from sj_api_client.errors import SJAPIError, SJAuthError
-from sj_api_client.tokens import TokenManager
+from sj_cli.auth import handle_logout
+from sj_cli.errors import SJAPIError, SJAuthError
+from sj_cli.tokens import TokenManager
 
 
 class FakeAuthClient:

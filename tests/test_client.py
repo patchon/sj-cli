@@ -3,8 +3,8 @@ import time
 import httpx
 import pytest
 
-from sj_api_client.client import STATION_MAP, RetryTransport, SJClient, parse_json_response
-from sj_api_client.errors import SJAPIError
+from sj_cli.client import STATION_MAP, RetryTransport, SJClient, parse_json_response
+from sj_cli.errors import SJAPIError
 
 
 class ScriptedTransport(httpx.BaseTransport):
@@ -169,7 +169,7 @@ def _resp(status, body=b"", content_type="application/json"):
 
 
 def test_raise_for_failure_accepts_empty_and_html_success_bodies():
-    from sj_api_client.client import _raise_for_failure
+    from sj_cli.client import _raise_for_failure
 
     _raise_for_failure(_resp(204))
     _raise_for_failure(_resp(200, b"<html>ok</html>", "text/html"))
@@ -177,7 +177,7 @@ def test_raise_for_failure_accepts_empty_and_html_success_bodies():
 
 
 def test_raise_for_failure_surfaces_json_errors_even_with_http_200():
-    from sj_api_client.client import _raise_for_failure
+    from sj_cli.client import _raise_for_failure
 
     with pytest.raises(SJAPIError, match="AADB2C90077 · stale"):
         _raise_for_failure(
@@ -315,7 +315,7 @@ def test_retry_transport_composes_with_a_real_client_stack():
 def test_retry_warnings_do_not_log_auth_codes(caplog):
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="sj_api_client.client"):
+    with caplog.at_level(logging.WARNING, logger="sj_cli.client"):
         inner = ScriptedTransport([503, 200])
         client = httpx.Client(transport=RetryTransport(inner))
         client.get("https://example.test/cb?code=SECRET1&state=s")
@@ -397,7 +397,7 @@ def test_parse_json_response_accepts_a_list_body():
 
 
 def test_refresh_token_distinguishes_rejection_from_transient_failure():
-    from sj_api_client.errors import SJAuthError
+    from sj_cli.errors import SJAuthError
 
     outcomes = iter(
         [
