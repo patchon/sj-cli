@@ -32,6 +32,7 @@ sj_api_client = ["config.example.toml"]
 
 [tool.ruff]
 line-length = 100
+extend-exclude = ["docs"]  # design specs/plans: their code fences are illustrative
 
 [tool.ruff.lint]
 select = ["ALL"]
