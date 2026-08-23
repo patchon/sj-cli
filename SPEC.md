@@ -179,15 +179,15 @@ Reads config, authenticates, and books tickets for every date in the configured 
 │  operation    booking tickets    │
 │  account      user@example.com   │
 │  travelpass   SJ Årskort Silver  │
-│  holder       John Doe  │
+│  holder       John Doe           │
 ╰──────────────────────────────────╯
 
-  route     Linköping Central ⇄ Stockholm Central
+  route     Göteborg Central ⇄ Stockholm Central
   days      1 sep – 30 oct 2026 · weekdays only
   times     out 06:59 · back 17:22
   ticket    2 class calm · FULLFLEX · SJ High-speed train
 
-tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
+tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
   ✓ searching outbound at 06:59
   ✓ checking offers for outbound at 06:59
   ✓ creating booking with outbound at 06:59
@@ -195,14 +195,14 @@ tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
   ✓ checking offers for return at 17:22
   ✓ adding return leg at 17:22
   ✓ checking out booking ERU0HWB2
-  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
-  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
 
 wed 16 sep 2026   tickets already booked
 
 sat 19 sep 2026   weekend
 
-thu 24 sep 2026   Linköping Central ⇄ Stockholm Central
+thu 24 sep 2026   Göteborg Central ⇄ Stockholm Central
   ✓ searching outbound at 06:59
   no departure found for outbound
   nothing booked
@@ -225,21 +225,21 @@ sj-tool --book --dry-run
 │  operation    dry run · booking tickets  │
 │  account      user@example.com           │
 │  travelpass   SJ Årskort Silver          │
-│  holder       John Doe          │
+│  holder       John Doe                   │
 ╰──────────────────────────────────────────╯
 
-  route     Linköping Central ⇄ Stockholm Central
+  route     Göteborg Central ⇄ Stockholm Central
   days      18 – 21 sep 2026 · weekdays only
   times     out 06:59 · back 17:22
   ticket    2 class calm · FULLFLEX · SJ High-speed train
 
-fri 18 sep 2026   Linköping Central ⇄ Stockholm Central
+fri 18 sep 2026   Göteborg Central ⇄ Stockholm Central
   ✓ searching outbound at 06:59
   ✓ checking offers for outbound at 06:59
   ✓ searching return at 17:22
   ✓ checking offers for return at 17:22
-  → 04:01 – 08:38   4h 37m   X 2000 520   2 class calm   FULLFLEX
-  ← 17:22 – 21:53   4h 31m   X 2000 543   2 class calm   no 0-price offer
+  → 06:59 – 10:04   3h 05m   X 2000 520   2 class calm   FULLFLEX
+  ← 17:22 – 20:28   3h 06m   X 2000 543   2 class calm   no 0-price offer
 
 sat 19 sep 2026   weekend
 
@@ -261,13 +261,13 @@ For each matching booking: show its day card (same shape as §5.4, no title), th
 │  operation    cancelling bookings  │
 │  account      user@example.com     │
 │  travelpass   SJ Årskort Silver    │
-│  holder       John Doe    │
+│  holder       John Doe             │
 ╰────────────────────────────────────╯
 
 ✓ searching for booking ERU0HWB2
 
-tue 15 sep 2026   Linköping Central → Stockholm Central
-  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
+tue 15 sep 2026   Göteborg Central → Stockholm Central
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
 
 ? cancel booking ERU0HWB2? [y/n]: y
 ✓ cancelling booking ERU0HWB2
@@ -286,17 +286,17 @@ sj-tool --list-bookings
 Fetches all active bookings within the travel pass validity period and displays them as one card per travel day, legs indented beneath:
 
 ```
-tue 18 aug 2026   Linköping Central ⇄ Stockholm Central   past
-  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 34   2 klass Lugn   ZR8C6RT1
-  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 22   2 klass Lugn   ZR8C6RT1
+tue 18 aug 2026   Göteborg Central ⇄ Stockholm Central   past
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 klass Lugn   ZR8C6RT1
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 22   2 klass Lugn   ZR8C6RT1
 
-wed 19 aug 2026   Linköping Central ⇄ Stockholm Central
-  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 30   2 klass Lugn   TBRS43MG
-  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 55   2 klass Lugn   TBRS43MG
+wed 19 aug 2026   Göteborg Central ⇄ Stockholm Central
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 30   2 klass Lugn   TBRS43MG
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 55   2 klass Lugn   TBRS43MG
 
-mon 31 aug 2026   Linköping Central ⇄ Stockholm Central
-  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 7 seat 32   2 klass        3RK7YJU4
-  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 21   2 klass Lugn   K883DH2T
+mon 31 aug 2026   Göteborg Central ⇄ Stockholm Central
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 7 seat 32   2 klass        3RK7YJU4
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 21   2 klass Lugn   K883DH2T
 
 ● 3 day(s) · 4 booking(s) · 2 in the past
 ```
@@ -515,7 +515,7 @@ The search response may also return a `passengerListId` which takes precedence o
 Everything the user sees goes through `output.py` and prints regardless of log level:
 
 - `pinfo()` plain message, `pdim()` dimmed context, `spinner()` progress with a dim `✓`/`✗` trail line (or none with `trail=False`), `print_day_header()` / `print_day_note()` / `print_leg_lines()` for cards, `indented()` to nest everything printed inside a block under a day header.
-- **Casing convention**: prose is lowercase (`no departure found for outbound`, `✓ checking offers…`), identifiers keep their case — booking numbers upper-case (`ERU0HWB2`), station names as SJ writes them (`Linköping Central`), train names as given. Operation values (`booking tickets`, `listing bookings`) are lowercase; the header box's travelpass/holder values keep their real casing. Nothing is lowercased automatically any more; `pinfo` prints what it is given.
+- **Casing convention**: prose is lowercase (`no departure found for outbound`, `✓ checking offers…`), identifiers keep their case — booking numbers upper-case (`ERU0HWB2`), station names as SJ writes them (`Göteborg Central`), train names as given. Operation values (`booking tickets`, `listing bookings`) are lowercase; the header box's travelpass/holder values keep their real casing. Nothing is lowercased automatically any more; `pinfo` prints what it is given.
 - Two output families share one vocabulary. **Pass-scoped modes** (book, dry-run, cancel, list-bookings, list-travelpasses): open with the header box (`print_header_box`, rounded dim borders): `operation` (bold: `booking tickets` / `dry run · booking tickets` / `cancelling bookings` / `listing bookings` / `listing travel passes`), `account` (the configured login email — always the second row, app-wide), `travelpass`, `holder` (account+owner only for travel passes — the passes are the content). Book/dry-run follow with the `describe_run` facts block (`route`/`days`/`times`/`ticket`, card grammar), then dim progress trail (routine fetches are silent: spinner only), cards, and a closing ● status line (`pstatus`: green done / red failed-or-aborted, dim text — cancel outcomes like `● booking X cancelled` / `● cancellation aborted` use the same line). **Auth modes** (login, logout, login-status): session-scoped and offline-capable, so no pass header — they open with a session-scoped header box instead (`operation` + `account`: config email for `--login`, cached profile_info email for `--logout`/`--login-status`), then any trail steps, then the status card (`print_status_card`: green/red dot + bold verdict, blank line, dim 7-char-padded labels with plain values, §5.6; `--login` ends by rendering the same card `--login-status` shows); travel passes render pass cards in the same fact grammar. No emoji anywhere in the output. Colour/bold/dim only on a TTY without `NO_COLOR`. Every printed line starts with a one-space left margin (`_MARGIN` in `output`) so output sits off the terminal edge; blank lines stay empty.
 - Prompts accept `y`/`yes` for confirmation, any case. Every input prompt is inline (answer typed on the same line) and marked with a cyan `?` — the SMS prompt via `prompt()`, all interactive choices/confirmations via `ask()` (both in `output`). A `?` question that asks about a block above it (a card or numbered list) is separated from that block by a blank line; a prompt that is itself a trail step (the SMS code) stays attached to its trail. Trail lines use human step names (`✓ performing login`, `✓ sending sms code`, `✓ completing login` — not OAuth plumbing terms) with the mark coloured — green `✓` on success, red `✗` on failure — and the step text dim. Glyph colours form one quartet: cyan `?` input needed, green `✓` step succeeded, red `✗` step failed, yellow `!` deviation worth noticing (`pwarn`: class fallbacks, time deviations, alternative-departure attempts, rejected SMS codes, checkout failures, missing departures) — plus the green/red `●` on verdict cards and on every operation's closing status line (`pstatus`). Marks are coloured, message text stays dim. A blank line separates a login trail from the card or title that follows.
 

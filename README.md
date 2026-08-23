@@ -18,12 +18,12 @@ $ sj-tool --book
 │  holder       First Last         │
 ╰──────────────────────────────────╯
 
-  route     Linköping Central ⇄ Stockholm Central
+  route     Göteborg Central ⇄ Stockholm Central
   days      1 sep – 30 oct 2026 · weekdays only
   times     out 06:59 · back 17:22
   ticket    2 class calm · FULLFLEX · SJ High-speed train
 
-tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
+tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
   ✓ searching outbound at 06:59
   ✓ checking offers for outbound at 06:59
   ✓ creating booking with outbound at 06:59
@@ -31,8 +31,8 @@ tue 15 sep 2026   Linköping Central ⇄ Stockholm Central
   ✓ checking offers for return at 17:22
   ✓ adding return leg at 17:22
   ✓ checking out booking ERU0HWB2
-  → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
-  ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
 
 wed 16 sep 2026   tickets already booked
 

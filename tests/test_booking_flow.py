@@ -28,7 +28,7 @@ IN = [
     dep("i-late", D, "18:00", "19:40"),
 ]
 NO_OFFER = offers(calm_price=295, second_price=195)
-LKP, STH = "740000009", "740000001"
+GBG, STH = "740000002", "740000001"
 
 
 def flow(client, cfg=None, existing=(), dry_run=False):
@@ -79,7 +79,7 @@ def test_roundtrip_books_both_legs_in_one_booking():
     }
     assert len(result["booking"]["journeys"]) == 2  # final booking object carries both legs
     assert c.calls == [
-        ("search", "Linköping Central", "Stockholm Central", D, D),
+        ("search", "Göteborg Central", "Stockholm Central", D, D),
         ("results", "OUT"),
         ("offers", "o-best"),
         ("create", "OFF-calm"),
@@ -115,8 +115,8 @@ def test_outbound_unbookable_with_book_partial_books_return_alone(capsys):
     assert result["legs"] == ["return"]
     searches = [x for x in c.calls if x[0] == "search"]
     assert searches == [
-        ("search", "Linköping Central", "Stockholm Central", D, D),
-        ("search", "Stockholm Central", "Linköping Central", D, None),
+        ("search", "Göteborg Central", "Stockholm Central", D, D),
+        ("search", "Stockholm Central", "Göteborg Central", D, None),
     ]
     assert c.calls[-3:] == [("create", "OFF-calm"), ("customer", "UUID-1"), ("checkout", "UUID-1")]
     assert "trying return leg as a separate booking" in capsys.readouterr().out
@@ -191,37 +191,37 @@ def test_plan_day_and_route():
     c = FakeClient()
     p = base_cfg()["search_parameters"]
     assert plan_day(c, p, [], D) == (True, True)
-    assert plan_day(c, p, [existing(LKP, STH)], D) == (False, True)
-    assert plan_day(c, p, [existing(STH, LKP)], D) == (True, False)
-    assert plan_day(c, p, [existing(LKP, STH), existing(STH, LKP)], D) == (False, False)
-    assert plan_day(c, base_cfg(roundtrip=False)["search_parameters"], [existing(STH, LKP)], D) == (
+    assert plan_day(c, p, [existing(GBG, STH)], D) == (False, True)
+    assert plan_day(c, p, [existing(STH, GBG)], D) == (True, False)
+    assert plan_day(c, p, [existing(GBG, STH), existing(STH, GBG)], D) == (False, False)
+    assert plan_day(c, base_cfg(roundtrip=False)["search_parameters"], [existing(STH, GBG)], D) == (
         True,
         False,
     )
-    assert day_route(p, True, True) == "Linköping Central ⇄ Stockholm Central"
-    assert day_route(p, True, False) == "Linköping Central → Stockholm Central"
-    assert day_route(p, False, True) == "Stockholm Central → Linköping Central"
+    assert day_route(p, True, True) == "Göteborg Central ⇄ Stockholm Central"
+    assert day_route(p, True, False) == "Göteborg Central → Stockholm Central"
+    assert day_route(p, False, True) == "Stockholm Central → Göteborg Central"
 
 
 def test_fully_booked_day_is_skipped(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN})
-    assert flow(c, existing=[existing(LKP, STH), existing(STH, LKP)]) is None
+    assert flow(c, existing=[existing(GBG, STH), existing(STH, GBG)]) is None
     assert not [x for x in c.calls if x[0] != "resolve"]
     assert "tickets already booked" in capsys.readouterr().out
 
 
 def test_only_missing_leg_is_searched_one_way(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN})
-    result = flow(c, existing=[existing(LKP, STH)])
+    result = flow(c, existing=[existing(GBG, STH)])
     assert result["legs"] == ["return"]
-    assert c.calls[0] == ("search", "Stockholm Central", "Linköping Central", D, None)
+    assert c.calls[0] == ("search", "Stockholm Central", "Göteborg Central", D, None)
     assert ("create", "OFF-calm") in c.calls
     assert "outbound already booked, searching return only" in capsys.readouterr().out
 
     c = FakeClient({"OUT": OUT, "IN": IN})
-    result = flow(c, existing=[existing(STH, LKP)])
+    result = flow(c, existing=[existing(STH, GBG)])
     assert result["legs"] == ["outbound"]
-    assert c.calls[0] == ("search", "Linköping Central", "Stockholm Central", D, None)
+    assert c.calls[0] == ("search", "Göteborg Central", "Stockholm Central", D, None)
     assert "return already booked, searching outbound only" in capsys.readouterr().out
 
 
@@ -245,7 +245,7 @@ def test_dry_run_collects_both_legs_without_booking():
             "arrival": "11:36",
             "duration": "4h 37m",
             "train": "X 2000 O-BEST",
-            "route": "Linköping Central → Stockholm Central",
+            "route": "Göteborg Central → Stockholm Central",
             "class": "2 class calm",
             "flexibility": "FULLFLEX",
             "has_offer": True,
@@ -255,7 +255,7 @@ def test_dry_run_collects_both_legs_without_booking():
             "arrival": "21:53",
             "duration": "4h 37m",
             "train": "X 2000 I-BEST",
-            "route": "Stockholm Central → Linköping Central",
+            "route": "Stockholm Central → Göteborg Central",
             "class": "2 class calm",
             "flexibility": "FULLFLEX",
             "has_offer": True,
@@ -376,7 +376,7 @@ def test_book_mode_prints_day_cards_notes_and_summary(capsys):
             seg["departureDateTime"] = "2026-09-07T06:59:00+02:00"
         return item
 
-    existing_mon = [on_monday(existing(LKP, STH)), on_monday(existing(STH, LKP))]
+    existing_mon = [on_monday(existing(GBG, STH)), on_monday(existing(STH, GBG))]
     assert run_range(c, cfg, dry_run=False, existing=existing_mon) == {
         "days": 5,
         "booked": 2,
@@ -385,7 +385,7 @@ def test_book_mode_prints_day_cards_notes_and_summary(capsys):
     }
     out = capsys.readouterr().out
     # day card: header, indented progress, indented legs with number
-    assert "fri 04 sep 2026   Linköping Central ⇄ Stockholm Central\n" in out
+    assert "fri 04 sep 2026   Göteborg Central ⇄ Stockholm Central\n" in out
     assert "  ✓ searching outbound at 06:59\n" in out
     assert "  ✓ checking out booking NUM1\n" in out
     assert (
@@ -399,7 +399,7 @@ def test_book_mode_prints_day_cards_notes_and_summary(capsys):
     # one-line days
     assert "sat 05 sep 2026   weekend\n" in out and "sun 06 sep 2026   weekend\n" in out
     assert "mon 07 sep 2026   tickets already booked\n" in out
-    assert "tue 08 sep 2026   Linköping Central ⇄ Stockholm Central\n" in out
+    assert "tue 08 sep 2026   Göteborg Central ⇄ Stockholm Central\n" in out
     # no date/route repetition inside the card, no 'done', summary footer instead
     assert "searching 2026-09-04" not in out and "done" not in out
     assert "\n ● 5 day(s) · 2 booked · 1 already booked · 2 skipped" in out
@@ -410,7 +410,7 @@ def test_book_mode_card_for_failed_day(capsys):
     run_range(c, base_cfg(), dry_run=False)
     out = capsys.readouterr().out
     assert (
-        "tue 01 sep 2026   Linköping Central ⇄ Stockholm Central\n   ✓ searching outbound at 06:59\n"
+        "tue 01 sep 2026   Göteborg Central ⇄ Stockholm Central\n   ✓ searching outbound at 06:59\n"
         in out
     )
     assert "  ! no departure found for outbound\n   nothing booked\n" in out

@@ -1343,7 +1343,7 @@ def describe_run(params: dict) -> list[tuple[str, str]]:
     Run-header facts derived from the config, in the shared card grammar.
 
     Example:
-        route     Linköping Central ⇄ Stockholm Central
+        route     Göteborg Central ⇄ Stockholm Central
         days      1 sep - 30 oct 2026 · weekdays only
         times     out 06:59 · back 17:22
         ticket    2 class calm · FULLFLEX · SJ High-speed train

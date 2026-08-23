@@ -14,7 +14,7 @@ def _seg(direction, service_id):
         "arrivalDateTime": "2099-09-24T23:36:00+02:00",
         "duration": "PT1H42M",
         "departureStation": {"name": "Stockholm Central", "uicStationCode": "1"},
-        "arrivalStation": {"name": "Linköping Central", "uicStationCode": "2"},
+        "arrivalStation": {"name": "Göteborg Central", "uicStationCode": "2"},
         "serviceIdentifier": service_id,
         "passengers": [{"id": "p1"}],
     }
@@ -230,7 +230,7 @@ def test_stale_cleanup_spares_other_routes_and_fresh_provisionals(capsys):
 
 
 class RouteCancelClient(RecordingCancelClient):
-    STATIONS = {"Linköping Central": "740000009", "Stockholm Central": "740000001"}
+    STATIONS = {"Göteborg Central": "740000002", "Stockholm Central": "740000001"}
 
     def resolve_station(self, name):
         return self.STATIONS.get(name, name)
@@ -240,10 +240,10 @@ def _two_day_booking():
     item = _bookings()[0]
     out_seg = item["booking"]["journeys"][0]["segments"][0]
     in_seg = item["booking"]["journeys"][1]["segments"][0]
-    out_seg["departureStation"] = {"name": "Linköping Central", "uicStationCode": "740000009"}
+    out_seg["departureStation"] = {"name": "Göteborg Central", "uicStationCode": "740000002"}
     out_seg["arrivalStation"] = {"name": "Stockholm Central", "uicStationCode": "740000001"}
     in_seg["departureStation"] = {"name": "Stockholm Central", "uicStationCode": "740000001"}
-    in_seg["arrivalStation"] = {"name": "Linköping Central", "uicStationCode": "740000009"}
+    in_seg["arrivalStation"] = {"name": "Göteborg Central", "uicStationCode": "740000002"}
     in_seg["departureDateTime"] = "2099-09-25T17:22:00+02:00"
     in_seg["arrivalDateTime"] = "2099-09-25T21:53:00+02:00"
     return [item]
