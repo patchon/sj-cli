@@ -4,6 +4,7 @@ from sj_cli.booking import (
     _dry_run_note,
     _find_departure_by_time,
     _resolve_class_for_departure,
+    _run_outcome,
     _span_label,
     booking_date_range,
     check_comfort_availability,
@@ -320,3 +321,16 @@ def test_select_best_departure_survives_null_legs():
     d = dep("a", D, "06:59", "11:36")
     d["legs"] = None
     assert select_best_departure([d], "06:59", "2 class calm", select_closest=True) is None
+
+
+def test_run_outcome_is_green_only_when_the_run_booked_something():
+    # green: state changed
+    assert _run_outcome({"days": 2, "booked": 2}, dry_run=False) is True
+    assert _run_outcome({"days": 1, "partial": 1}, dry_run=False) is True
+    # dim: ran fine, changed nothing
+    assert _run_outcome({"days": 3, "already": 2, "skipped": 1}, dry_run=False) is None
+    assert _run_outcome({"days": 1, "unavailable": 1}, dry_run=False) is None
+    assert _run_outcome({"days": 2, "booked": 2}, dry_run=True) is None
+    # red: a failure outranks everything, dry run included
+    assert _run_outcome({"days": 2, "booked": 1, "failed": 1}, dry_run=False) is False
+    assert _run_outcome({"days": 1, "error": 1}, dry_run=True) is False

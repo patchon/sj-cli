@@ -24,11 +24,11 @@ _spinner_active = False
 # ANSI SGR codes used for output styling
 BOLD = "1"
 DIM = "2"
-RED = "31"
-GREEN = "32"
-YELLOW = "33"
-MAGENTA = "35"
-CYAN = "36"
+RED = "91"
+GREEN = "92"
+YELLOW = "93"
+MAGENTA = "95"
+CYAN = "96"
 
 
 def color_enabled() -> bool:
@@ -170,14 +170,23 @@ def pdim(msg: str) -> None:
     _emit(style(msg, DIM))
 
 
-def _status_line(ok: bool, msg: str) -> str:
-    """Operation status line: green/red ● by outcome, dim summary text."""
-    mark = style("●", GREEN if ok else RED)
+def _status_line(ok: bool | None, msg: str) -> str:
+    """Operation status line: ● coloured by outcome, dim summary text."""
+    mark = style("●", DIM if ok is None else GREEN if ok else RED)
     return f"{mark} {style(msg, DIM)}"
 
 
-def pstatus(ok: bool, msg: str) -> None:
-    """Print the status line that closes an operation."""
+def pstatus(ok: bool | None, msg: str) -> None:
+    """
+    Print the status line that closes an operation.
+
+    Args:
+        ok: True when the run changed something (green ●), None when it ran
+            fine but changed nothing — a listing, a dry run (dim ●), False on
+            a failure, an abort, or nothing found (red ●).
+        msg: The summary text, printed dim.
+
+    """
     _emit(_status_line(ok, msg))
 
 
@@ -458,7 +467,7 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
         if past_legs:
             footer += f" \u00b7 {past_legs} in the past"
         lines.append("")
-        lines.append(_status_line(True, footer))
+        lines.append(_status_line(None, footer))
     for line in lines:
         _emit(line)
 
@@ -546,7 +555,7 @@ def print_travelpasses(
                     _emit(_fact_line("price", price))
 
     blank()
-    pstatus(True, f"{len(travel_passes)} travel pass(es)")
+    pstatus(None, f"{len(travel_passes)} travel pass(es)")
 
 
 def _format_amount(raw_amount: str | float, currency: str = "SEK") -> str:
