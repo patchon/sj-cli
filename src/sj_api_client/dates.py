@@ -9,11 +9,16 @@ Swedish calendar and date helpers.
   Swedish wall-clock times, config times are too, and "now" comparisons must
   not depend on the machine's timezone. All API timestamp handling goes
   through parse_api_datetime() / to_sweden() so those rules live in one place.
+- The date-selection grammar (parse_date_selection): dates, ISO weeks and
+  start..end ranges, shared by the config's dates key and --cancel-date.
 """
 
+import re
 from datetime import date, datetime, timedelta
 from functools import cache
 from zoneinfo import ZoneInfo
+
+from sj_api_client.errors import SJConfigError
 
 SWEDEN = ZoneInfo("Europe/Stockholm")
 
@@ -109,3 +114,165 @@ def skip_reason(d: date, skip_weekends: bool, skip_holidays: bool) -> str | None
     if skip_holidays:
         return swedish_holidays(d.year).get(d)
     return None
+
+
+# --- date selection grammar ---------------------------------------------------
+#
+# Shared by the config's `dates` key and --cancel-date: a comma-separated list
+# of units and inclusive start..end ranges. A unit is a date (2026-09-14) or an
+# ISO week (W43 = this ISO year, 2027-W02). The end of a week range may omit
+# the year and the W (W43..46, 2027-W02..03); a date range needs two full dates.
+
+_DATE_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_WEEK_SHAPE = re.compile(r"(?:(\d{4})-)?W(\d{1,2})", re.IGNORECASE)
+_WEEK_END_SHAPE = re.compile(r"(?:(\d{4})-)?W?(\d{1,2})", re.IGNORECASE)  # year and W optional
+_NOT_A_UNIT = "'{}' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)"
+
+
+def _anniversary(d: date) -> date:
+    """The same calendar date next year (29 Feb → 1 Mar)."""
+    try:
+        return d.replace(year=d.year + 1)
+    except ValueError:
+        return date(d.year + 1, 3, 1)
+
+
+def _parse_date(token: str, errors: list[str]) -> date | None:
+    """A date-shaped token → date, or None with an error appended."""
+    try:
+        return datetime.strptime(token, "%Y-%m-%d").date()
+    except ValueError:
+        errors.append(f"'{token}' is not a real calendar date")
+        return None
+
+
+def _week_span(year: int, week: int, errors: list[str]) -> tuple[date, date] | None:
+    """Monday and Sunday of an ISO week, or None with an error appended."""
+    if not 1 <= week <= 53:
+        errors.append(f"week {week} is out of range 1..53")
+        return None
+    try:
+        monday = date.fromisocalendar(year, week, 1)
+    except ValueError:
+        errors.append(f"{year} has no week {week}")
+        return None
+    return monday, monday + timedelta(days=6)
+
+
+def _parse_unit(token: str, errors: list[str], year: int) -> tuple[str, date, date] | None:
+    """One unit → (kind, first day, last day); kind is "date" or "week"."""
+    if _DATE_SHAPE.fullmatch(token):
+        d = _parse_date(token, errors)
+        return ("date", d, d) if d else None
+    m = _WEEK_SHAPE.fullmatch(token)
+    if m:
+        span = _week_span(int(m.group(1) or year), int(m.group(2)), errors)
+        return ("week", span[0], span[1]) if span else None
+    errors.append(_NOT_A_UNIT.format(token))
+    return None
+
+
+def _parse_range(token: str, errors: list[str], year: int) -> tuple[date, date] | None:
+    """A start..end range → (first day, last day), or None with errors appended."""
+    parts = token.split("..")
+    if len(parts) != 2:
+        errors.append(f"'{token}' must be a single range start..end")
+        return None
+    start = _parse_unit(parts[0], errors, year)
+    if start is None:
+        return None
+    kind, first, _ = start
+    end_token = parts[1]
+    if kind == "week":
+        if _DATE_SHAPE.fullmatch(end_token):
+            errors.append(f"range '{token}' mixes a date and a week")
+            return None
+        m = _WEEK_END_SHAPE.fullmatch(end_token)
+        if not m:
+            errors.append(_NOT_A_UNIT.format(end_token))
+            return None
+        span = _week_span(int(m.group(1) or first.isocalendar().year), int(m.group(2)), errors)
+        if span is None:
+            return None
+        last = span[1]
+    else:
+        if _WEEK_SHAPE.fullmatch(end_token):
+            errors.append(f"range '{token}' mixes a date and a week")
+            return None
+        end = _parse_unit(end_token, errors, year)
+        if end is None:
+            return None
+        last = end[2]
+    if first > last:
+        errors.append(f"range '{token}' must run forwards (start before end)")
+        return None
+    if last >= _anniversary(first):  # a calendar year at most, leap day included
+        errors.append(f"range '{token}' spans more than a year")
+        return None
+    return first, last
+
+
+def parse_date_selection(text: str, *, today: date | None = None) -> tuple[list[date], list[str]]:
+    """
+    Parse a date selection into individual dates.
+
+    Comma-separated units and inclusive start..end ranges, mixed freely:
+    dates (2026-09-14), ISO weeks (W43 = week 43 of today's ISO year,
+    2027-W02), week ranges whose end may omit year and W (W43..46). A
+    week expands to its Monday..Sunday. Duplicates collapse.
+
+    Validate-first contract: every term is checked and ALL problems are
+    collected; the dates are only meaningful when errors is empty.
+
+    Args:
+        text: The selection as written in the config or on the command line.
+        today: The Swedish date that decides the ISO year of a bare week
+            (defaults to now).
+
+    Returns:
+        (sorted unique dates, errors).
+
+    """
+    year = (today or sweden_now().date()).isocalendar().year
+    selected: set[date] = set()
+    errors: list[str] = []
+    for raw in text.split(","):
+        token = raw.strip()
+        if not token:
+            errors.append("empty entry in the date list")
+            continue
+        if ".." in token:
+            span = _parse_range(token, errors, year)
+        else:
+            unit = _parse_unit(token, errors, year)
+            span = (unit[1], unit[2]) if unit else None
+        if span:
+            first, last = span
+            selected.update(first + timedelta(days=i) for i in range((last - first).days + 1))
+    if errors:
+        return [], errors
+    return sorted(selected), []
+
+
+def normalise_date_selection(text: str) -> str:
+    """The selection as written: terms trimmed, `w` upper-cased, joined by ", "."""
+    return ", ".join(t.strip().upper() for t in text.split(","))
+
+
+def selected_dates(params: dict, today: date | None = None) -> list[date]:
+    """
+    Every date the config's `dates` selection names, sorted.
+
+    The selection was validated at startup; an error here is a programming
+    error and raises SJConfigError rather than booking the wrong days.
+    """
+    dates, errors = parse_date_selection(params["dates"], today=today)
+    if errors:
+        raise SJConfigError("dates: " + "; ".join(errors), errors=errors)
+    return dates
+
+
+def booking_dates(params: dict, today: date | None = None) -> list[date]:
+    """The dates a --book run walks: the selection from today (Swedish date) on."""
+    today = today or sweden_now().date()
+    return [d for d in selected_dates(params, today) if d >= today]
