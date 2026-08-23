@@ -16,6 +16,7 @@ Swedish calendar and date helpers.
 import re
 from datetime import date, datetime, timedelta
 from functools import cache
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from sj_api_client.errors import SJConfigError
@@ -123,18 +124,20 @@ def skip_reason(d: date, skip_weekends: bool, skip_holidays: bool) -> str | None
 # ISO week (W43 = this ISO year, 2027-W02). The end of a week range may omit
 # the year and the W (W43..46, 2027-W02..03); a date range needs two full dates.
 
-_DATE_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}")
-_WEEK_SHAPE = re.compile(r"(?:(\d{4})-)?W(\d{1,2})", re.IGNORECASE)
-_WEEK_END_SHAPE = re.compile(r"(?:(\d{4})-)?W?(\d{1,2})", re.IGNORECASE)  # year and W optional
+_DATE_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+_WEEK_SHAPE = re.compile(r"(?:(\d{4})-)?W(\d{1,2})", re.IGNORECASE | re.ASCII)
+_WEEK_END_SHAPE = re.compile(
+    r"(?:(\d{4})-W|W?)(\d{1,2})", re.IGNORECASE | re.ASCII
+)  # a year requires -W; a bare W (or none) needs no year
 _NOT_A_UNIT = "'{}' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)"
 
 
 def _anniversary(d: date) -> date:
-    """The same calendar date next year (29 Feb → 1 Mar)."""
+    """The same calendar date next year (29 Feb → 1 Mar); date.max at the end of the calendar."""
     try:
         return d.replace(year=d.year + 1)
     except ValueError:
-        return date(d.year + 1, 3, 1)
+        return date(d.year + 1, 3, 1) if d.year < date.max.year else date.max
 
 
 def _parse_date(token: str, errors: list[str]) -> date | None:
@@ -153,13 +156,15 @@ def _week_span(year: int, week: int, errors: list[str]) -> tuple[date, date] | N
         return None
     try:
         monday = date.fromisocalendar(year, week, 1)
-    except ValueError:
+        return monday, monday + timedelta(days=6)
+    except (ValueError, OverflowError):
         errors.append(f"{year} has no week {week}")
         return None
-    return monday, monday + timedelta(days=6)
 
 
-def _parse_unit(token: str, errors: list[str], year: int) -> tuple[str, date, date] | None:
+def _parse_unit(
+    token: str, errors: list[str], year: int
+) -> tuple[Literal["date", "week"], date, date] | None:
     """One unit → (kind, first day, last day); kind is "date" or "week"."""
     if _DATE_SHAPE.fullmatch(token):
         d = _parse_date(token, errors)
@@ -175,7 +180,7 @@ def _parse_unit(token: str, errors: list[str], year: int) -> tuple[str, date, da
 def _parse_range(token: str, errors: list[str], year: int) -> tuple[date, date] | None:
     """A start..end range → (first day, last day), or None with errors appended."""
     parts = token.split("..")
-    if len(parts) != 2:
+    if len(parts) != 2 or not all(parts):
         errors.append(f"'{token}' must be a single range start..end")
         return None
     start = _parse_unit(parts[0], errors, year)
