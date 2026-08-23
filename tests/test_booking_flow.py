@@ -490,6 +490,20 @@ def test_past_dates_are_clamped_to_today_with_a_note(capsys):
     assert "tue 01 sep 2026" not in out and "thu 03 sep 2026" in out
 
 
+def test_all_selected_days_passed_ends_with_a_red_verdict(capsys):
+    from datetime import date
+
+    cfg = base_cfg(dates="2026-09-01..2026-09-04")
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    counts = process_date_range(
+        c, "tok", FakeTokenManager(), cfg, "TP", "TOK", [], dry_run=True, today=date(2026, 9, 10)
+    )
+    assert counts == {"days": 0, "error": 1}
+    out = capsys.readouterr().out
+    assert "● all selected days have passed" in out
+    assert c.calls == []  # nothing searched
+
+
 def test_non_contiguous_selection_walks_only_the_selected_days(capsys):
     cfg = base_cfg(dates="2026-09-01, 2026-09-03..2026-09-04")  # Tue, Thu..Fri
     c = FakeClient({"OUT": OUT, "IN": IN})
