@@ -83,7 +83,7 @@ email = "user@example.com"
 password = "your-password"
 
 [search_parameters]
-dates = "2026-09-01..2026-10-30"     # dates and/or ISO weeks: "W36, W38..40", "2027-W02..03"; past days are skipped
+dates = "2026-09-01..2026-10-30"     # dates and/or ISO weeks: "W36, W38..40" (this ISO year), "2027-W02..03"; past days are skipped (a selection entirely in the past is an error)
 time_leave = "06:59"                 # preferred outbound departure (HH:MM, Swedish time)
 time_return = "17:22"                # preferred return departure; required when roundtrip = true
 station_from = "Göteborg Central"

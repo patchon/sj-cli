@@ -163,7 +163,7 @@ def test_cancel_booking_rejects_dates_with_a_hint(capsys):
     assert "these look like dates — did you mean --cancel-date?" in out
 
 
-def test_cancel_booking_rejects_non_alnum_without_the_date_hint():
+def test_booking_numbers_non_alnum_gets_no_date_hint():
     from sj_api_client.cli import parse_booking_numbers
 
     numbers, errors = parse_booking_numbers("AB-12")
@@ -178,6 +178,19 @@ def test_booking_numbers_week_terms_get_the_cancel_date_hint():
     for value in ("W43", "2027-W02", "w43,ABCD1234"):
         numbers, errors = parse_booking_numbers(value)
         assert numbers == [] and "did you mean --cancel-date?" in " ".join(errors), value
+
+    numbers, errors = parse_booking_numbers("W43")
+    assert "'W43' looks like a date or week, not a booking number" in " ".join(errors)
+
+
+def test_booking_numbers_mixed_week_and_non_alnum():
+    from sj_api_client.cli import parse_booking_numbers
+
+    numbers, errors = parse_booking_numbers("W43,AB-12")
+    assert numbers == []
+    assert "'W43' looks like a date or week, not a booking number" in errors
+    assert "'AB-12' is not a booking number (letters and digits only, e.g. 3HT2NEIL)" in errors
+    assert "these look like dates — did you mean --cancel-date?" in errors
 
 
 def test_cancel_booking_rejects_empty_entries(capsys):

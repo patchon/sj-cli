@@ -28,7 +28,7 @@ sj-tool --list-bookings
 sj-tool --list-travelpasses
 
 # Cancel that day's journeys on the configured route (other days of a booking are kept): one date,
-# a comma list, and/or START..END ranges
+# an ISO week, a comma list, and/or START..END ranges
 sj-tool --cancel-date 2026-01-20
 sj-tool --cancel-date 2026-01-20,2026-02-03..2026-02-05
 sj-tool --cancel-date W43   # a whole ISO week
@@ -117,7 +117,7 @@ email = "user@example.com"
 password = "your-password"
 
 [search_parameters]
-dates = "2026-09-01..2026-10-30"  # dates and/or ISO weeks ("W36, W38..40"); past days are skipped
+dates = "2026-09-01..2026-10-30"  # dates and/or ISO weeks ("W36, W38..40"); past days are skipped (a selection entirely in the past is an error)
 time_leave = "05:29"
 time_return = "17:22"
 station_from = "Göteborg Central"
