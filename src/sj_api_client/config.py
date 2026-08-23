@@ -292,7 +292,7 @@ class CfgManager:
             errors.append('date_start/date_end were replaced by dates = "START..END"')
             return
         value = params.get("dates")
-        if value is None or value == "":
+        if value is None or (isinstance(value, str) and not value.strip()):
             errors.append("dates is required")
             return
         if not isinstance(value, str):

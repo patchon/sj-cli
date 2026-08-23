@@ -1160,7 +1160,7 @@ def process_booking_flow(
     client: SJClient,
     access_token: str,
     cfg: dict,
-    current_date: datetime,
+    current_date: date,
     tp_product_id: str,
     tp_token_id: str,
     need_outbound: bool,
@@ -1462,7 +1462,8 @@ def process_date_range(
     selected = selected_dates(params, today)
     dates = [d for d in selected if d >= today]
     if not dates:  # validated at startup; only a run straddling midnight gets here
-        pwarn("all selected days have passed")
+        pstatus(False, "all selected days have passed")
+        count("error")
         return counts
     if len(dates) < len(selected):
         pwarn(
@@ -1472,7 +1473,6 @@ def process_date_range(
         blank()
 
     for i, day in enumerate(dates):
-        curr = datetime.combine(day, datetime.min.time())  # process_booking_flow takes a datetime
         date_str = day.isoformat()
         counts["days"] += 1
 
@@ -1520,7 +1520,7 @@ def process_date_range(
                     client,
                     access_token,
                     cfg,
-                    curr,
+                    day,
                     tp_product_id,
                     tp_token_id,
                     need_outbound,

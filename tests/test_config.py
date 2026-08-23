@@ -41,6 +41,8 @@ def test_dates_required_typed_and_old_keys_rejected():
     cfg = base_cfg()
     del cfg["search_parameters"]["dates"]
     assert "dates is required" in errors_of(cfg)
+    cfg = base_cfg(dates="   ")
+    assert "dates is required" in errors_of(cfg)
     cfg = base_cfg()
     cfg["search_parameters"]["dates"] = datetime.date(2099, 9, 16)  # native TOML date
     assert 'dates must be a string like "2026-09-01..2026-10-30"' in errors_of(cfg)
