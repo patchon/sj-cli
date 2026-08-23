@@ -5,13 +5,12 @@ import logging
 import os
 import re
 import tomllib
-from datetime import date, datetime
 from datetime import time as dt_time
 from pathlib import Path
 from typing import Any
 
 from sj_api_client.client import STATION_MAP
-from sj_api_client.dates import sweden_now
+from sj_api_client.dates import normalise_date_selection, parse_date_selection, sweden_now
 from sj_api_client.errors import SJConfigError
 from sj_api_client.logger import log_json
 from sj_api_client.output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
@@ -154,7 +153,7 @@ class CfgManager:
         [auth] is always validated; [search_parameters] only when
         require_search is true — operations that never touch the route or
         dates (login, listing, cancelling by number) work with a config
-        holding only credentials — and the date window only when
+        holding only credentials — and the dates selection only when
         require_dates is true as well (--cancel-date needs the route, not
         the dates). Collects all errors, reports them at once.
 
@@ -200,7 +199,7 @@ class CfgManager:
     ) -> None:
         """Validate the [search_parameters] section."""
         if require_dates:
-            self._validate_window(params, errors)
+            self._validate_dates(params, errors)
 
         # time_leave
         t = self._validate_time(params.get("time_leave", ""), "time_leave", errors)
@@ -280,52 +279,33 @@ class CfgManager:
                 if "ALL" in st and len(st) > 1:
                     errors.append("service_types: 'ALL' cannot be combined with other values")
 
-    def _validate_window(self, params: dict[str, Any], errors: list[str]) -> None:
+    def _validate_dates(self, params: dict[str, Any], errors: list[str]) -> None:
         """
-        Validate date_start/date_end.
+        Validate the `dates` selection (grammar: dates.parse_date_selection).
 
-        A date_start in the past is fine — a standing window keeps working on
-        later runs (the booking loop starts from today); only a window that
-        has passed entirely is an error.
+        Dates already gone are fine — a standing selection keeps working on
+        later runs (the booking loop starts from today); only a selection
+        that has passed entirely is an error. The old date_start/date_end
+        keys get a migration hint instead of "dates is required".
         """
-        date_start = self._validate_date(params.get("date_start", ""), "date_start", errors)
-        date_end = self._validate_date(params.get("date_end", ""), "date_end", errors)
-
-        # Normalise native TOML dates back to strings for downstream code
-        if date_start:
-            params["date_start"] = date_start.isoformat()
-        if date_end:
-            params["date_end"] = date_end.isoformat()
-
-        if date_start and date_end and date_end < date_start:
-            errors.append("date_end must be >= date_start")
-        if date_end and date_end < sweden_now().date():
-            errors.append("date_end must be today or in the future")
-
-    def _validate_date(self, value: str | date, field_name: str, errors: list[str]) -> date | None:
-        """
-        Validate a config date. Returns the parsed date or None.
-
-        Accepts a quoted "YYYY-MM-DD" string or a native (unquoted) TOML
-        date. Error messages echo the received value, so a subtly wrong one
-        (wrong separator, trailing space, impossible day) is visible.
-        """
-        if isinstance(value, datetime):
-            errors.append(f"{field_name} must be a date (YYYY-MM-DD), not a date-time")
-            return None
-        if isinstance(value, date):
-            return value  # native TOML date (unquoted in the config)
-        if not value:
-            errors.append(f"{field_name} is required")
-            return None
-        try:
-            return datetime.strptime(value, "%Y-%m-%d").date()
-        except (TypeError, ValueError):
-            if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-                errors.append(f"{field_name} '{value}' is not a real calendar date")
-            else:
-                errors.append(f"{field_name} '{value}' must be a date formatted YYYY-MM-DD")
-            return None
+        if "date_start" in params or "date_end" in params:
+            errors.append('date_start/date_end were replaced by dates = "START..END"')
+            return
+        value = params.get("dates")
+        if value is None or value == "":
+            errors.append("dates is required")
+            return
+        if not isinstance(value, str):
+            errors.append('dates must be a string like "2026-09-01..2026-10-30"')
+            return
+        today = sweden_now().date()
+        selected, problems = parse_date_selection(value, today=today)
+        if problems:
+            errors.extend(f"dates: {p}" for p in problems)
+            return
+        if selected[-1] < today:
+            errors.append("dates: all selected dates have passed")
+        params["dates"] = normalise_date_selection(value)
 
     def _validate_time(
         self, value: str | dt_time, field_name: str, errors: list[str]

@@ -166,9 +166,7 @@ def test_span_label():
 def test_describe_run():
     from tests.fakes import base_cfg
 
-    p = base_cfg(date_start="2026-09-01", date_end="2026-10-30", service_types=["SJ_HIGH"])[
-        "search_parameters"
-    ]
+    p = base_cfg(dates="2026-09-01..2026-10-30", service_types=["SJ_HIGH"])["search_parameters"]
     assert describe_run(p) == [
         ("route", "Göteborg Central ⇄ Stockholm Central"),
         ("days", "1 sep – 30 oct 2026 · weekdays only"),
@@ -177,7 +175,7 @@ def test_describe_run():
     ]
     p = base_cfg(
         roundtrip=False,
-        date_end="2026-09-01",
+        dates="2026-09-01",
         select_closest_ticket_available=False,
         skip_weekends=False,
         allow_class_fallback=False,
@@ -194,6 +192,14 @@ def test_describe_run():
     assert label == "days"
     assert value.endswith("weekdays incl. red days")
     assert describe_run(p)[3] == ("ticket", "2 class calm · FULLFLEX")
+    # non-contiguous: the selection as written, then its span
+    from datetime import date
+
+    p = base_cfg(dates="W43, W45..46")["search_parameters"]
+    assert describe_run(p, today=date(2026, 8, 23))[1] == (
+        "days",
+        "W43, W45..46 (19 oct – 15 nov 2026) · weekdays only",
+    )
 
 
 def test_confirm_uses_question_prompt(monkeypatch, capsys):

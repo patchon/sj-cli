@@ -21,20 +21,38 @@ def test_valid_config_passes():
     verify(future_cfg(service_types=["ALL"], book_partial=True, skip_weekends=False))
 
 
-def test_past_date_start_is_fine_but_a_past_window_is_not():
+def test_past_dates_are_fine_but_a_passed_selection_is_not():
     from datetime import date, timedelta
 
     yesterday = (date.today() - timedelta(days=1)).isoformat()
-    verify(future_cfg(date_start=yesterday))  # a standing window keeps working on later runs
-    msg = errors_of(base_cfg(date_start="2020-01-01", date_end="2020-03-20"))
-    assert "date_end must be today or in the future" in msg
-    assert "date_start must be today" not in msg
+    in_a_month = (date.today() + timedelta(days=30)).isoformat()
+    verify(future_cfg(dates=f"{yesterday}..{in_a_month}"))  # a standing selection keeps working
+    msg = errors_of(base_cfg(dates="2020-01-01..2020-03-20"))
+    assert "dates: all selected dates have passed" in msg
     # operations that never touch the dates (--cancel-date) skip the date rules
-    CfgManager().verify_cfg(
-        base_cfg(date_start="2020-01-01", date_end="2019-01-01"), require_dates=False
-    )
+    CfgManager().verify_cfg(base_cfg(dates="2020-01-01..2019-01-01"), require_dates=False)
     with pytest.raises(SJConfigError, match="station_to 'Nowhere'"):
         CfgManager().verify_cfg(base_cfg(station_to="Nowhere"), require_dates=False)
+
+
+def test_dates_required_typed_and_old_keys_rejected():
+    import datetime
+
+    cfg = base_cfg()
+    del cfg["search_parameters"]["dates"]
+    assert "dates is required" in errors_of(cfg)
+    cfg = base_cfg()
+    cfg["search_parameters"]["dates"] = datetime.date(2099, 9, 16)  # native TOML date
+    assert 'dates must be a string like "2026-09-01..2026-10-30"' in errors_of(cfg)
+    msg = errors_of(base_cfg(date_start="2099-09-16", date_end="2099-09-21"))
+    assert 'date_start/date_end were replaced by dates = "START..END"' in msg
+    assert "dates is required" not in msg  # the migration hint is enough
+
+
+def test_dates_are_normalised_in_place():
+    cfg = base_cfg(dates=" 2099-09-16 ,w45..46")
+    verify(cfg)
+    assert cfg["search_parameters"]["dates"] == "2099-09-16, W45..46"
 
 
 def test_missing_sections():
@@ -45,8 +63,7 @@ def test_missing_sections():
 
 def test_collects_all_errors():
     cfg = base_cfg(
-        date_start="2020-01-01",
-        date_end="2019-01-01",
+        dates="2020-01-01..2019-01-01",
         time_leave="25:00",
         comfort_class="business",
         flexibility="FLEX",
@@ -56,8 +73,7 @@ def test_collects_all_errors():
     )
     msg = errors_of(cfg)
     for frag in (
-        "date_end must be >= date_start",
-        "date_end must be today or in the future",
+        "dates: range '2020-01-01..2019-01-01' must run forwards (start before end)",
         "time_leave '25:00' is not a real time of day",
         "comfort_class must be one of",
         "flexibility must be one of",
@@ -102,32 +118,13 @@ def test_config_error_carries_error_list():
     assert exc.value.errors == ["time_leave '25:00' is not a real time of day (HH:MM, 24-hour)"]
 
 
-def test_native_toml_date_is_accepted_and_normalised():
-    import datetime
-
-    cfg = base_cfg()
-    cfg["search_parameters"]["date_start"] = datetime.date(2099, 9, 16)
-    cfg["search_parameters"]["date_end"] = datetime.date(2099, 9, 21)
-    verify(cfg)  # unquoted TOML dates must not crash or error
-    assert cfg["search_parameters"]["date_start"] == "2099-09-16"
-    assert cfg["search_parameters"]["date_end"] == "2099-09-21"
-
-
 def test_date_errors_echo_the_value_and_distinguish_causes():
-    import datetime
-
-    msg = errors_of(base_cfg(date_start="2026-09-31"))
-    assert "date_start '2026-09-31' is not a real calendar date" in msg
-    msg = errors_of(base_cfg(date_start="2026/09/30"))
-    assert "date_start '2026/09/30' must be a date formatted YYYY-MM-DD" in msg
-    msg = errors_of(base_cfg(date_start="2026-09-16 "))
-    assert "date_start '2026-09-16 ' must be a date formatted YYYY-MM-DD" in msg
-    cfg = base_cfg()
-    cfg["search_parameters"]["date_start"] = datetime.datetime(2026, 9, 16, 8, 0)
-    with pytest.raises(
-        SJConfigError, match=r"date_start must be a date .YYYY-MM-DD., not a date-time"
-    ):
-        verify(cfg)
+    msg = errors_of(base_cfg(dates="2026-09-31"))
+    assert "dates: '2026-09-31' is not a real calendar date" in msg
+    msg = errors_of(base_cfg(dates="2026/09/30"))
+    assert "dates: '2026/09/30' is not a date (YYYY-MM-DD) or a week (W43, 2027-W02)" in msg
+    msg = errors_of(base_cfg(dates="2027-W53"))
+    assert "dates: 2027 has no week 53" in msg
 
 
 def test_native_toml_time_is_accepted_and_normalised():
@@ -233,7 +230,7 @@ def test_load_unreadable_file_is_not_reported_as_a_parse_error(tmp_path):
 def test_verify_cfg_search_params_scoped_to_operations_that_use_them():
     # a fresh wizard config has valid [auth] but stale template search dates:
     # login/list/cancel-booking must still work
-    cfg = base_cfg(date_start="2020-01-01", date_end="2020-03-20")
+    cfg = base_cfg(dates="2020-01-01..2020-03-20")
     with pytest.raises(SJConfigError):
         CfgManager().verify_cfg(cfg)  # booking modes: full validation
     CfgManager().verify_cfg(cfg, require_search=False)  # non-booking: [auth] only

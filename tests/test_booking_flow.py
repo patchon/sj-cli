@@ -368,7 +368,7 @@ def run_range(c, cfg, dry_run, existing=()):
 
 
 def test_book_mode_prints_day_cards_notes_and_summary(capsys):
-    cfg = base_cfg(date_start="2026-09-04", date_end="2026-09-08")  # Fri..Tue
+    cfg = base_cfg(dates="2026-09-04..2026-09-08")  # Fri..Tue
     c = FakeClient({"OUT": OUT, "IN": IN})
 
     def on_monday(item):
@@ -476,18 +476,28 @@ def test_checkout_sends_no_phone_when_the_booking_carries_none():
 # --- process_date_range: robustness -----------------------------------------
 
 
-def test_past_date_start_is_clamped_to_today_with_a_note(capsys):
+def test_past_dates_are_clamped_to_today_with_a_note(capsys):
     from datetime import date
 
-    cfg = base_cfg(date_start="2026-09-01", date_end="2026-09-04")  # Tue..Fri
+    cfg = base_cfg(dates="2026-09-01..2026-09-04")  # Tue..Fri
     c = FakeClient({"OUT": OUT, "IN": IN})
     counts = process_date_range(
         c, "tok", FakeTokenManager(), cfg, "TP", "TOK", [], dry_run=True, today=date(2026, 9, 3)
     )
     assert counts["days"] == 2
     out = capsys.readouterr().out
-    assert "! date_start 2026-09-01 is in the past, starting from 2026-09-03\n\n" in out
+    assert "! 2 selected day(s) have passed, starting from 2026-09-03\n\n" in out
     assert "tue 01 sep 2026" not in out and "thu 03 sep 2026" in out
+
+
+def test_non_contiguous_selection_walks_only_the_selected_days(capsys):
+    cfg = base_cfg(dates="2026-09-01, 2026-09-03..2026-09-04")  # Tue, Thu..Fri
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    counts = run_range(c, cfg, dry_run=True)
+    assert counts["days"] == 3
+    out = capsys.readouterr().out
+    assert "tue 01 sep 2026" in out and "thu 03 sep 2026" in out and "fri 04 sep 2026" in out
+    assert "wed 02 sep 2026" not in out
 
 
 def test_render_failure_after_checkout_does_not_lose_the_booking(monkeypatch, capsys):
@@ -520,7 +530,7 @@ def test_midrun_refresh_failure_stops_the_run_with_a_summary(capsys):
 
     from datetime import date
 
-    cfg = base_cfg(date_start="2026-09-01", date_end="2026-09-02")
+    cfg = base_cfg(dates="2026-09-01..2026-09-02")
     counts = process_date_range(
         RefreshDown({"OUT": OUT, "IN": IN}),
         "tok",
