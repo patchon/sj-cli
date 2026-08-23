@@ -192,11 +192,14 @@ def test_describe_run():
     assert label == "days"
     assert value.endswith("weekdays incl. red days")
     assert describe_run(p)[3] == ("ticket", "2 class calm · FULLFLEX")
-    # non-contiguous: the selection as written, then its span
+    # non-contiguous: the selection as validation normalised it, then its span
     from datetime import date
 
-    p = base_cfg(dates="W43, W45..46")["search_parameters"]
-    assert describe_run(p, today=date(2026, 8, 23))[1] == (
+    from sj_api_client.config import CfgManager
+
+    cfg = base_cfg(dates=" w43 ,w45..46")
+    CfgManager().verify_cfg(cfg)  # normalises the written value in place
+    assert describe_run(cfg["search_parameters"], today=date(2026, 8, 23))[1] == (
         "days",
         "W43, W45..46 (19 oct – 15 nov 2026) · weekdays only",
     )

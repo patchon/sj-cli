@@ -490,7 +490,7 @@ def test_past_dates_are_clamped_to_today_with_a_note(capsys):
     assert "tue 01 sep 2026" not in out and "thu 03 sep 2026" in out
 
 
-def test_all_selected_days_passed_ends_with_a_red_verdict(capsys):
+def test_all_selected_dates_passed_ends_with_a_red_verdict(capsys):
     from datetime import date
 
     cfg = base_cfg(dates="2026-09-01..2026-09-04")
@@ -500,7 +500,7 @@ def test_all_selected_days_passed_ends_with_a_red_verdict(capsys):
     )
     assert counts == {"days": 0, "error": 1}
     out = capsys.readouterr().out
-    assert "● all selected days have passed" in out
+    assert "● all selected dates have passed" in out
     assert c.calls == []  # nothing searched
 
 

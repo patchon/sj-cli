@@ -8,7 +8,13 @@ from typing import Any
 from sj_api_client.auth import ensure_valid_token
 from sj_api_client.client import SJClient
 from sj_api_client.config import SERVICE_TYPE_NAMES
-from sj_api_client.dates import selected_dates, skip_reason, sweden_now, to_sweden
+from sj_api_client.dates import (
+    booking_dates,
+    selected_dates,
+    skip_reason,
+    sweden_now,
+    to_sweden,
+)
 from sj_api_client.errors import SJAuthError, error_text
 from sj_api_client.output import (
     ask,
@@ -1459,17 +1465,14 @@ def process_date_range(
     # No leading blank: the caller prints one after the run-header facts,
     # before the bookings fetch, so the live spinner is already separated.
     today = today or sweden_now().date()
-    selected = selected_dates(params, today)
-    dates = [d for d in selected if d >= today]
+    dates = booking_dates(params, today)
+    dropped = len(selected_dates(params, today)) - len(dates)
     if not dates:  # validated at startup; only a run straddling midnight gets here
-        pstatus(False, "all selected days have passed")
+        pstatus(False, "all selected dates have passed")
         count("error")
         return counts
-    if len(dates) < len(selected):
-        pwarn(
-            f"{len(selected) - len(dates)} selected day(s) have passed, "
-            f"starting from {dates[0].isoformat()}"
-        )
+    if dropped:
+        pwarn(f"{dropped} selected day(s) have passed, starting from {dates[0].isoformat()}")
         blank()
 
     for i, day in enumerate(dates):
