@@ -55,7 +55,7 @@ Mode dispatch:
   (--dry-run modifies --book / --cancel-*: preview only, nothing mutated)
   --book                  → booking loop:
                               clean up stale provisionals
-                              for each date in range:
+                              for each selected date:
                                 dates: skip weekends / red days
                                 booking: check duplicates
                                 booking: search → select → offer → book → checkout
@@ -170,7 +170,7 @@ Report all validation errors at once (don't stop at the first one).
 sj-tool --book
 ```
 
-Reads config, authenticates, and books tickets for every date in the configured range. No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only` — a contiguous selection renders as `1 sep – 30 oct 2026`, anything else as `W43, W45..46 (19 oct – 15 nov 2026)`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): green/red ● by outcome, dim summary text.
+Reads config, authenticates, and books tickets for every selected date (`dates`, §4.3). No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only` — a contiguous selection renders as `1 sep – 30 oct 2026`, anything else as `W43, W45..46 (19 oct – 15 nov 2026)`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): green/red ● by outcome, dim summary text.
 
 ```
 ╭──────────────────────────────────╮
@@ -323,7 +323,7 @@ mon 31 aug 2026   Göteborg Central ⇄ Stockholm Central
 | `--dry-run` | Modifier for `--book`/`--cancel-date`/`--cancel-booking`: preview only, nothing booked or cancelled, no prompts. Usage error alone or with any other flag. | Only SMS on first login. |
 | `--book` | Book tickets for the configured dates (`dates`, §4.3). | Only SMS on first login. |
 | `--cancel-date DATES` | Cancel bookings on the configured route for one or more dates: a `YYYY-MM-DD` date, an ISO week (`W43`, `2027-W02`; a bare week is this ISO year), a comma-separated list, and/or inclusive `START..END` ranges, mixed freely. Every token is validated up front (the same grammar as the config's `dates` key, §4.3); any problem renders an `● invalid --cancel-date` card echoing each bad value and exits 1 before any API call. Dates are deduplicated and processed in order, one section per date. | Yes (journey choice + confirmation). |
-| `--cancel-booking NUM[,NUM…]` | Cancel booking(s) by booking number, comma-separated, any case (deduplicated, order kept). Validated up front: a value that cannot be a booking number (anything beyond letters and digits) renders an `● invalid --cancel-booking` card echoing each bad value — with a `did you mean --cancel-date?` hint when the values look like dates — and exits 1 before any API call. One output section per booking, blank-line separated. | Yes (journey choice + confirmation). |
+| `--cancel-booking NUM[,NUM…]` | Cancel booking(s) by booking number, comma-separated, any case (deduplicated, order kept). Validated up front: a value that cannot be a booking number (anything beyond letters and digits) or that looks like a date or week (`2026-09-16`, `W43`, `2027-W02`, a `..` range) renders an `● invalid --cancel-booking` card echoing each bad value — with a `did you mean --cancel-date?` hint for the date/week-shaped ones — and exits 1 before any API call. One output section per booking, blank-line separated. | Yes (journey choice + confirmation). |
 | `--list-bookings` | Display all active bookings as per-day cards. | Only SMS on first login. |
 | `--list-travelpasses` | Display travel passes with validity and receipt details. | Only SMS on first login. |
 | `--login` | Header box (`operation   logging in` + config email), auth trail, then the login-status card. Verdict `● logged in` when a full login ran, `● already logged in` when the cached/refreshed session sufficed. The card judges the session just established, not the cache file; a cache that could not be written is said first (`! token cache not saved: … · the next run will need to log in again`). | Only SMS on first login. |
@@ -490,7 +490,7 @@ On startup, fetch all travel passes and drop expired ones (`endTravelValidityDat
 - **Multiple valid passes**: for `--book`, the single pass whose validity covers the booking window is used without asking (a renewal bought ahead); otherwise a numbered list (`1. name (first day → last day)`) prompts for a choice — at a terminal only (`● 2 valid travel passes · run in a terminal to choose one`, exit 1, otherwise) and an empty answer ends the run (`● no travel pass selected`). The other pass-scoped modes need only a date range and take the longest-lived pass silently; `--list-travelpasses` lists every pass, expired ones included (`(expired)`), and never selects.
 - **No valid passes**: exit with an error.
 
-### 9.2 Date range validation
+### 9.2 Bookable window validation
 
 If the travel pass has validity dates (`startTravelValidityDateTime`, `endTravelValidityDateTime`), validate that the bookable window — first and last selected date from today on that the calendar filter does not skip — falls within the pass validity period (a week ending on a Sunday after a pass that ends on the Friday is fine; a selection with no bookable day skips the check), compared as **Swedish calendar dates**: the API's validity instants are midnight UTC (01:00/02:00 Swedish), and `endTravelValidityDateTime` is exclusive — the day after the last valid day, which is what `--list-travelpasses` shows as the end. Exit 1 with both ranges printed if not.
 
