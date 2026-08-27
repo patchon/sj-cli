@@ -56,7 +56,9 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
         (preference, errors) — the preference is the literal "ask", a
         normalised list of vocabulary words, or None when the key is absent.
         Errors are collected, never raised, so config.py can report them
-        together with everything else.
+        together with everything else. A None preference with a non-empty
+        error list means "invalid", not "absent" — that distinction is safe
+        only because the config layer aborts the run on any error.
 
     """
     if value is None:
@@ -77,7 +79,8 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
     errors: list[str] = []
     unknown = [w for w in wishes if w not in SEAT_WORDS]
     if unknown:
-        errors.append(f"seat_preference: unknown {', '.join(unknown)}. Valid words: {words}")
+        quoted = ", ".join(f'"{w}"' for w in unknown)
+        errors.append(f"seat_preference: unknown {quoted}. Valid words: {words}")
     duplicates = sorted({w for w in wishes if wishes.count(w) > 1})
     if duplicates:
         errors.append(f"seat_preference lists {', '.join(duplicates)} twice")
@@ -101,12 +104,18 @@ def free_seats(seatmap: dict[str, Any]) -> list[Seat]:
         carriage detail is skipped.
 
     """
-    carriages = {str(c.get("carriageNumber")): c for c in seatmap.get("carriages") or []}
+    carriages = {
+        str(c.get("carriageNumber")): c
+        for c in seatmap.get("carriages") or []
+        if isinstance(c, dict)
+    }
     seats: list[Seat] = []
     for carriage, numbers in (seatmap.get("seatsPossibleToSelect") or {}).items():
         c = carriages.get(str(carriage)) or {}
-        by_number = {str(s.get("seatNumber")): s for s in c.get("seats") or []}
-        for number in numbers or []:
+        by_number = {
+            str(s.get("seatNumber")): s for s in c.get("seats") or [] if isinstance(s, dict)
+        }
+        for number in numbers if isinstance(numbers, list) else []:
             seat = by_number.get(str(number))
             if seat is None:
                 continue
@@ -114,7 +123,13 @@ def free_seats(seatmap: dict[str, Any]) -> list[Seat]:
                 Seat(
                     carriage=str(carriage),
                     number=str(number),
-                    codes=[p.get("code", "") for p in seat.get("carriageSeatProperties") or []],
+                    # API nulls a property's code sometimes; drop those rather
+                    # than let a None sneak into codes (see satisfies() below).
+                    codes=[
+                        code
+                        for p in seat.get("carriageSeatProperties") or []
+                        if isinstance(p, dict) and (code := p.get("code"))
+                    ],
                     # IDR/ODR is not in the map: a seat faces forward when its
                     # own reversed flag matches its carriage's (verified
                     # against the live API 2026-08-27).
@@ -124,17 +139,23 @@ def free_seats(seatmap: dict[str, Any]) -> list[Seat]:
     return seats
 
 
-def _satisfies(seat: Seat, wish: str) -> bool:
+def satisfies(seat: Seat, wish: str) -> bool:
+    """Whether one free seat meets one vocabulary wish."""
     if wish == "forward":
         return seat["forward"]
     if wish == "backward":
         return not seat["forward"]
-    return SEAT_WORDS.get(wish) in seat["codes"]
+    code = SEAT_WORDS.get(wish)
+    # SEAT_WORDS.get() returns None for a non-vocabulary wish and for the two
+    # direction words above (handled already) — never treat that as a code match.
+    return code is not None and code in seat["codes"]
 
 
 def _number_key(value: str) -> tuple[int, int, str]:
-    """Numeric seats sort numerically; anything odd sorts last, alphabetically."""
-    return (0, int(value), "") if value.isdigit() else (1, 0, value)
+    """Numeric seats sort numerically; anything odd (incl. non-ASCII digits) sorts last."""
+    if value.isascii() and value.isdigit():
+        return (0, int(value), value)
+    return (1, 0, value)
 
 
 def best_seat(seatmap: dict[str, Any], wishes: list[str]) -> Seat | None:
@@ -148,7 +169,10 @@ def best_seat(seatmap: dict[str, Any], wishes: list[str]) -> Seat | None:
             tie-broken by carriage/seat number).
 
     Returns:
-        The best-ranked Seat, or None when no seat is selectable.
+        The best-ranked Seat, or None when no seat is selectable. The pick is
+        best-effort: when no free seat satisfies any wish, this still returns
+        the top tie-broken seat rather than None — None means only that the
+        map has nothing selectable at all.
 
     Ranking is lexicographic: an earlier wish outweighs every later wish
     combined, so ["window", "table"] takes a plain window seat over an aisle
@@ -161,7 +185,7 @@ def best_seat(seatmap: dict[str, Any], wishes: list[str]) -> Seat | None:
     return min(
         seats,
         key=lambda s: (
-            [not _satisfies(s, w) for w in wishes],
+            [not satisfies(s, w) for w in wishes],
             _number_key(s["carriage"]),
             _number_key(s["number"]),
         ),
@@ -170,16 +194,22 @@ def best_seat(seatmap: dict[str, Any], wishes: list[str]) -> Seat | None:
 
 def current_seat(seatmap: dict[str, Any]) -> tuple[str | None, str | None]:
     """The seat the passenger holds right now, as (carriage, seat)."""
-    assigned = (seatmap.get("passengerSeats") or [{}])[0]
+    # [0]: this tool books one passenger per journey, so at most one entry.
+    assigned = next((s for s in seatmap.get("passengerSeats") or [] if isinstance(s, dict)), {})
     carriage = assigned.get("carriageNumber")
     number = assigned.get("seatNumber")
-    return (str(carriage) if carriage else None, str(number) if number else None)
+    return (
+        str(carriage) if carriage is not None else None,
+        str(number) if number is not None else None,
+    )
+
+
+_WORD_BY_CODE = {code: word for word, code in SEAT_WORDS.items() if code}
 
 
 def seat_words(seat: Seat) -> list[str]:
     """A seat's properties as config vocabulary, for display. Unknown codes are skipped."""
-    by_code = {code: word for word, code in SEAT_WORDS.items() if code}
-    words = sorted(by_code[c] for c in seat["codes"] if c in by_code)
+    words = sorted({_WORD_BY_CODE[c] for c in seat["codes"] if c in _WORD_BY_CODE})
     return [*words, "forward" if seat["forward"] else "backward"]
 
 
