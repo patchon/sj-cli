@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "sj-cli"
 version = "0.1.0"
 description = "Book SJ (Swedish Railways) commuter trips on a travel pass from the command line."
-readme = "README.md"
+readme = "README.en.md"
 requires-python = ">=3.13"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
