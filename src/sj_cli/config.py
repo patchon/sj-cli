@@ -14,6 +14,7 @@ from sj_cli.dates import normalise_date_selection, parse_date_selection, sweden_
 from sj_cli.errors import SJConfigError
 from sj_cli.logger import log_json
 from sj_cli.output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
+from sj_cli.seats import parse_preference
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,11 @@ class CfgManager:
         return True
 
     def verify_cfg(
-        self, cfg: dict[str, Any], require_search: bool = True, require_dates: bool = True
+        self,
+        cfg: dict[str, Any],
+        require_search: bool = True,
+        require_dates: bool = True,
+        require_seat_preference: bool = False,
     ) -> None:
         """
         Validates configuration fields.
@@ -153,7 +158,11 @@ class CfgManager:
         dates (login, listing, cancelling by number) work with a config
         holding only credentials — and the dates selection only when
         require_dates is true as well (--cancel-date needs the route, not
-        the dates). Collects all errors, reports them at once.
+        the dates). require_seat_preference is for the change-seat modes:
+        they need the seat_preference key and nothing else from
+        [search_parameters], so it is validated even when require_search is
+        false, and its absence is an error only in that mode. Collects all
+        errors, reports them at once.
 
         Raises:
             SJConfigError: If any validation errors are found.
@@ -185,7 +194,16 @@ class CfgManager:
             if not params or not isinstance(params, dict):
                 errors.append("[search_parameters] section is missing")
             else:
-                self._validate_search_params(params, errors, require_dates)
+                self._validate_search_params(params, errors, require_dates, require_seat_preference)
+
+        # seat_preference is validated even when the rest of [search_parameters]
+        # is not: the change-seat modes need the key and nothing else.
+        if not require_search:
+            seat_params = cfg.get("search_parameters")
+            if isinstance(seat_params, dict):
+                self._validate_seat_preference(seat_params, errors, require_seat_preference)
+            elif require_seat_preference:
+                errors.append('seat_preference is required (set it to "ask" or a word list)')
 
         if errors:
             raise SJConfigError(
@@ -193,7 +211,11 @@ class CfgManager:
             )
 
     def _validate_search_params(
-        self, params: dict[str, Any], errors: list[str], require_dates: bool = True
+        self,
+        params: dict[str, Any],
+        errors: list[str],
+        require_dates: bool = True,
+        require_seat_preference: bool = False,
     ) -> None:
         """Validate the [search_parameters] section."""
         if require_dates:
@@ -276,6 +298,31 @@ class CfgManager:
                     )
                 if "ALL" in st and len(st) > 1:
                     errors.append("service_types: 'ALL' cannot be combined with other values")
+
+        # seat_preference (optional; "ask" or a ranked list of vocabulary words)
+        self._validate_seat_preference(params, errors, require_seat_preference)
+
+    def _validate_seat_preference(
+        self, params: dict[str, Any], errors: list[str], require_seat_preference: bool
+    ) -> None:
+        """
+        Validate the optional `seat_preference` key (grammar: seats.parse_preference).
+
+        A valid word list is normalised in place, like `dates`. The change-seat
+        modes pass require_seat_preference=True: without the key they have
+        nothing to do.
+        """
+        value = params.get("seat_preference")
+        if value is None:
+            if require_seat_preference:
+                errors.append('seat_preference is required (set it to "ask" or a word list)')
+            return
+        preference, problems = parse_preference(value)
+        if problems:
+            errors.extend(problems)
+            return
+        if isinstance(preference, list):
+            params["seat_preference"] = preference
 
     def _validate_dates(self, params: dict[str, Any], errors: list[str]) -> None:
         """

@@ -259,3 +259,28 @@ def test_wrong_typed_values_are_collected_not_crashed():
     assert "comfort_class must be one of" in msgs and "flexibility must be one of" in msgs
     with pytest.raises(SJConfigError, match=r"\[auth\] section is missing"):
         CfgManager().verify_cfg({"auth": "x", "search_parameters": "y"})
+
+
+def test_seat_preference_is_validated_and_normalised():
+    cfg = future_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["Window", "easy  access"]
+    CfgManager().verify_cfg(cfg)
+    assert cfg["search_parameters"]["seat_preference"] == ["window", "easy access"]
+
+
+def test_seat_preference_errors_are_collected():
+    cfg = future_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["kitchen"]
+    with pytest.raises(SJConfigError) as e:
+        CfgManager().verify_cfg(cfg)
+    assert any("kitchen" in err for err in e.value.errors)
+
+
+def test_seat_preference_can_be_required_without_the_rest_of_search_params():
+    cfg = {"auth": {"email": "a@b.se", "password": "x"}}
+    with pytest.raises(SJConfigError) as e:
+        CfgManager().verify_cfg(cfg, require_search=False, require_seat_preference=True)
+    assert any("seat_preference" in err for err in e.value.errors)
+
+    cfg["search_parameters"] = {"seat_preference": "ask"}
+    CfgManager().verify_cfg(cfg, require_search=False, require_seat_preference=True)
