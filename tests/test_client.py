@@ -1,3 +1,4 @@
+import json
 import time
 
 import httpx
@@ -25,6 +26,28 @@ class ScriptedTransport(httpx.BaseTransport):
 
     def close(self):
         pass
+
+
+class RecordingTransport(httpx.BaseTransport):
+    """Records the request and returns a canned JSON body."""
+
+    def __init__(self, body=None, status=200):
+        self.body = body if body is not None else {"ok": True}
+        self.status = status
+        self.request = None
+
+    def handle_request(self, request):
+        self.request = request
+        return httpx.Response(self.status, json=self.body, request=request)
+
+    def close(self):
+        pass
+
+
+def _client_with(transport):
+    client = SJClient()
+    client.client = httpx.Client(transport=transport)
+    return client
 
 
 @pytest.fixture(autouse=True)
@@ -479,3 +502,31 @@ def test_retry_transport_keeps_compressed_bodies_decodable():
     assert resp.json() == {"ok": True}
     assert resp.num_bytes_downloaded == len(raw)
     assert resp.elapsed.total_seconds() >= 0  # httpx's own bookkeeping still works
+
+
+def test_get_seatmap_uses_the_booking_scoped_path():
+    t = RecordingTransport({"carriages": []})
+    c = _client_with(t)
+    assert c.get_seatmap("TOKEN", "BID", "SMID") == {"carriages": []}
+    assert t.request.url.path.endswith("/bookings/BID/seatmap/SMID")
+    assert t.request.method == "GET"
+
+
+def test_update_seats_picks_the_path_by_provisional_flag():
+    updates = [{"seatNumber": "70", "seatStrategy": "EXACT"}]
+
+    t = RecordingTransport({"bookingId": "BID"})
+    _client_with(t).update_seats("TOKEN", "BID", updates)
+    assert t.request.url.path.endswith("/bookings/provisional/BID/seats")
+    assert t.request.method == "PATCH"
+    assert json.loads(t.request.content) == {"updateSegmentSeats": updates}
+
+    t2 = RecordingTransport({"bookingId": "BID"})
+    _client_with(t2).update_seats("TOKEN", "BID", updates, provisional=False)
+    assert t2.request.url.path.endswith("/bookings/BID/seats")
+
+
+def test_get_seatmap_raises_on_an_error_response():
+    t = RecordingTransport({"errorCode": "E1", "message": "nope"}, status=400)
+    with pytest.raises(SJAPIError):
+        _client_with(t).get_seatmap("TOKEN", "BID", "SMID")

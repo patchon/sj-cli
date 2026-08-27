@@ -1748,6 +1748,82 @@ class SJClient:
         resp = self.client.patch(url_api, json=payload, headers=headers)
         return _json_or_raise(resp)
 
+    def get_seatmap(
+        self, access_token: str, booking_id: str, seatmap_search_id: str
+    ) -> dict[str, Any]:
+        """
+        Fetches the seat map for one segment of a booking.
+
+        Works for provisional and confirmed bookings alike (the path is not
+        provisional-scoped). The id comes from the segment's
+        `seatMapSearchId`, and only when `seatMapAvailable` is true.
+
+        Args:
+            access_token: The OAuth2 access token.
+            booking_id: The booking's UUID.
+            seatmap_search_id: The segment's seatMapSearchId.
+
+        Returns:
+            The seat map: carriages/seats, seatsPossibleToSelect,
+            passengerSeats, canChangeSeat, hasDeparted.
+
+        """
+        url_api = f"{self.URL_API_BOOKING}/bookings/{booking_id}/seatmap/{seatmap_search_id}"
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": self.H_ACCEPT_JSON,
+            "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
+            "x-client-name": "sjse-booking-client",
+            "Referer": f"{self.URL_SJ}/",
+        }
+
+        logger.info(f"fetching seat map {seatmap_search_id} for booking {booking_id} ...")
+        resp = self.client.get(url_api, headers=headers)
+        return _json_or_raise(resp)
+
+    def update_seats(
+        self,
+        access_token: str,
+        booking_id: str,
+        updates: list[dict[str, Any]],
+        provisional: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Sets the seats for one or more segments of a booking.
+
+        The only difference between booking-time selection and re-seating an
+        existing booking is the path: a provisional booking is written through
+        /bookings/provisional/{id}/seats, a confirmed one through
+        /bookings/{id}/seats. Neither needs a confirm step.
+
+        Args:
+            access_token: The OAuth2 access token.
+            booking_id: The booking's UUID.
+            updates: One entry per segment — seatNumber, seatStrategy
+                ("EXACT"), direction, carriageNumber, serviceIdentifier.
+            provisional: True while the booking is still a cart.
+
+        Returns:
+            The API response: {"bookingId": ..., "booking": {...}}.
+
+        """
+        scope = "bookings/provisional" if provisional else "bookings"
+        url_api = f"{self.URL_API_BOOKING}/{scope}/{booking_id}/seats"
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
+            "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
+            "x-client-name": "sjse-booking-client",
+            "Referer": f"{self.URL_SJ}/",
+        }
+
+        logger.info(f"setting {len(updates)} seat(s) for booking {booking_id} ...")
+        resp = self.client.patch(url_api, json={"updateSegmentSeats": updates}, headers=headers)
+        return _json_or_raise(resp)
+
     def checkout_booking(self, access_token: str, booking_id: str) -> dict[str, Any]:
         """
         Proceeds to checkout, initiating payment or reservation.
