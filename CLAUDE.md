@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Python CLI tool for automated SJ (Swedish Railways) train ticket booking using travel pass benefits (e.g., SJ Annual Card). Reverse-engineers the sj.se web app's API to authenticate, search, and book journeys.
 
-- `README.md` — user-facing: setup, config, usage, how a day is booked.
+- `README.md` — user-facing, in Swedish: setup, config, usage, how a day is booked.
+- `README.en.md` — the same document in English; keep the two in sync when either changes.
 - `SPEC.md` — full specification (edge cases, error handling, CLI modes, validation rules, output format, retry and timezone rules).
 - This file — how the code is organised and how to work on it.
 
@@ -72,7 +73,7 @@ src/sj_cli/    the package (standard src layout): one module per concern (table 
 tests/                pytest suite, no network (conftest.py: autouse fixture; fakes.py: FakeClient, builders, base config)
 pyproject.toml        project metadata, dependencies, console script and the ruff/pytest/mypy configuration
 config.toml           gitignored local copy — NOT read by the tool (it reads ~/.config/sj-cli/)
-SPEC.md, README.md, CLAUDE.md, LICENSE (GNU AGPL v3 or later)
+SPEC.md, README.md (sv) + README.en.md (en), CLAUDE.md, LICENSE (GNU AGPL v3 or later)
 curl-traces/          gitignored raw HAR/curl logs from reverse-engineering (contain tokens; grep, don't commit)
 ```
 
