@@ -1,4 +1,4 @@
-"""CLI argument parsing: an explicit mode flag is required (SPEC §5.6).
+"""CLI argument parsing: an explicit mode flag is required (SPEC §5.8).
 
 Bare invocation prints help and exits 1; --dry-run is an explicit flag,
 not an implicit default.
@@ -279,16 +279,13 @@ def test_upgrade_class_validates_dates_before_anything_else(capsys):
     assert "invalid --upgrade-class" in capsys.readouterr().out
 
 
-def test_upgrade_class_requires_dry_run(capsys):
-    # The write path (actually booking an upgrade) is not implemented yet;
-    # this must fail clearly, before any auth or network call, rather than
-    # silently doing nothing.
-    with pytest.raises(SystemExit) as exc_info:
-        parse_args(["--upgrade-class", "2026-09-28"])
-    assert exc_info.value.code == 1
-    out = capsys.readouterr().out
-    assert "● --upgrade-class needs --dry-run" in out
-    assert "not implemented yet" in out
+def test_upgrade_class_runs_without_dry_run():
+    # The write path exists now: --dry-run is a modifier here, not a
+    # requirement. Its own safety gates (a terminal, one confirmation) live
+    # in handle_upgrade_class, not in the parser.
+    args = parse_args(["--upgrade-class", "2026-09-28"])
+    assert args.upgrade_class_dates == ["2026-09-28"]
+    assert args.dry_run is False
 
 
 def test_dry_run_is_allowed_with_upgrade_class():
@@ -389,7 +386,7 @@ def test_missing_config_write_failure_shows_its_own_card(tmp_path, monkeypatch, 
     assert "Permission denied" in out
 
 
-# --- exit codes after the run (SPEC §5.7) -----------------------------------
+# --- exit codes after the run (SPEC §5.9) -----------------------------------
 
 
 class _StubClient:

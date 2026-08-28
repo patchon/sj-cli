@@ -9,8 +9,9 @@ authenticate, search, pick the right departure, find the 0-price pass-holder off
 day after day, skipping weekends and Swedish red days and never double-booking a day that is
 already covered.
 
-Nothing real happens with `--dry-run` present: it previews `--book` and both cancel flags.
-A mode flag is always required — running the tool bare just prints the help.
+Nothing real happens with `--dry-run` present: it previews `--book`, both cancel flags, both
+change-seat flags and `--upgrade-class`. A mode flag is always required — running the tool bare
+just prints the help.
 
 ```
 $ sj-cli --book
@@ -166,6 +167,8 @@ sj-cli --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any cas
 sj-cli --change-seat-date 2026-09-28            # re-seat that day (configured route)
 sj-cli --change-seat-booking ZSVV7EML           # re-seat one booking, any route
 sj-cli --change-seat-date W40 --dry-run         # preview which seats it would take
+sj-cli --upgrade-class W40 --dry-run            # report which booked legs could move up to comfort_class
+sj-cli --upgrade-class 2026-09-28               # release and re-book those legs (asks once, terminal only)
 sj-cli --login                 # authenticate, cache the token, exit
 sj-cli --logout                # end the sj.se session, delete cached token + cookies
 sj-cli --login-status          # exit 0 if logged in — valid or refreshable token (scripting)
@@ -176,6 +179,23 @@ NO_COLOR=1 sj-cli --book --dry-run        # plain output (also automatic when pi
 
 Flags are mutually exclusive and one mode flag is required (a bare run prints the help and
 exits 1). Exit code 0 on success, 1 on any failure, 130 on Ctrl-C.
+
+`--upgrade-class` is the one flag that can leave you worse off than before, so it says so up front.
+SJ has no change-class operation, and the travel pass cannot hold two overlapping tickets — a
+search made *with* the pass reports every class unavailable on a departure you already hold — so an
+upgrade is a cancel followed by a purchase, in that order, with no way to keep the old ticket as a
+safety net. Each leg is first probed with a search *without* the pass, the only search that tells
+the truth about a departure you hold: it proves SJ *sells* a seat in `comfort_class`, and a leg
+with no seats is never touched. It can never prove the pass will get one for free — pass quota is a
+separate pool — so nothing is ever promised. If the offer is gone once the ticket is released, the
+run falls down the ordinary class chain; if that fails too, that leg ends **with no ticket**,
+reported per leg with the exact command that gets it back (`sj-cli --book` when the date is in your
+`dates` selection, sj.se by hand otherwise), listed again before the closing status, and exit 1.
+Passing the flag is the consent for that risk: it asks once, listing every leg it will attempt, and
+refuses to run at all when stdin is not a terminal, so cron can never release a ticket. Only the
+one journey being upgraded is cancelled — a round trip booked as one booking keeps its other leg —
+and the re-booking always takes the same departure, never the one closest to `time_leave`.
+`--dry-run` does the probing and reports what it would attempt, touching nothing.
 
 ### First login
 

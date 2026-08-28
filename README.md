@@ -24,9 +24,9 @@ så det kan logga in, söka, välja rätt avgång, hitta kortinnehavarens erbjud
 slutföra bokningen, dag efter dag — helger och svenska röda dagar hoppas över, och en dag som
 redan är bokad dubbelbokas aldrig.
 
-Med `--dry-run` händer ingenting på riktigt: flaggan förhandsvisar `--book` och båda
-avbokningsflaggorna. En lägesflagga krävs alltid — kör du verktyget utan flaggor skrivs bara
-hjälptexten ut.
+Med `--dry-run` händer ingenting på riktigt: flaggan förhandsvisar `--book`, båda
+avbokningsflaggorna, båda platsbytesflaggorna och `--upgrade-class`. En lägesflagga krävs alltid —
+kör du verktyget utan flaggor skrivs bara hjälptexten ut.
 
 ```
 $ sj-cli --book
@@ -189,6 +189,8 @@ sj-cli --cancel-booking JS3TWMF1,ABCD1234    # avboka via bokningsnummer (versal
 sj-cli --change-seat-date 2026-09-28            # byt plats den dagen (konfigurerad sträcka)
 sj-cli --change-seat-booking ZSVV7EML           # byt plats på en bokning, oavsett sträcka
 sj-cli --change-seat-date W40 --dry-run         # förhandsgranska vilka platser som skulle väljas
+sj-cli --upgrade-class W40 --dry-run            # visa vilka bokade resor som skulle kunna flyttas upp till comfort_class
+sj-cli --upgrade-class 2026-09-28               # avboka och boka om de resorna (frågar en gång, kräver terminal)
 sj-cli --login                 # logga in, cacha token, avsluta
 sj-cli --logout                # avsluta sessionen på sj.se, radera cachad token + kakor
 sj-cli --login-status          # exitkod 0 om inloggad — giltig eller förnybar token (för skript)
@@ -199,6 +201,24 @@ NO_COLOR=1 sj-cli --book --dry-run        # oformaterad utskrift (sker även aut
 
 Flaggorna utesluter varandra och en lägesflagga krävs (en körning utan flaggor skriver hjälpen och
 avslutar med 1). Exitkod 0 vid lyckad körning, 1 vid fel, 130 vid Ctrl-C.
+
+`--upgrade-class` är den enda flaggan som kan lämna dig sämre ställd än innan, och den säger det
+rakt ut. SJ har ingen funktion för att byta klass, och periodkortet kan inte hålla två biljetter
+som överlappar varandra — en sökning *med* kortet rapporterar varje klass som otillgänglig på en
+avgång du redan har bokat — så en uppgradering är en avbokning följd av ett köp, i den ordningen,
+utan något sätt att behålla den gamla biljetten som skyddsnät. Varje resa provas först med en
+sökning *utan* kortet, den enda sökning som säger sanningen om en avgång du redan sitter på: den
+visar att SJ *säljer* en plats i `comfort_class`, och en resa utan platser rörs aldrig. Den kan
+aldrig visa att kortet får en plats gratis — kortets kvot är en egen pott — så ingenting utlovas.
+Är erbjudandet borta när biljetten väl är släppt faller körningen tillbaka i den vanliga
+klasskedjan; misslyckas även den står den resan **utan biljett**, vilket rapporteras per resa med
+det exakta kommandot som tar tillbaka den (`sj-cli --book` när datumet ligger i din
+`dates`-markering, annars sj.se för hand), listas igen precis före statusraden och ger exitkod 1.
+Att skriva flaggan är samtycket till den risken: den frågar en gång och listar då varje resa den
+tänker röra, och den vägrar köra alls när stdin inte är en terminal — cron kan alltså aldrig släppa
+en biljett. Bara den resa som uppgraderas avbokas — en tur och retur bokad som en bokning behåller
+sin andra resa — och ombokningen tar alltid samma avgång, aldrig den närmast `time_leave`.
+`--dry-run` gör provningen och rapporterar vad den skulle försöka, utan att röra någonting.
 
 ### Första inloggningen
 

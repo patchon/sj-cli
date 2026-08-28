@@ -1,4 +1,4 @@
-"""--logout orchestration (SPEC §5.6): best-effort server-side end-session,
+"""--logout orchestration (SPEC §5.8): best-effort server-side end-session,
 local caches always cleared, server failure raises SJAuthError (exit 1).
 Output: trail steps (ending session, removing caches), then a bare verdict
 card — the header box is printed by the cli before handle_logout runs."""

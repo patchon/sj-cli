@@ -1,5 +1,5 @@
 """--login-status must agree with ensure_authenticated's non-interactive ladder:
-logged in = valid access token OR usable refresh token (judged offline, SPEC §5.6).
+logged in = valid access token OR usable refresh token (judged offline, SPEC §5.8).
 Output is a status card: dot + verdict, then dim-labelled facts (account,
 session horizon with relative time, token expiry — kept even when expired)."""
 
