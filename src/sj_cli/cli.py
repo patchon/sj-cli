@@ -746,7 +746,21 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         if args.list_bookings:
             print_header_box([("operation", "listing bookings"), *pass_rows])
             blank()
-            handle_list_bookings(client, access_token, active_pass, seat_details=args.seat_details)
+            # --list-bookings validates with require_search=False, so
+            # [search_parameters] (and seat_preference within it) may be
+            # absent from an otherwise-valid config — read both defensively
+            # rather than let a missing key break the listing.
+            search_params = cfg.get("search_parameters")
+            seat_preference = (
+                search_params.get("seat_preference") if isinstance(search_params, dict) else None
+            )
+            handle_list_bookings(
+                client,
+                access_token,
+                active_pass,
+                seat_details=args.seat_details,
+                seat_preference=seat_preference,
+            )
 
         elif args.cancel_date is not None:
             # Cancelling needs the route only: the config's dates selection

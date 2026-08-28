@@ -160,3 +160,121 @@ def test_the_same_map_is_fetched_once_when_two_legs_share_it():
     handle_list_bookings(c, "TOKEN", {}, seat_details=True)
 
     assert c.calls.count(("seatmap", "ID-NUM1", "SM-SHARED")) == 1
+
+
+# --- the "could take N" hint (seat_preference ranked lists only) -----------
+
+# Row 1 of a 2+1 carriage: seat 47 sits alone on one side of the aisle
+# (single, window); the assigned seat 39 (aisle) and seat 40 are the paired
+# seats on the other side, all in carriage 3 to match _segment()'s default
+# requiredProducts seat.
+_HINT_MAP_SEATS: tuple[tuple[str, list[str], bool, int, int], ...] = (
+    ("47", ["WINDOW"], True, 1, 5),
+    ("39", ["AISLE"], False, 1, 108),
+    ("40", [], True, 1, 144),
+)
+
+
+def test_seat_preference_hint_names_a_strictly_better_free_seat(capsys):
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = seatmap(free=_HINT_MAP_SEATS, assigned=("3", "39"))
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=["single", "window"])
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, backward · could take 47 · single, window" in out
+
+
+def test_seat_preference_hint_is_silent_when_current_seat_is_already_best(capsys):
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = seatmap(
+        free=(("39", ["AISLE"], True), ("47", ["WINDOW"], True)),
+        assigned=("3", "39"),
+    )
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=["aisle"])
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, forward" in out
+    assert "could take" not in out
+
+
+def test_seat_preference_hint_is_silent_when_the_only_free_seat_ranks_worse(capsys):
+    """
+    The anti-regression case: the seat the passenger already holds is not
+    itself offered as free (a real map never offers the passenger's own
+    seat back to them), so the only free candidate is a plain aisle seat —
+    worse than the window seat already assigned. A naive
+    "best_seat(...) != current" identity check would flag seat 47 as an
+    improvement simply because it differs from seat 39; ranking by
+    seats.rank must correctly say it is not.
+    """
+    c = FakeClient()
+    m = seatmap(
+        free=(("39", ["WINDOW"], True), ("47", ["AISLE"], True)),
+        assigned=("3", "39"),
+    )
+    m["seatsPossibleToSelect"]["3"] = ["47"]  # only 47 is actually offered
+    c.seatmaps["SM-D1"] = m
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=["window"])
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · window, forward" in out
+    assert "could take" not in out
+
+
+def test_seat_preference_ask_never_shows_a_hint(capsys):
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = seatmap(free=_HINT_MAP_SEATS, assigned=("3", "39"))
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference="ask")
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, backward" in out
+    assert "could take" not in out
+
+
+def test_no_seat_preference_never_shows_a_hint_and_does_not_crash(capsys):
+    # seat_preference omitted entirely, as when [search_parameters] is
+    # absent from an otherwise --list-bookings-valid config: must not crash
+    # and must not hint, even though a strictly better seat exists on this map.
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = seatmap(free=_HINT_MAP_SEATS, assigned=("3", "39"))
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True)
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, backward" in out
+    assert "could take" not in out
+
+
+def test_a_departed_segment_is_not_fetched_even_with_seat_preference(capsys):
+    c = FakeClient()
+    c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=["window"])
+
+    assert not any(call[0] == "seatmap" for call in c.calls)
+    out = capsys.readouterr().out
+    assert "seat details unavailable" not in out
+    assert "could take" not in out
+
+
+def test_a_raising_seatmap_leaves_the_plain_seat_with_seat_preference_too(capsys):
+    c = FakeClient()
+    c.seatmap_error = RuntimeError("map exploded")
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=["window"])
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39" in out
+    assert "carriage 3 seat 39 ·" not in out
+    assert "could take" not in out
+    assert "seat details unavailable for 1 leg(s)" in out

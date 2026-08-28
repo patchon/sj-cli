@@ -134,6 +134,13 @@ was assigned instead of choosing it, e.g. `carriage 3 seat 34 · single, window,
 It costs one extra request per not-yet-departed leg, so it is opt-in; a leg whose seat map cannot
 be read just keeps its plain `carriage N seat M` cell.
 
+When `seat_preference` is a ranked word list, `--seat-details` also names a strictly better free
+seat, when one exists, right after the assigned one: `carriage 3 seat 19 · aisle, backward ·
+could take 47 · single, window, forward` — an easy way to see which tickets are worth re-seating
+with `--change-seat-date`/`--change-seat-booking`. The hint needs a wish list to judge "better"
+against, so it stays silent under `seat_preference = "ask"` and when the key is absent — there is
+no basis for a comparison either way.
+
 Every field is validated before any network call, and all problems are reported at once. Valid
 stations are the ones in `STATION_MAP` in `src/sj_cli/client.py` (Stockholm, Linköping, Göteborg, Malmö,
 Uppsala, Lund — "Central"/"C" spellings, case-insensitive). A config still using the old
@@ -148,7 +155,8 @@ sj-cli --book --dry-run        # preview: show what would be booked, without boo
 sj-cli --book                  # book for real
 sj-cli --list-bookings         # active bookings as one card per travel day
 sj-cli --list-bookings --seat-details   # same, plus each leg's seat (window/aisle/table/solo/
-                                #   single/forward/backward) — one extra request per not-yet-departed leg
+                                #   single/forward/backward) — one extra request per not-yet-departed leg;
+                                #   also names a better free seat when seat_preference is a wish list
 sj-cli --list-travelpasses     # passes with validity, days left and price
 sj-cli --cancel-date 2026-09-16                # cancel that day's journeys on the configured route (other days of a booking are kept)
 sj-cli --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
