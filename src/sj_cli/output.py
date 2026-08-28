@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from sj_cli.dates import parse_api_datetime, sweden_now, to_sweden
+from sj_cli.seats import Seat, seat_words
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,19 @@ def ask(text: str) -> str:
     return reply
 
 
+def ask_optional(text: str) -> str | None:
+    """Like ask(), but None on EOF — the caller can tell Ctrl-D from an empty line."""
+    prompt(text)
+    try:
+        reply = input()
+    except EOFError:
+        print()
+        return None
+    if not sys.stdin.isatty():
+        print()  # close the prompt line when input wasn't echoed
+    return reply
+
+
 def print_header_box(rows: list[tuple[str, str]]) -> None:
     """
     Rounded header banner opening every pass-scoped mode.
@@ -415,6 +429,27 @@ def print_leg_lines(rows: list[dict]) -> None:
     """Print leg lines at the current indent (used inside a day card)."""
     for line in leg_lines(rows):
         _emit(line)
+
+
+def print_seat_choices(seats: list[Seat], comfort: str = "") -> None:
+    """
+    List the free seats to choose from: a dim header, then three per line.
+
+    Grouped by carriage, each seat as 'number words' in the config
+    vocabulary, so what the user types at the prompt is what is shown here.
+    """
+    by_carriage: dict[str, list[Seat]] = {}
+    for seat in seats:
+        by_carriage.setdefault(seat["carriage"], []).append(seat)
+
+    for carriage, group in by_carriage.items():
+        parts = [f"{s['number']} {', '.join(seat_words(s))}" for s in group]
+        header = f"free in carriage {carriage}"
+        if comfort:
+            header += f" · {comfort}"
+        pdim(f"{header} · {len(group)} seats")
+        for i in range(0, len(parts), 3):
+            pdim("  " + "   ".join(pad(p, 26) for p in parts[i : i + 3]).rstrip())
 
 
 def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:

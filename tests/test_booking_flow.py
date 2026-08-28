@@ -649,3 +649,73 @@ def test_a_wish_that_cannot_be_met_is_reported(capsys):
     cfg["search_parameters"]["seat_preference"] = ["window"]
     run_range(c, cfg, dry_run=False)
     assert "! outbound: no window seat free, taking carriage 3 seat 17" in capsys.readouterr().out
+
+
+# --- seat_preference = "ask" -------------------------------------------------
+
+
+def test_ask_mode_prompts_per_leg_and_takes_the_answer(monkeypatch):
+    from sj_cli import booking
+
+    answers = iter(["70", ""])
+    monkeypatch.setattr(booking, "ask_optional", lambda _: next(answers))
+    monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
+
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = "ask"
+    run_range(c, cfg, dry_run=False)
+
+    # outbound took 70; the empty answer kept the return leg's seat
+    assert [u["seatNumber"] for _, updates, _ in c.seat_updates for u in updates] == ["70"]
+
+
+def test_ask_mode_re_asks_an_unlisted_seat(monkeypatch):
+    from sj_cli import booking
+
+    answers = iter(["999", "70", ""])
+    monkeypatch.setattr(booking, "ask_optional", lambda _: next(answers))
+    monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
+
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = "ask"
+    run_range(c, cfg, dry_run=False)
+    assert [u["seatNumber"] for _, updates, _ in c.seat_updates for u in updates] == ["70"]
+
+
+def test_ask_mode_stops_prompting_after_eof(monkeypatch):
+    from sj_cli import booking
+
+    calls = []
+
+    def _eof(text):
+        calls.append(text)
+
+    monkeypatch.setattr(booking, "ask_optional", _eof)
+    monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
+
+    # Two booking days (both weekdays, Sep 2026 has no red days) so the run
+    # covers four legs in total: only the very first prompt should fire.
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    cfg = base_cfg(dates="2026-09-01..2026-09-02")
+    cfg["search_parameters"]["seat_preference"] = "ask"
+    run_range(c, cfg, dry_run=False)
+    assert len(calls) == 1  # asked once, then gave up for the whole run
+    assert not c.seat_updates
+
+
+def test_ask_mode_without_a_terminal_warns_once_and_keeps_the_seats(capsys, monkeypatch):
+    from sj_cli import booking
+
+    monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: False)
+    # Multi-day run: the module-level flag must silence every later leg, not
+    # just the ones on day one, or a long run would print the warning again
+    # and again for no reason.
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    cfg = base_cfg(dates="2026-09-01..2026-09-02")
+    cfg["search_parameters"]["seat_preference"] = "ask"
+    run_range(c, cfg, dry_run=False)
+    out = capsys.readouterr().out
+    assert out.count("! seat selection needs a terminal") == 1
+    assert not c.seat_updates
