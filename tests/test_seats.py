@@ -1,4 +1,5 @@
 from sj_cli.seats import (
+    assigned_seat_words,
     best_seat,
     current_seat,
     describe_seat,
@@ -229,3 +230,19 @@ def test_current_seat_with_no_assigned_seat_returns_none_none():
 def test_seat_words_skips_unknown_property_code():
     m = seatmap([("14", ["WINDOW", "SOME_UNKNOWN_CODE"], True)], selectable=["14"])
     assert seat_words(free_seats(m)[0]) == ["window", "forward"]
+
+
+def test_assigned_seat_words_orders_like_seat_words():
+    assert assigned_seat_words(["IDR", "TABLE", "WINDOW"]) == ["table", "window", "forward"]
+    assert assigned_seat_words(["ODR", "AISLE"]) == ["aisle", "backward"]
+
+
+def test_assigned_seat_words_skips_seat_std_and_unknown_codes():
+    assert assigned_seat_words(["SEAT_STD"]) == []
+    assert assigned_seat_words(["SOME_UNKNOWN_CODE"]) == []
+    assert assigned_seat_words([]) == []
+    assert assigned_seat_words(["SEAT_STD", "WINDOW", "SOME_UNKNOWN_CODE"]) == ["window"]
+
+
+def test_assigned_seat_words_with_no_direction_code_omits_direction():
+    assert assigned_seat_words(["TABLE"]) == ["table"]

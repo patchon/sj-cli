@@ -45,6 +45,7 @@ def offers(*, calm_price=0, second_price=0, first_price=None, flex="FULLFLEX", a
 def seatmap(
     free=(("70", ["TABLE", "WINDOW"], True),),
     assigned=("3", "39"),
+    assigned_codes=None,
     can_change=True,
     carriage="3",
     comforts=("SECOND_CALM",),
@@ -55,7 +56,10 @@ def seatmap(
 
     extra adds further carriages as (carriage number, free, comforts) tuples —
     seat numbers repeat across carriages on a real map, so tests that care
-    about the pair need more than one.
+    about the pair need more than one. assigned_codes, when given, puts
+    carriageSeatProperties on the assigned (passengerSeats[0]) entry — for
+    --seat-details, which reads that seat's own codes rather than joining it
+    against the carriage the way free_seats() does.
     """
 
     def _carriage(number, seats, carriage_comforts):
@@ -74,16 +78,17 @@ def seatmap(
         }
 
     carriages = [(carriage, free, comforts), *extra]
+    assigned_seat = {
+        "carriageNumber": assigned[0],
+        "seatNumber": assigned[1],
+        "inventoryClass": "SECOND_CALM",
+    }
+    if assigned_codes is not None:
+        assigned_seat["carriageSeatProperties"] = [{"code": c} for c in assigned_codes]
     return {
         "carriages": [_carriage(*c) for c in carriages],
         "seatsPossibleToSelect": {c: [n for n, _, _ in seats] for c, seats, _ in carriages},
-        "passengerSeats": [
-            {
-                "carriageNumber": assigned[0],
-                "seatNumber": assigned[1],
-                "inventoryClass": "SECOND_CALM",
-            }
-        ],
+        "passengerSeats": [assigned_seat],
         "canChangeSeat": can_change,
         "hasDeparted": False,
     }

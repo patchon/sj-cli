@@ -237,11 +237,46 @@ def carriage_comfort(seatmap: dict[str, Any], carriage: str) -> str:
 
 _WORD_BY_CODE = {code: word for word, code in SEAT_WORDS.items() if code}
 
+# The seat map does not carry IDR/ODR on `carriages[].seats[]` (free_seats()
+# computes forward/backward from the reversed flags instead), but it does put
+# one of the two directly on `passengerSeats[0].carriageSeatProperties` — the
+# one seat that map is scoped to. assigned_seat_words() reads it from there.
+_DIRECTION_WORD_BY_CODE = {"IDR": "forward", "ODR": "backward"}
+
 
 def seat_words(seat: Seat) -> list[str]:
     """A seat's properties as config vocabulary, for display. Unknown codes are skipped."""
     words = sorted({_WORD_BY_CODE[c] for c in seat["codes"] if c in _WORD_BY_CODE})
     return [*words, "forward" if seat["forward"] else "backward"]
+
+
+def assigned_seat_words(codes: list[str]) -> list[str]:
+    """
+    Display words for an assigned seat's property codes, for --seat-details.
+
+    Reuses SEAT_WORDS as the vocabulary (WINDOW, AISLE, TABLE, SOLO,
+    EASY_ACCESS, WITHOUT_ANIMALS) plus the two direction codes a seat map
+    gives directly for the assigned seat (IDR -> forward, ODR -> backward;
+    see the module note above). SEAT_STD ("standard seat" — no information)
+    and any code this tool has no word for are skipped. Ordered exactly like
+    seat_words() — alphabetical, direction last — so a free seat's rendering
+    and an assigned seat's rendering never disagree.
+
+    Args:
+        codes: property codes as given by the seat map, e.g.
+            ["IDR", "TABLE", "WINDOW"].
+
+    Returns:
+        Vocabulary words, e.g. ["table", "window", "forward"]. Empty when no
+        code is recognised (including an all-unknown or empty input).
+
+    """
+    words = sorted({_WORD_BY_CODE[c] for c in codes if c in _WORD_BY_CODE})
+    for code in codes:
+        if code in _DIRECTION_WORD_BY_CODE:
+            words.append(_DIRECTION_WORD_BY_CODE[code])
+            break
+    return words
 
 
 def describe_seat(seat: Seat) -> str:

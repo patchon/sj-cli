@@ -68,6 +68,26 @@ def test_dry_run_rejected_for_modes_with_nothing_to_preview(capsys):
     )
 
 
+def test_seat_details_is_a_modifier_not_an_operation(capsys):
+    # bare --seat-details: no operation given
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--seat-details"])
+    assert exc_info.value.code == 1
+    assert "no operation given" in capsys.readouterr().err
+    # composes with --list-bookings
+    args = parse_args(["--list-bookings", "--seat-details"])
+    assert args.list_bookings is True and args.seat_details is True
+    assert parse_args(["--list-bookings"]).seat_details is False
+
+
+def test_seat_details_rejected_for_modes_other_than_list_bookings(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--book", "--seat-details"])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "● --seat-details only applies to --list-bookings" in err
+
+
 def test_book_flag_parses():
     args = parse_args(["--book"])
     assert args.book is True
@@ -551,6 +571,20 @@ def test_listing_modes_never_prompt_for_a_pass(tmp_path, monkeypatch, capsys):
     cli._run(parse_args(["--list-travelpasses"]), TwoPasses())
     out = capsys.readouterr().out
     assert "● 2 travel pass(es)" in out and "select pass" not in out
+
+
+def test_seat_details_flag_is_passed_through_to_handle_list_bookings(tmp_path, monkeypatch):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    captured: dict = {}
+
+    def fake_list_bookings(*_a, seat_details=False, **_k):
+        captured["seat_details"] = seat_details
+
+    monkeypatch.setattr(cli, "handle_list_bookings", fake_list_bookings)
+    cli._run(parse_args(["--list-bookings", "--seat-details"]), _StubClient())
+    assert captured["seat_details"] is True
+    cli._run(parse_args(["--list-bookings"]), _StubClient())
+    assert captured["seat_details"] is False
 
 
 def test_list_travelpasses_shows_expired_passes_instead_of_failing(tmp_path, monkeypatch, capsys):

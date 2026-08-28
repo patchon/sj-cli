@@ -122,6 +122,11 @@ A preference is never a guarantee: when nothing matches, the best remaining seat
 taken anyway and a `!` line names the wish it missed. The seat SJ picked is kept only
 when no seat is free to move to.
 
+`--list-bookings --seat-details` reads the same vocabulary the other way round: it shows what
+was assigned instead of choosing it, e.g. `carriage 3 seat 34 · window, table, forward`. It costs
+one extra request per not-yet-departed leg, so it is opt-in; a leg whose seat map cannot be read
+just keeps its plain `carriage N seat M` cell.
+
 Every field is validated before any network call, and all problems are reported at once. Valid
 stations are the ones in `STATION_MAP` in `src/sj_cli/client.py` (Stockholm, Linköping, Göteborg, Malmö,
 Uppsala, Lund — "Central"/"C" spellings, case-insensitive). A config still using the old
@@ -135,6 +140,8 @@ source venv/bin/activate
 sj-cli --book --dry-run        # preview: show what would be booked, without booking
 sj-cli --book                  # book for real
 sj-cli --list-bookings         # active bookings as one card per travel day
+sj-cli --list-bookings --seat-details   # same, plus each leg's seat (window/aisle/table/forward/
+                                #   backward) — one extra request per not-yet-departed leg
 sj-cli --list-travelpasses     # passes with validity, days left and price
 sj-cli --cancel-date 2026-09-16                # cancel that day's journeys on the configured route (other days of a booking are kept)
 sj-cli --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma list and/or inclusive ranges
