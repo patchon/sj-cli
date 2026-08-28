@@ -3,6 +3,7 @@
 import logging
 import sys
 import time
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -932,6 +933,20 @@ def _segment_label(segment: dict, segments: list[dict]) -> str:
     return label.strip()
 
 
+def _train_label(segment: dict, segments: list[dict]) -> str:
+    """
+    Name a leg by its train, for bookings we did not create.
+
+    `direction` is only meaningful within one booking: a return trip booked on
+    its own is `OUTBOUND` too, so labelling an existing booking's legs by it
+    prints "outbound" over a Stockholm → Linköping card. The day card already
+    names the route, so the useful thing to add is which train it is.
+    """
+    name = segment.get("publicServiceName") or segment.get("serviceName") or ""
+    brand = segment.get("serviceBrandNameDescription") or ""
+    return f"{brand} {name}".strip() or _segment_label(segment, segments)
+
+
 def _seats_locked(seatmap: dict) -> bool:
     """
     Whether this seat map refuses a change.
@@ -1044,6 +1059,7 @@ def _apply_seat_preference(
     booking: dict,
     preference: list[str] | str,
     provisional: bool = True,
+    label_fn: Callable[[dict, list[dict]], str] = _segment_label,
 ) -> tuple[dict, int]:
     """
     Choose seats for every segment of a booking and write them in one PATCH.
@@ -1063,6 +1079,9 @@ def _apply_seat_preference(
             Ctrl-D) degrades to keeping whatever seat SJ assigned.
         provisional: True while the booking is still a cart (the default,
             used by --book); False once it is confirmed.
+        label_fn: How to name a leg in messages. Defaults to outbound/return,
+            which is only meaningful inside a booking we created; the
+            change-seat modes pass `_train_label` instead.
 
     Returns:
         (booking, seats_changed) — the updated booking when a PATCH
@@ -1076,7 +1095,7 @@ def _apply_seat_preference(
     ]
     updates = []
     for segment in segments:
-        label = _segment_label(segment, segments)
+        label = label_fn(segment, segments)
         search_id = segment.get("seatMapSearchId")
         if not (segment.get("seatMapAvailable") and search_id):
             logger.info(f"no seat map for {label}")
@@ -2198,6 +2217,7 @@ def _preview_seats(
     booking_id: str,
     booking: dict,
     preference: list[str] | str,
+    label_fn: Callable[[dict, list[dict]], str] = _train_label,
 ) -> None:
     """
     Dry-run seat preview: report what --change-seat would do, without writing.
@@ -2211,7 +2231,7 @@ def _preview_seats(
         seg for journey in booking.get("journeys") or [] for seg in journey.get("segments") or []
     ]
     for segment in segments:
-        label = _segment_label(segment, segments)
+        label = label_fn(segment, segments)
         search_id = segment.get("seatMapSearchId")
         if not (segment.get("seatMapAvailable") and search_id):
             logger.info(f"no seat map for {label}")
@@ -2380,7 +2400,7 @@ def handle_change_seat(
             for seg in scoped:
                 row = _segment_to_display_row(seg, booking_number, now)
                 if row["past"] == "Y":
-                    pdim(f"{_segment_label(seg, all_segs)}: already departed, skipped")
+                    pdim(f"{_train_label(seg, all_segs)}: already departed, skipped")
                     continue
                 workable.append(seg)
 
@@ -2401,6 +2421,7 @@ def handle_change_seat(
                         target_booking,
                         preference,
                         provisional=False,
+                        label_fn=_train_label,
                     )
                     if changed:
                         seats_changed_total += changed
