@@ -42,25 +42,48 @@ def offers(*, calm_price=0, second_price=0, first_price=None, flex="FULLFLEX", a
     return {"seatOffers": {"offers": out}}
 
 
-def seatmap(free=(("70", ["TABLE", "WINDOW"], True),), assigned=("3", "39"), can_change=True):
-    """Seat map fixture: free is [(seat number, property codes, reversed)]."""
+def seatmap(
+    free=(("70", ["TABLE", "WINDOW"], True),),
+    assigned=("3", "39"),
+    can_change=True,
+    carriage="3",
+    comforts=("SECOND_CALM",),
+    extra=(),
+):
+    """
+    Seat map fixture: free is [(seat number, property codes, reversed)].
+
+    extra adds further carriages as (carriage number, free, comforts) tuples —
+    seat numbers repeat across carriages on a real map, so tests that care
+    about the pair need more than one.
+    """
+
+    def _carriage(number, seats, carriage_comforts):
+        return {
+            "carriageNumber": number,
+            "reversed": True,
+            "carriageComforts": list(carriage_comforts),
+            "seats": [
+                {
+                    "seatNumber": n,
+                    "reversed": rev,
+                    "carriageSeatProperties": [{"code": c} for c in codes],
+                }
+                for n, codes, rev in seats
+            ],
+        }
+
+    carriages = [(carriage, free, comforts), *extra]
     return {
-        "carriages": [
+        "carriages": [_carriage(*c) for c in carriages],
+        "seatsPossibleToSelect": {c: [n for n, _, _ in seats] for c, seats, _ in carriages},
+        "passengerSeats": [
             {
-                "carriageNumber": "3",
-                "reversed": True,
-                "seats": [
-                    {
-                        "seatNumber": n,
-                        "reversed": rev,
-                        "carriageSeatProperties": [{"code": c} for c in codes],
-                    }
-                    for n, codes, rev in free
-                ],
+                "carriageNumber": assigned[0],
+                "seatNumber": assigned[1],
+                "inventoryClass": "SECOND_CALM",
             }
         ],
-        "seatsPossibleToSelect": {"3": [n for n, _, _ in free]},
-        "passengerSeats": [{"carriageNumber": assigned[0], "seatNumber": assigned[1]}],
         "canChangeSeat": can_change,
         "hasDeparted": False,
     }
@@ -186,18 +209,37 @@ class FakeClient:
         self.calls.append(("seatmap", booking_id, seatmap_search_id))
         if self.seatmap_error:
             raise self.seatmap_error
-        return self.seatmaps.get(seatmap_search_id, seatmap())
+        if seatmap_search_id in self.seatmaps:
+            return self.seatmaps[seatmap_search_id]
+        # Only the ids this fake's own segments carry get the default map: an
+        # unknown id (None included) means the caller skipped the
+        # seatMapAvailable/seatMapSearchId gate, and must not be handed a map.
+        if seatmap_search_id in ("SM-OUTBOUND", "SM-INBOUND"):
+            return seatmap()
+        raise AssertionError(f"no seat map exists for {seatmap_search_id!r}")
+
+    def _listed_booking(self, booking_id):
+        """A booking from bookings_list by id — the change-seat modes' targets."""
+        for item in self.bookings_list:
+            booking = item.get("booking") or {}
+            if booking_id in (item.get("bookingId"), booking.get("bookingId")):
+                return booking
+        return {}
 
     def update_seats(self, token, booking_id, updates, provisional=True):
         self.calls.append(("seats", booking_id, provisional))
         self.seat_updates.append((booking_id, updates, provisional))
         if self.seat_update_error:
             raise self.seat_update_error
-        booking = self._bookings.get(booking_id, {})
+        booking = self._bookings.get(booking_id) or self._listed_booking(booking_id)
         for update in updates:
             for journey in booking.get("journeys") or []:
                 for seg in journey.get("segments") or []:
+                    # Direction alone is not a segment id: a booking can hold
+                    # the same direction on several days.
                     if seg.get("direction") != update["direction"]:
+                        continue
+                    if seg.get("serviceIdentifier") != update["serviceIdentifier"]:
                         continue
                     for product in seg.get("requiredProducts") or []:
                         product["seat"] = {

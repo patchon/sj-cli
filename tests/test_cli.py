@@ -400,6 +400,28 @@ def test_cancel_booking_exit_code_follows_the_outcome(tmp_path, monkeypatch, ok,
         assert exc.value.code == code
 
 
+def test_change_seat_date_needs_the_route_config(tmp_path, monkeypatch, capsys):
+    # --change-seat-date matches bookings against the configured route, so the
+    # route keys are as required as they are for --book: without them
+    # handle_change_seat would die on params["station_from"] mid-run.
+    from sj_cli import cli
+    from sj_cli.config import CfgManager
+    from sj_cli.tokens import TokenManager
+
+    (tmp_path / "config.toml").write_text(
+        '[auth]\nemail = "a@b.se"\npassword = "x"\n\n[search_parameters]\nseat_preference = "ask"\n'
+    )
+    monkeypatch.setattr(cli, "CfgManager", lambda: CfgManager(tmp_path / "config.toml"))
+    monkeypatch.setattr(cli, "TokenManager", lambda: TokenManager(tmp_path / "token.json"))
+
+    with pytest.raises(SystemExit) as exc:
+        cli._run(parse_args(["--change-seat-date", "2026-09-28"]), _NoCallClient())
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "● invalid configuration" in out
+    assert "station_from" in out
+
+
 # --- no hidden flag prefixes ------------------------------------------------
 
 

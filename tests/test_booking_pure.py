@@ -334,3 +334,23 @@ def test_run_outcome_is_green_only_when_the_run_booked_something():
     # red: a failure outranks everything, dry run included
     assert _run_outcome({"days": 2, "booked": 1, "failed": 1}, dry_run=False) is False
     assert _run_outcome({"days": 1, "error": 1}, dry_run=True) is False
+
+
+def test_segment_label_names_the_return_leg_and_disambiguates_a_change():
+    from sj_cli.booking import _segment_label
+
+    out = {"direction": "OUTBOUND", "publicServiceName": "520"}
+    ret = {"direction": "INBOUND", "publicServiceName": "543"}
+    assert _segment_label(out, [out, ret]) == "outbound"
+    assert _segment_label(ret, [out, ret]) == "return"
+
+    # a leg with a change runs two segments in one direction: the train number
+    # is what tells the two prompts and warnings apart
+    first = {"direction": "OUTBOUND", "publicServiceName": "520"}
+    second = {"direction": "OUTBOUND", "serviceName": "1064"}
+    assert _segment_label(first, [first, second]) == "outbound 520"
+    assert _segment_label(second, [first, second]) == "outbound 1064"
+
+    # neither name given: the label must not end in a stray space
+    bare = {"direction": "INBOUND"}
+    assert _segment_label(bare, [bare, dict(bare)]) == "return"

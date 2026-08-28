@@ -612,6 +612,46 @@ def test_a_seat_failure_still_books_the_day(capsys):
     assert "✓ checking out booking" in out
 
 
+def test_a_rejected_seat_patch_still_books_the_day(capsys):
+    """The headline invariant: a seat is never worth a booking."""
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    c.seat_update_error = SJAPIError("seat 70 is taken")
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+    counts = run_range(c, cfg, dry_run=False)
+
+    assert counts["booked"] == 1  # the day still counts as booked
+    assert c.seat_updates  # the PATCH was attempted...
+    out = capsys.readouterr().out
+    assert "! seats not changed: seat 70 is taken" in out  # ...and only warned about
+    assert "✓ checking out booking" in out  # checkout ran regardless
+
+
+def test_a_leg_without_a_seat_map_is_never_fetched():
+    """seatMapAvailable / seatMapSearchId gate: no id, no call, no PATCH."""
+    from sj_cli.booking import _apply_seat_preference
+
+    c = FakeClient()
+    booking = {
+        "journeys": [
+            {
+                "segments": [
+                    # the API says this leg has no map, id or not
+                    {
+                        "direction": "OUTBOUND",
+                        "seatMapAvailable": False,
+                        "seatMapSearchId": "SM-OUTBOUND",
+                    },
+                    # available, but no id to fetch it with
+                    {"direction": "INBOUND", "seatMapAvailable": True},
+                ]
+            }
+        ]
+    }
+    assert _apply_seat_preference(c, "tok", "UUID-1", booking, ["window"]) == (booking, 0)
+    assert not c.calls
+
+
 def test_dry_run_never_reads_a_seat_map():
     c = FakeClient({"OUT": OUT, "IN": IN})
     cfg = base_cfg()
@@ -668,6 +708,61 @@ def test_ask_mode_prompts_per_leg_and_takes_the_answer(monkeypatch):
 
     # outbound took 70; the empty answer kept the return leg's seat
     assert [u["seatNumber"] for _, updates, _ in c.seat_updates for u in updates] == ["70"]
+
+
+def test_an_unnormalised_ask_still_prompts(monkeypatch):
+    """A string preference is "ask", never a wish list to iterate letter by letter."""
+    from sj_cli import booking
+
+    prompts = []
+
+    def _ask(text):
+        prompts.append(text)
+        return ""  # keep the seat SJ assigned
+
+    monkeypatch.setattr(booking, "ask_optional", _ask)
+    monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
+
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = "  ASK  "  # as an unvalidated config would
+    run_range(c, cfg, dry_run=False)
+
+    assert len(prompts) == 2  # asked for both legs
+    assert not c.seat_updates  # and booked nothing behind the user's back
+
+
+def test_ask_mode_shows_the_carriage_and_takes_a_qualified_answer(monkeypatch, capsys):
+    """Seat numbers repeat across carriages, so a bare number can be ambiguous."""
+    from sj_cli import booking
+
+    m = seatmap(
+        free=(("31", ["WINDOW"], True),),
+        assigned=("3", "50"),
+        extra=[("4", (("31", ["AISLE"], True),), ("SECOND",))],
+    )
+    answers = iter(["31", "4-31"])
+    monkeypatch.setattr(booking, "ask_optional", lambda _: next(answers))
+    monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
+
+    seat = booking._ask_for_seat(m, "outbound")
+    assert (seat["carriage"], seat["number"]) == ("4", "31")  # the qualified answer won
+    out = capsys.readouterr().out
+    assert "! seat 31 is in carriages 3, 4, answer like 3-31" in out
+    # the comfort comes from each carriage's carriageComforts, not a made-up field
+    assert "free in carriage 3 · 2 class calm · 1 seat" in out
+    assert "free in carriage 4 · 2 class · 1 seat" in out
+
+
+def test_ask_mode_prompt_defaults_to_the_current_carriage_and_seat(monkeypatch):
+    from sj_cli import booking
+
+    prompts = []
+    monkeypatch.setattr(booking, "ask_optional", lambda text: prompts.append(text) or "")
+    monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
+
+    booking._ask_for_seat(seatmap(assigned=("3", "50")), "outbound")
+    assert prompts == ["outbound seat [3-50]: "]
 
 
 def test_ask_mode_re_asks_an_unlisted_seat(monkeypatch):
