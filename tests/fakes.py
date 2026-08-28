@@ -144,6 +144,9 @@ class FakeClient:
         self.seatmap_error: Exception | None = None
         self.seat_update_error: Exception | None = None
         self.bookings_list: list[dict] = []
+        self.cancel_payloads: list[tuple] = []  # (booking_id, payload) per PATCH
+        self.cancel_error: Exception | None = None
+        self.finalize_error: Exception | None = None
         # One entry per search_journey call, in order — the upgrade-class probe's
         # whole point is that this must be None (a pass-free search); tests assert
         # against it directly rather than digging through .calls' plain tuples.
@@ -232,6 +235,19 @@ class FakeClient:
         if not self.checkout_ok:
             raise RuntimeError("checkout exploded")
         return {}
+
+    def cancel_booking_with_patch(self, token, booking_id, segments_and_passengers):
+        # Recorded before the error hook fires: the request is what the test
+        # is judging, and a failing PATCH still had a payload.
+        self.calls.append(("cancel", booking_id))
+        self.cancel_payloads.append((booking_id, segments_and_passengers))
+        if self.cancel_error:
+            raise self.cancel_error
+
+    def finalize_cancellation(self, token, booking_id):
+        self.calls.append(("finalize", booking_id))
+        if self.finalize_error:
+            raise self.finalize_error
 
     def get_bookings(self, token, start_date, end_date, page=0):
         self.calls.append(("bookings", start_date, end_date))

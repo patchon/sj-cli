@@ -156,7 +156,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Preview modifier for --book, --cancel-date, --cancel-booking, "
             "--change-seat-date, --change-seat-booking and --upgrade-class: show what "
-            "would happen without doing any of it. Required for --upgrade-class."
+            "would happen without doing any of it."
         ),
     )
     parser.add_argument(
@@ -204,10 +204,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--upgrade-class",
         metavar="DATES",
         help=(
-            "Report which legs on the configured route, for one or more dates (same date "
-            "grammar as --cancel-date), are in a fallback comfort class and could plausibly "
-            "be upgraded to comfort_class. Read-only: requires --dry-run (the write path is "
-            "not implemented yet)."
+            "Upgrade legs on the configured route, for one or more dates (same date grammar "
+            "as --cancel-date), from a fallback comfort class to comfort_class: each ticket "
+            "is cancelled and the same departure re-booked, so a leg can end up with no "
+            "ticket. Asks once before writing anything and only runs at a terminal; "
+            "--dry-run reports what it would attempt without touching a booking."
         ),
     )
     group.add_argument(
@@ -289,13 +290,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.upgrade_class_dates, errors = parse_cancel_dates(args.upgrade_class)
         if errors:
             print_status_card(False, "invalid --upgrade-class", lines=errors)
-            sys.exit(1)
-        if not args.dry_run:
-            print_status_card(
-                False,
-                "--upgrade-class needs --dry-run",
-                lines=["the write path is not implemented yet; only the preview exists so far"],
-            )
             sys.exit(1)
 
     return args
@@ -748,8 +742,13 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         return
 
     # Pick the pass: --book needs the product (the one covering its window,
-    # or a choice at the terminal); the other modes only a date range.
+    # or a choice at the terminal); the other modes only a date range. A real
+    # --upgrade-class run buys tickets too, so it names its own window — the
+    # dates it was given — and gets the pass that covers them.
     window = booking_window(cfg["search_parameters"]) if args.book else None
+    if args.upgrade_class is not None and args.upgrade_class_dates:
+        upgrade_days = [date.fromisoformat(d) for d in args.upgrade_class_dates]
+        window = (min(upgrade_days), max(upgrade_days))
     active_pass = resolve_travel_pass(travel_passes, for_dates=window, choose=args.book)
     tp_product_id: str = active_pass.get("travelPassId", "")
 
@@ -848,11 +847,17 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 sys.exit(1)
 
         elif args.upgrade_class is not None:
-            operation = ("dry run · " if args.dry_run else "") + "checking class upgrades"
+            operation = "dry run · checking class upgrades" if args.dry_run else "upgrading class"
             print_header_box([("operation", operation), *pass_rows])
             blank()
             if not handle_upgrade_class(
-                client, access_token, cfg, dates=args.upgrade_class_dates, dry_run=args.dry_run
+                client,
+                access_token,
+                cfg,
+                dates=args.upgrade_class_dates,
+                dry_run=args.dry_run,
+                tp_product_id=tp_product_id,
+                tp_token_id=tp_token_id,
             ):
                 print()
                 sys.exit(1)
@@ -899,7 +904,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 bookings_list,
                 dry_run=args.dry_run,
             )
-            # SPEC §5.7: a checkout failure or an error on any day is a failure
+            # SPEC §5.9: a checkout failure or an error on any day is a failure
             if counts.get("failed") or counts.get("error"):
                 print()
                 sys.exit(1)

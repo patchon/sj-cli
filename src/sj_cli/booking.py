@@ -17,11 +17,12 @@ from sj_cli.dates import (
     sweden_now,
     to_sweden,
 )
-from sj_cli.errors import SJAuthError, error_text
+from sj_cli.errors import SJAuthError, SJConfigError, error_text
 from sj_cli.output import (
     ask,
     ask_optional,
     blank,
+    day_header,
     format_class_name,
     format_duration,
     indented,
@@ -570,6 +571,23 @@ def is_stale_provisional(booking: dict) -> bool:
 def _booking_id(item: dict, booking: dict) -> str:
     """The id the booking endpoints take: the listing wrapper's first, then the object's."""
     return str(item.get("bookingId") or booking.get("bookingId") or booking.get("id") or "")
+
+
+def _passenger_ids(segment: dict, journey: dict) -> list[str]:
+    """
+    The passenger ids a cancel payload needs for one segment.
+
+    Passengers hang off the segment on some bookings and off the journey on
+    others; when neither carries one, SJ's own default id is the only thing
+    left to send (a payload without passengers cancels nothing).
+    """
+    passengers = segment.get("passengers") or journey.get("passengers") or []
+    ids = [
+        p.get("id") or p.get("passengerId")
+        for p in passengers
+        if p.get("id") or p.get("passengerId")
+    ]
+    return ids or ["passenger_1"]
 
 
 def is_active_booking(booking: dict) -> bool:
@@ -1725,7 +1743,7 @@ def process_date_range(
         The day counts behind the summary line: "days" plus any of "booked",
         "partial", "unavailable", "failed" (checkout failed), "error" (an
         exception while processing the day), "already", "skipped". The
-        caller maps "failed"/"error" to exit code 1 (SPEC §5.7).
+        caller maps "failed"/"error" to exit code 1 (SPEC §5.9).
 
     """
     _reset_seat_prompts()  # a fresh run always starts willing to ask
@@ -2046,19 +2064,10 @@ def handle_cancel_booking(
 
             # Collect cancellation metadata for future segments
             if cancellable:
-                passengers = seg.get("passengers") or journey.get("passengers") or []
-                passenger_ids = [
-                    p.get("id") or p.get("passengerId")
-                    for p in passengers
-                    if p.get("id") or p.get("passengerId")
-                ]
-                if not passenger_ids:
-                    passenger_ids = ["passenger_1"]
-
                 segments_to_cancel.append(
                     {
                         "serviceIdentifier": service_id,
-                        "passengerIds": passenger_ids,
+                        "passengerIds": _passenger_ids(seg, journey),
                         "_row": row,
                     }
                 )
@@ -2448,18 +2457,26 @@ def handle_change_seat(
     return ok
 
 
-# --- upgrade-class (read-only preview; the write path is a later change) ----
+# --- upgrade-class (release a leg's ticket, then re-book it in the wanted class) ---
 #
 # A journey search made WITH the travel pass returns every class
 # `unavailable` for any departure that overlaps a booking the account
 # already holds (SJ's UI calls this "Samtidigt som annan bokning") and gives
 # no reason for it — `unavailableReasons` is `[]` whether the departure is
 # free or blocked. The same departure searched WITHOUT a travel pass id
-# shows the truth, so that is the only search this feature can use. A
+# shows the truth, so that is the only search the probe can use. A
 # pass-free search only proves seats exist (SJ sells them); it cannot prove
 # the pass would claim one for free — that is a separate quota — so the
 # report says "no seats" with certainty and "seats exist" as a maybe, never
 # a promise.
+#
+# Because the pass cannot hold two overlapping tickets, an upgrade is not a
+# change: it is a release followed by a purchase, in that order, with no way
+# to keep the old ticket as a safety net. Everything below exists to keep
+# that window as small and as visible as possible — the probe refuses to
+# release a ticket there is nothing to move to, one confirmation covers the
+# whole run, each cancel is followed immediately by its own re-book, and a
+# leg that ends with nothing says so twice and sets the exit code.
 
 
 def _leg_comfort_code(segment: dict, booking: dict) -> str | None:
@@ -2492,15 +2509,16 @@ def _leg_comfort_code(segment: dict, booking: dict) -> str | None:
 
 def _match_departure(departures: list[dict], segment: dict) -> dict | None:
     """
-    The departure in a pass-free search that is the same one already booked.
+    The departure in a search that is the same one already booked.
 
     Matched on departure time and, where both sides carry one, the train
     identifier (publicServiceName/serviceName): a day can have several
     departures close together, and picking the one closest to time_leave
-    instead (select_best_departure's job elsewhere) would silently report a
-    different train's availability under this leg. When more than one
-    departure shares the exact minute and the train id cannot disambiguate
-    them, this gives up rather than guess.
+    instead (select_best_departure's job elsewhere) would report a
+    different train's availability under this leg — and, on the write path,
+    silently move the traveller to a train they did not book. When more
+    than one departure shares the exact minute and the train id cannot
+    disambiguate them, this gives up rather than guess.
     """
     target_minutes = get_departure_time_minutes(segment)
     if target_minutes == -1:
@@ -2600,50 +2618,313 @@ def _probe_upgrade(
     return _class_has_seats(offer_response, wanted_code)
 
 
+def _leg_recovery(params: dict, date_str: str) -> str:
+    """
+    What to run to get a ticket back for a leg this run left without one.
+
+    `--book` only ever books the days its own `dates` selection names, and
+    only those it does not skip as a weekend or a red day, so it is honest
+    advice for exactly those days; for anything else the only way back is
+    sj.se by hand, and saying `--book` there would be a lie the traveller
+    only discovers at the station.
+    """
+    manual = "book it again on sj.se by hand"
+    try:
+        day = date.fromisoformat(date_str)
+    except ValueError:
+        return manual
+    try:
+        selection = selected_dates(params)
+    except SJConfigError:  # no dates key, or one that no longer parses
+        selection = []
+    if day not in selection:
+        return f"{manual} ({date_str} is outside the config's dates selection)"
+    reason = skip_reason(day, params.get("skip_weekends", True), params.get("skip_holidays", True))
+    if reason:
+        return f"{manual} (--book skips {date_str}: {reason})"
+    return "run: sj-cli --book"
+
+
+def _release_leg(client: SJClient, access_token: str, target: dict) -> str | None:
+    """
+    Cancel exactly the one journey being upgraded, keeping the booking's others.
+
+    The payload carries a single serviceIdentifier on purpose: a roundtrip
+    booked as one booking must keep its other journey, so this can never be
+    a whole-booking cancel.
+
+    Returns:
+        None when the journey is released and the cancellation confirmed;
+        otherwise the outcome to report — "cancel_failed" (nothing was
+        sent through, the ticket is intact) or "pending" (the PATCH landed
+        but the confirmation did not, so the booking is left in a pending
+        cancellation only the user can resolve).
+
+    """
+    booking_id = target["booking_id"]
+    booking_number = target["booking_number"]
+    payload = [
+        {
+            "serviceIdentifier": target["segment"].get("serviceIdentifier"),
+            "passengerIds": _passenger_ids(target["segment"], target["journey"]),
+        }
+    ]
+    initiated = False
+    try:
+        with spinner(f"releasing this journey from booking {booking_number}"):
+            client.cancel_booking_with_patch(access_token, booking_id, payload)
+            initiated = True
+            client.finalize_cancellation(access_token, booking_id)
+    except Exception as e:
+        logger.error(f"upgrade: releasing {booking_number} failed: {e}")
+        if initiated:
+            pwarn(f"cancellation started but not confirmed: {error_text(e)}")
+            pdim(
+                f"booking {booking_number} is left in a pending cancellation · "
+                f"resolve it with: sj-cli --cancel-booking {booking_number}"
+            )
+            return "pending"
+        pwarn(f"could not release the ticket: {error_text(e)}")
+        pdim("the ticket is untouched, so nothing was booked either")
+        return "cancel_failed"
+    return None
+
+
+def _rebook_released_leg(
+    client: SJClient,
+    access_token: str,
+    cfg: dict,
+    segment: dict,
+    tp_product_id: str,
+    tp_token_id: str,
+    service_types: list[str] | None,
+) -> dict | None:
+    """
+    Buy the pass ticket for the very departure `segment` was just released from.
+
+    Searches WITH the travel pass this time (the point of the whole
+    exercise is a 0-price pass offer) and re-finds the same departure with
+    _match_departure — never the one closest to `time_leave`, which would
+    move the traveller to another train. From there it is the ordinary
+    booking sequence (handle_booking_process): provisional → seats →
+    customer + checkout.
+
+    Returns:
+        {"booking_id", "booking_number", "class", "booking", "checked_out"}
+        when a provisional was created (checked_out says whether it became
+        a real ticket); None when there was nothing to book — no search id,
+        the departure was gone, no 0-price offer, or no booking came back.
+
+    """
+    params = cfg["search_parameters"]
+    dep_name = (segment.get("departureStation") or {}).get("name") or ""
+    arr_name = (segment.get("arrivalStation") or {}).get("name") or ""
+    date_str = _segment_date(segment.get("departureDateTime", ""))
+
+    with spinner("searching the same departure with the travel pass"):
+        search_resp = client.search_journey(
+            access_token, dep_name, arr_name, date_str, None, tp_product_id, service_types
+        )
+        search_id = search_resp.get("departureSearchId")
+        passenger_token = search_resp.get("passengerListId") or tp_token_id
+        departures = _poll_departures(client, access_token, search_id) if search_id else []
+        departure = _match_departure(departures, segment)
+
+    departure_id = (departure or {}).get("departureId")
+    if not departure_id:
+        pwarn("the travel pass search no longer shows this departure")
+        return None
+
+    with spinner("checking the travel pass offer"):
+        offer_response = client.get_offers(access_token, departure_id, passenger_token)
+    offer_result = find_offer_id(
+        offer_response,
+        params["comfort_class"],
+        params.get("flexibility", "FULLFLEX"),
+        params.get("allow_class_fallback", True),
+    )
+    if not offer_result:
+        pwarn("the travel pass has no offer left on this departure")
+        return None
+    offer_id, matched_class = offer_result
+
+    with spinner(f"booking {matched_class}"):
+        b_resp = client.create_provisional_booking(access_token, offer_id, passenger_token)
+    booking_id, booking_number, booking = _booking_from_response(b_resp)
+    if not booking_id:
+        logger.error("upgrade: the API returned no booking id for the new provisional")
+        pwarn("the new booking could not be created")
+        return None
+
+    # Seats while it is still a cart, exactly as --book does: a seat is
+    # never worth losing the ticket over, so this never raises.
+    preference = params.get("seat_preference")
+    if preference:
+        booking, _ = _apply_seat_preference(
+            client, access_token, booking_id, booking, preference, provisional=True
+        )
+
+    checked_out = True
+    try:
+        # The API already put the holder's contact details on the provisional;
+        # send those back rather than invent a number. None = leave it as is.
+        phone = (booking.get("customer") or {}).get("phoneNumber") or next(
+            (p.get("phoneNumber") for p in booking.get("passengers") or [] if p.get("phoneNumber")),
+            None,
+        )
+        with spinner(f"checking out booking {booking_number or booking_id}"):
+            client.update_booking_customer(access_token, booking_id, cfg["auth"]["email"], phone)
+            client.checkout_booking(access_token, booking_id)
+    except Exception as e:
+        logger.error(f"upgrade: checkout failed for booking {booking_id}: {e}")
+        pwarn(f"checkout failed: {error_text(e)}")
+        checked_out = False
+
+    return {
+        "booking_id": booking_id,
+        "booking_number": booking_number,
+        "class": matched_class,
+        "booking": booking,
+        "checked_out": checked_out,
+    }
+
+
+def _upgrade_one_leg(
+    client: SJClient,
+    access_token: str,
+    cfg: dict,
+    target: dict,
+    wanted_code: str,
+    tp_product_id: str,
+    tp_token_id: str,
+    service_types: list[str] | None,
+) -> str:
+    """
+    Release one booked leg and immediately buy the wanted class on the same departure.
+
+    The two halves are deliberately glued together: nothing else happens
+    between the cancel and the re-book, so the window in which the
+    traveller holds no ticket is one search plus one booking call wide. A
+    failure to release stops there and leaves the ticket alone; anything
+    after it can only be reported, since the old ticket is already gone.
+
+    Returns:
+        "upgraded" (the wanted class was booked), "fallback" (a ticket was
+        booked, but in a lower class than asked for), "cancel_failed"
+        (nothing was released, ticket intact), "pending" (released but not
+        confirmed, needs the user) or "lost" (released and nothing booked
+        back — this leg now has no ticket).
+
+    """
+    params = cfg["search_parameters"]
+    segment = target["segment"]
+
+    failed = _release_leg(client, access_token, target)
+    if failed:
+        return failed
+
+    try:
+        booked = _rebook_released_leg(
+            client, access_token, cfg, segment, tp_product_id, tp_token_id, service_types
+        )
+    except Exception as e:
+        # The old ticket is already gone: an exception here must still end in
+        # a report, never in an unwound run that says nothing about this leg.
+        logger.error(f"upgrade: re-booking {target['booking_number']} failed: {e}")
+        pwarn(f"re-booking failed: {error_text(e)}")
+        booked = None
+
+    if booked is None or not booked["checked_out"]:
+        # The loud line first: a provisional left behind is a detail next to
+        # the fact that this leg is now unticketed.
+        pwarn("no ticket for this leg: the old one is cancelled and nothing was booked back")
+        if booked is not None:
+            pdim("a provisional booking is left behind; the next --book run cleans it up")
+        pdim(f"recover: {_leg_recovery(params, target['date'])}")
+        return "lost"
+
+    number = booked["booking_number"]
+    got_code = COMFORT_CODES.get(booked["class"])
+    if got_code == wanted_code:
+        pinfo(f"upgraded to {booked['class']} · new booking {number}")
+    elif got_code == target["code"]:
+        pwarn(f"no gain: re-booked in {booked['class']} again · new booking {number}")
+    else:
+        pwarn(f"fell back to {booked['class']} · new booking {number}")
+    try:
+        print_leg_lines(_booked_rows(booked["booking"], number))
+    except Exception as e:  # a rendering slip must not turn a booked leg into a crash
+        logger.error(f"upgrade: could not render booking {number}: {e}")
+        pwarn(f"booked as {number}, but the leg could not be shown ({error_text(e)})")
+    return "upgraded" if got_code == wanted_code else "fallback"
+
+
 def handle_upgrade_class(
     client: SJClient,
     access_token: str,
     cfg: dict,
     dates: list[str],
     dry_run: bool = True,
+    tp_product_id: str = "",
+    tp_token_id: str = "",
 ) -> bool:
     """
-    Report which legs on the configured route, in a fallback class, could plausibly be upgraded.
+    Move booked legs on the configured route from a fallback class into comfort_class.
 
-    Read-only in every mode: this only searches (without the travel pass)
-    and reads offers — it never books, cancels, changes a seat, or writes
-    anything else. Actually attempting an upgrade is not implemented yet,
-    hence the dry_run gate below; a later change adds it.
+    Two phases. The first is read-only and runs in both modes: every active
+    booking with a future leg on the configured route inside `dates` is
+    looked at, a leg already in comfort_class needs nothing and prints no
+    card (it is only counted), and a leg in a fallback class is probed on a
+    pass-free search (_probe_upgrade) and reported as worth trying (SJ
+    sells a seat there) or not possible (no seats at all). `--dry-run`
+    stops here.
 
-    For every active booking with a future leg on the configured route
-    inside `dates`: a leg already in comfort_class needs nothing and prints
-    no card (it is only counted). A leg in a fallback class is probed on
-    the pass-free search for comfort_class (_probe_upgrade) and reported as
-    worth trying (SJ sells a seat there) or not possible (no seats at all).
+    The second phase only runs without `--dry-run`, only at a terminal, and
+    only after one confirmation covering every leg it lists: for each leg
+    the ticket is cancelled and the same departure re-booked with the pass
+    immediately afterwards (_upgrade_one_leg). Passing the flag is the
+    consent for that gamble — the probe can prove seats exist, never that
+    the pass will get one, so a leg can end with no ticket at all. That
+    outcome is reported per leg with the command that gets it back, listed
+    again before the closing status, and exits non-zero.
 
     Args:
         client: The SJ HTTP client.
         access_token: Valid access token.
         cfg: The full config dict.
         dates: Swedish dates (YYYY-MM-DD) to check.
-        dry_run: Must be True — the write path does not exist yet.
+        dry_run: True previews; False performs the upgrades.
+        tp_product_id: Travel pass product ID (the re-book searches with it).
+        tp_token_id: Travel pass token ID, the passenger-token fallback.
 
     Returns:
-        True when the run completed, whether or not anything needed
-        upgrading, and even when nothing matched the dates at all (that is
-        reported, not a failure); False when dry_run is False, or a probe
-        raised while checking a leg.
+        True when the run completed without a leg being harmed, whether or
+        not anything needed or got upgraded, and even when nothing matched
+        the dates at all (that is reported, not a failure); False when a
+        probe raised, the confirmation was declined, there was no terminal
+        to ask at, or any leg ended cancelled, unconfirmed or unticketed.
 
     """
-    if not dry_run:
-        pstatus(False, "--upgrade-class can only preview for now — pass --dry-run")
-        return False
-
     params = cfg["search_parameters"]
     wanted_class = params["comfort_class"]
     wanted_code = COMFORT_CODES.get(wanted_class)
     if wanted_code is None:
         pstatus(False, f"unknown comfort_class {wanted_class!r}")
+        return False
+
+    # Never unattended. The real run releases tickets it may not get back,
+    # so it must be able to ask first — a cron job or a pipe is refused here,
+    # before a single request, rather than after the first cancel.
+    if not dry_run and not sys.stdin.isatty():
+        pwarn("upgrading cancels each ticket before re-booking it, so it needs a terminal to ask")
+        pstatus(False, "not a terminal · use --dry-run to see what it would attempt")
+        return False
+
+    # Without the pass product id the re-book searches as an anonymous
+    # customer and can never find a 0-price offer, so releasing a ticket
+    # could only lose it. Refuse before anything is touched.
+    if not dry_run and not tp_product_id:
+        pstatus(False, "no travel pass to re-book with · nothing was touched")
         return False
 
     origin_name = params["station_from"]
@@ -2659,6 +2940,7 @@ def handle_upgrade_class(
     any_target = False
     not_in_class = 0
     worth_trying = 0
+    candidates: list[dict] = []
 
     for day in dates:
         with spinner(f"fetching bookings for {day}", trail=False):
@@ -2668,7 +2950,7 @@ def handle_upgrade_class(
         # yet departed — same journey-then-segment scoping as
         # handle_change_seat's date path, so a booking spanning other days
         # only contributes the day being processed right now.
-        legs: list[tuple[dict, dict]] = []
+        legs: list[dict] = []
         for item in day_bookings:
             booking = item.get("booking") or {}
             if not is_active_booking(booking):
@@ -2683,40 +2965,51 @@ def handle_upgrade_class(
                     row = _segment_to_display_row(seg, booking.get("bookingNumber") or "", now)
                     if row["date"] != day or row["past"] == "Y":
                         continue
-                    legs.append((booking, seg))
+                    legs.append(
+                        {
+                            "date": day,
+                            "booking": booking,
+                            "booking_id": _booking_id(item, booking),
+                            "booking_number": booking.get("bookingNumber") or "—",
+                            "journey": journey,
+                            "segment": seg,
+                        }
+                    )
 
         if not legs:
             continue
         any_target = True
 
-        to_check: list[tuple[dict, dict, str | None]] = []
-        for booking, seg in legs:
-            code = _leg_comfort_code(seg, booking)
+        to_check = []
+        for leg in legs:
+            code = _leg_comfort_code(leg["segment"], leg["booking"])
             if code == wanted_code:
                 continue  # already the wanted class: nothing to upgrade
-            to_check.append((booking, seg, code))
+            leg["code"] = code
+            leg["held_name"] = COMFORT_NAMES.get(code or "", "an unknown class")
+            to_check.append(leg)
 
         if not to_check:
             continue
-        to_check.sort(key=lambda t: t[1].get("departureDateTime") or "")
+        to_check.sort(key=lambda leg: leg["segment"].get("departureDateTime") or "")
 
-        print_day_header(day, _route_label([seg for _, seg, _ in to_check]))
+        print_day_header(day, _route_label([leg["segment"] for leg in to_check]))
         with indented():
-            for booking, seg, code in to_check:
+            for leg in to_check:
                 not_in_class += 1
-                booking_number = booking.get("bookingNumber") or "—"
+                seg = leg["segment"]
                 all_segs = [
-                    s for j in booking.get("journeys") or [] for s in j.get("segments") or []
+                    s for j in leg["booking"].get("journeys") or [] for s in j.get("segments") or []
                 ]
-                held_name = COMFORT_NAMES.get(code or "", "an unknown class")
-                pinfo(f"{_train_label(seg, all_segs)} · {booking_number} · holds {held_name}")
+                leg["label"] = _train_label(seg, all_segs)
+                pinfo(f"{leg['label']} · {leg['booking_number']} · holds {leg['held_name']}")
                 with indented():
                     try:
                         purchasable = _probe_upgrade(
                             client, access_token, seg, wanted_code, service_types
                         )
                     except Exception as e:
-                        logger.warning(f"upgrade probe failed for {booking_number}: {e}")
+                        logger.warning(f"upgrade probe failed for {leg['booking_number']}: {e}")
                         pwarn(f"{wanted_class}: could not check ({error_text(e)})")
                         ok = False
                         continue
@@ -2724,14 +3017,22 @@ def handle_upgrade_class(
                         pwarn(
                             f"{wanted_class}: could not find this departure in a pass-free search"
                         )
-                    elif purchasable:
-                        worth_trying += 1
-                        pinfo(
-                            f"{wanted_class}: seats exist (SJ sells them) "
-                            "— an upgrade may be possible"
-                        )
-                    else:
+                        continue
+                    if not purchasable:
                         pdim(f"{wanted_class}: no seats on this departure")
+                        continue
+                    worth_trying += 1
+                    pinfo(
+                        f"{wanted_class}: seats exist (SJ sells them) — an upgrade may be possible"
+                    )
+                    if dry_run:
+                        continue
+                    if not seg.get("serviceIdentifier"):
+                        # Nothing to put in a cancel payload: the ticket
+                        # cannot be released, so it is left exactly as it is.
+                        pwarn("this leg carries no journey id, so it cannot be released")
+                        continue
+                    candidates.append(leg)
         blank()
 
     if not any_target:
@@ -2740,10 +3041,96 @@ def handle_upgrade_class(
         )
         return ok
 
-    pstatus(
-        None,
-        f"dry run · {not_in_class} leg(s) not in {wanted_class} · {worth_trying} worth trying",
+    if dry_run:
+        pstatus(
+            None,
+            f"dry run · {not_in_class} leg(s) not in {wanted_class} · {worth_trying} worth trying",
+        )
+        return ok
+
+    if not candidates:
+        pstatus(None, f"{not_in_class} leg(s) not in {wanted_class} · none can be upgraded now")
+        return ok
+
+    # One confirmation for the whole run: every leg it will touch, named the
+    # way the cards name it, and the honest warning above the question.
+    pinfo(f"{len(candidates)} leg(s) to upgrade to {wanted_class}:")
+    with indented():
+        for leg in candidates:
+            pinfo(
+                day_header(
+                    leg["date"],
+                    f"{leg['label']} · {leg['booking_number']} · holds {leg['held_name']}",
+                )
+            )
+    blank()
+    pwarn(
+        "each ticket is cancelled before the new one is searched · if the pass gets no offer "
+        "after that, the leg ends with no ticket"
     )
+    if not _confirm(
+        f"upgrade {len(candidates)} leg(s) to {wanted_class}, cancelling each ticket first? [y/n]: "
+    ):
+        blank()
+        pstatus(False, "upgrade aborted, nothing was cancelled")
+        return False
+    blank()
+
+    outcomes: list[str] = []
+    last_day = ""
+    for leg in candidates:
+        if leg["date"] != last_day:
+            if last_day:
+                blank()
+            last_day = leg["date"]
+            same_day = [x["segment"] for x in candidates if x["date"] == last_day]
+            print_day_header(last_day, _route_label(same_day))
+        with indented():
+            pinfo(f"{leg['label']} · {leg['booking_number']} · holds {leg['held_name']}")
+            with indented():
+                outcomes.append(
+                    _upgrade_one_leg(
+                        client,
+                        access_token,
+                        cfg,
+                        leg,
+                        wanted_code,
+                        tp_product_id,
+                        tp_token_id,
+                        service_types,
+                    )
+                )
+    blank()
+
+    lost = [leg for leg, outcome in zip(candidates, outcomes, strict=True) if outcome == "lost"]
+    if lost:
+        # Said once per leg already; said again here because this is the one
+        # thing in the whole tool the user must not scroll past.
+        pwarn(f"{len(lost)} leg(s) now have no ticket:")
+        with indented():
+            for leg in lost:
+                pinfo(day_header(leg["date"], f"{leg['label']} · was {leg['booking_number']}"))
+                with indented():
+                    pdim(f"recover: {_leg_recovery(params, leg['date'])}")
+        blank()
+
+    counts = {name: outcomes.count(name) for name in set(outcomes)}
+    parts = [f"{len(outcomes)} leg(s) attempted"]
+    for name, text in (
+        ("upgraded", f"upgraded to {wanted_class}"),
+        ("fallback", "re-booked in a lower class"),
+        ("cancel_failed", "left untouched"),
+        ("pending", "left in a pending cancellation"),
+        ("lost", "left with no ticket"),
+    ):
+        if counts.get(name):
+            parts.append(f"{counts[name]} {text}")
+    harmed = counts.get("lost", 0) + counts.get("pending", 0) + counts.get("cancel_failed", 0)
+    ok = ok and not harmed
+    # Tri-state as everywhere else: red on any harm, green when a ticket was
+    # actually bought, dim when the run was clean but bought nothing.
+    changed = bool(counts.get("upgraded") or counts.get("fallback"))
+    pstatus(False if not ok else (True if changed else None), " · ".join(parts))
     return ok
 
 
