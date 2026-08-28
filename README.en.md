@@ -118,8 +118,9 @@ outweighs every later one combined — `["window", "table"]` takes a plain windo
 over an aisle seat at a table. Words: `window`, `aisle`, `table`, `solo`,
 `easy access`, `no animals`, `forward`, `backward`. Set it to `"ask"` to be prompted
 for every leg instead (needs a terminal), or omit the key and SJ assigns the seat.
-A preference is never a guarantee: when nothing matches, the seat SJ picked is kept
-and a `!` line says so.
+A preference is never a guarantee: when nothing matches, the best remaining seat is
+taken anyway and a `!` line names the wish it missed. The seat SJ picked is kept only
+when no seat is free to move to.
 
 Every field is validated before any network call, and all problems are reported at once. Valid
 stations are the ones in `STATION_MAP` in `src/sj_cli/client.py` (Stockholm, Linköping, Göteborg, Malmö,

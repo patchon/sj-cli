@@ -140,7 +140,9 @@ vanlig fönsterplats framför en gångplats vid bord. Ord: `window` (fönster), 
 `no animals` (djurfritt), `forward` (med färdriktningen), `backward` (mot
 färdriktningen). Sätt den till `"ask"` för att bli tillfrågad om varje resa (kräver en
 terminal), eller utelämna nyckeln så väljer SJ plats åt dig. En önskan är aldrig en
-garanti: när ingen plats matchar behålls platsen SJ valde och en `!`-rad säger till.
+garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en `!`-rad
+namnger önskemålet som inte kunde uppfyllas. Platsen SJ valde behålls bara när det
+inte finns någon ledig plats att byta till.
 
 Varje fält valideras innan något nätverksanrop görs, och alla problem rapporteras på en gång.
 Giltiga stationer är de som finns i `STATION_MAP` i `src/sj_cli/client.py` (Stockholm, Linköping,
