@@ -130,7 +130,17 @@ book_partial = false                 # valfri: boka hemresan ensam om utresan in
 skip_weekends = true                 # valfri
 skip_holidays = true                 # valfri: svenska röda dagar inkl. midsommar-, jul- och nyårsafton
 service_types = ["SJ_HIGH", "SJ_IC"] # valfritt filter på tågtyp; utelämna eller ["ALL"] för inget
+seat_preference = ["window", "table", "forward"]  # valfritt; eller "ask" för att bli tillfrågad
 ```
+
+`seat_preference` är en rangordnad önskelista: den bästa lediga platsen vinner, och ett
+tidigare ord väger tyngre än alla senare tillsammans — `["window", "table"]` väljer en
+vanlig fönsterplats framför en gångplats vid bord. Ord: `window` (fönster), `aisle`
+(gång), `table` (bord), `solo` (singelplats), `easy access` (lättåtkomlig),
+`no animals` (djurfritt), `forward` (med färdriktningen), `backward` (mot
+färdriktningen). Sätt den till `"ask"` för att bli tillfrågad om varje resa (kräver en
+terminal), eller utelämna nyckeln så väljer SJ plats åt dig. En önskan är aldrig en
+garanti: när ingen plats matchar behålls platsen SJ valde och en `!`-rad säger till.
 
 Varje fält valideras innan något nätverksanrop görs, och alla problem rapporteras på en gång.
 Giltiga stationer är de som finns i `STATION_MAP` i `src/sj_cli/client.py` (Stockholm, Linköping,
@@ -152,6 +162,9 @@ sj-cli --cancel-date 2026-09-16,2026-09-21..2026-09-25   # flera datum: kommalis
 sj-cli --cancel-date W43                       # en hel ISO-vecka (samma grammatik som dates)
 sj-cli --cancel-booking JS3TWMF1 --dry-run     # förhandsvisa en avbokning: rutor + vad som skulle avbokas, inga frågor
 sj-cli --cancel-booking JS3TWMF1,ABCD1234    # avboka via bokningsnummer (versaler spelar ingen roll)
+sj-cli --change-seat-date 2026-09-28            # byt plats den dagen (konfigurerad sträcka)
+sj-cli --change-seat-booking ZSVV7EML           # byt plats på en bokning, oavsett sträcka
+sj-cli --change-seat-date W40 --dry-run         # förhandsgranska vilka platser som skulle väljas
 sj-cli --login                 # logga in, cacha token, avsluta
 sj-cli --logout                # avsluta sessionen på sj.se, radera cachad token + kakor
 sj-cli --login-status          # exitkod 0 om inloggad — giltig eller förnybar token (för skript)
@@ -198,7 +211,7 @@ engelska).
 
 ```bash
 ./venv/bin/pip install -e . --group dev   # en gång: projektet + pytest, ruff, mypy
-./venv/bin/pytest                         # ~250 tester, <1 s, utan nätverk (skriptad fejkklient)
+./venv/bin/pytest                         # ~320 tester, <1 s, utan nätverk (skriptad fejkklient)
 ./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatering
 ./venv/bin/mypy                           # typkontroll
 ```
