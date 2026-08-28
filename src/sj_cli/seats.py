@@ -246,6 +246,42 @@ def number_key(value: str) -> tuple[int, int, str]:
     return (1, 0, value)
 
 
+def rank(
+    seat: Seat, wishes: list[str]
+) -> tuple[list[bool], tuple[int, int, str], tuple[int, int, str]]:
+    """
+    The sort key `best_seat` picks by, exposed so callers can compare seats.
+
+    Ranking is lexicographic: an earlier wish outweighs every later wish
+    combined, so ["window", "table"] ranks a plain window seat ahead of an
+    aisle seat at a table. Ties break on lowest carriage, then lowest seat
+    number, which keeps the choice deterministic.
+
+    Lower sorts better — compare two seats' ranks with `<` to ask "is the
+    first strictly better than the second?" This is the only correct way to
+    ask that: `best_seat` is best-effort and returns the lowest-numbered free
+    seat even when it satisfies no wish at all, so comparing seat identities
+    (`best_seat(...) != current`) instead of ranks would flag a seat as an
+    improvement when it is merely a different, equally-unsatisfying one — or
+    even a worse one the current seat outranks.
+
+    Args:
+        seat: the seat to rank.
+        wishes: vocabulary words in priority order, as returned by
+            `parse_preference` (empty list is fine — every seat ties on
+            wishes and the order falls back to carriage/seat number alone).
+
+    Returns:
+        A key comparable with `<`/`<=`/etc.
+
+    """
+    return (
+        [not satisfies(seat, w) for w in wishes],
+        number_key(seat["carriage"]),
+        number_key(seat["number"]),
+    )
+
+
 def best_seat(seatmap: dict[str, Any], wishes: list[str]) -> Seat | None:
     """
     The best free seat for a ranked wish list, or None when none is selectable.
@@ -262,22 +298,14 @@ def best_seat(seatmap: dict[str, Any], wishes: list[str]) -> Seat | None:
         the top tie-broken seat rather than None — None means only that the
         map has nothing selectable at all.
 
-    Ranking is lexicographic: an earlier wish outweighs every later wish
-    combined, so ["window", "table"] takes a plain window seat over an aisle
-    seat at a table. Ties break on lowest carriage, then lowest seat number,
-    which keeps the choice deterministic.
+    Ranking is `rank()`, so a listing that wants to know whether some other
+    seat outranks the one a passenger already holds can use the exact same
+    comparison this uses to choose one.
     """
     seats = free_seats(seatmap)
     if not seats:
         return None
-    return min(
-        seats,
-        key=lambda s: (
-            [not satisfies(s, w) for w in wishes],
-            number_key(s["carriage"]),
-            number_key(s["number"]),
-        ),
-    )
+    return min(seats, key=lambda s: rank(s, wishes))
 
 
 def current_seat(seatmap: dict[str, Any]) -> tuple[str | None, str | None]:

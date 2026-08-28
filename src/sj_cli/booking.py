@@ -48,6 +48,7 @@ from sj_cli.seats import (
     describe_seat,
     free_seats,
     number_key,
+    rank,
     satisfies,
     seat_words,
 )
@@ -2473,15 +2474,56 @@ def _assigned_seat_details(seatmap: dict) -> list[str]:
     return assigned_seat_words(codes)
 
 
+def _seat_hint(current: Seat | None, seatmap: dict, wishes: list[str]) -> str:
+    """
+    ' · could take <n> · <words>' when a strictly better free seat exists.
+
+    Compares by `seats.rank` — the exact lexicographic ranking `best_seat`
+    uses to choose a seat for --book/--change-seat — never by seat identity.
+    `best_seat` is deliberately best-effort: it returns the lowest-numbered
+    free seat even when nothing free satisfies any wish, so a naive
+    "best_seat(...) != current" test would advertise a seat that is no
+    improvement, or even one the current seat outranks. Comparing ranks is
+    the only way to answer "is there a seat strictly better than this one?".
+
+    Args:
+        current: The passenger's assigned seat, as `assigned_seat()` returns
+            it — or None when it could not be located in the carriage layout
+            (an unfamiliar map shape), in which case there is nothing to
+            compare it against and this reports no hint.
+        seatmap: The API's seat-map response for the same segment, for
+            `best_seat` to search.
+        wishes: `seat_preference` as a ranked wish list. Callers must only
+            reach this when the preference is a word list — "ask" and an
+            absent preference give no basis to judge "better" and must never
+            call this.
+
+    Returns:
+        The suffix to append to the seat cell, or "" when there is no
+        assigned seat to compare, nothing is free to move to, or the best
+        free seat does not outrank what is already assigned.
+
+    """
+    if current is None:
+        return ""
+    candidate = best_seat(seatmap, wishes)
+    if candidate is None or rank(candidate, wishes) >= rank(current, wishes):
+        return ""
+    return f" · could take {candidate['number']} · {', '.join(seat_words(candidate))}"
+
+
 def _add_seat_details(
     client: SJClient,
     access_token: str,
     tasks: list[tuple[dict, str, str]],
+    seat_preference: list[str] | str | None = None,
 ) -> None:
     """
     Fetch each eligible segment's seat map once and append its characteristics.
 
-    Appends " · <words>" to that row's seat cell, for --seat-details.
+    Appends " · <words>" to that row's seat cell, for --seat-details, plus
+    " · could take <n> · <words>" (see _seat_hint) when seat_preference is a
+    ranked wish list and a strictly better free seat exists.
 
     Args:
         client: The SJ HTTP client.
@@ -2490,6 +2532,10 @@ def _add_seat_details(
             for a seat-map fetch (see handle_list_bookings). Fetches are
             cached by (booking_id, seatMapSearchId) so a map shared by two
             legs is only fetched once.
+        seat_preference: The `seat_preference` config value. The hint is
+            computed only when this is a word list — "ask" and None (absent,
+            or [search_parameters] missing entirely) give no basis to judge
+            "better", so no hint is ever shown for them.
 
     A map that will not load, an empty passengerSeats, or no recognisable
     property code all leave the row's plain seat cell untouched — a seat
@@ -2498,6 +2544,7 @@ def _add_seat_details(
     not one per leg.
 
     """
+    wishes = seat_preference if isinstance(seat_preference, list) else None
     cache: dict[tuple[str, str], dict | None] = {}
     failures = 0
     with spinner("fetching seat details", trail=False):
@@ -2510,11 +2557,15 @@ def _add_seat_details(
                     logger.warning(f"seat map failed for booking {booking_id}: {e}")
                     cache[key] = None
             seatmap = cache[key]
-            words = _assigned_seat_details(seatmap) if seatmap is not None else []
+            if seatmap is None:
+                failures += 1
+                continue
+            words = _assigned_seat_details(seatmap)
             if not words:
                 failures += 1
                 continue
-            row["seat"] = f"{row['seat']} · {', '.join(words)}"
+            hint = _seat_hint(assigned_seat(seatmap), seatmap, wishes) if wishes is not None else ""
+            row["seat"] = f"{row['seat']} · {', '.join(words)}{hint}"
 
     if failures:
         pwarn(f"seat details unavailable for {failures} leg(s)")
@@ -2525,6 +2576,7 @@ def handle_list_bookings(
     access_token: str,
     travel_pass: dict,
     seat_details: bool = False,
+    seat_preference: list[str] | str | None = None,
 ) -> None:
     """
     Fetch and display all active bookings per SPEC §5.4 (the caller prints the title).
@@ -2537,6 +2589,11 @@ def handle_list_bookings(
             segment that has one and append its seat's characteristics
             (window, aisle, table, forward/backward) to the seat cell — one
             extra request per eligible leg (see _add_seat_details).
+        seat_preference: The `seat_preference` config value ("ask", a ranked
+            word list, or None when absent/not configured). Only with
+            seat_details=True and a word list does a leg with a strictly
+            better free seat get a "could take N · <words>" hint appended
+            (see _seat_hint) — "ask" and an absent preference never show one.
 
     """
     b_start, b_end = booking_date_range(travel_pass)
@@ -2574,7 +2631,7 @@ def handle_list_bookings(
         return
 
     if seat_tasks:
-        _add_seat_details(client, access_token, seat_tasks)
+        _add_seat_details(client, access_token, seat_tasks, seat_preference)
 
     # Sort by date, then departure time
     display_rows.sort(key=lambda r: r.pop("_sort_key", ""))

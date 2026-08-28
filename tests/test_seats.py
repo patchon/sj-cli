@@ -7,6 +7,7 @@ from sj_cli.seats import (
     describe_seat,
     free_seats,
     parse_preference,
+    rank,
     satisfies,
     seat_words,
 )
@@ -287,6 +288,31 @@ def test_best_seat_honours_direction_wishes():
 
 def test_best_seat_returns_none_when_nothing_is_selectable():
     assert best_seat(seatmap([("14", ["WINDOW"], True)], selectable=[]), ["window"]) is None
+
+
+def test_rank_puts_an_earlier_wish_ahead_of_every_later_wish_combined():
+    # A seat satisfying only the earlier wish ("window") must outrank one
+    # satisfying every wish that comes after it ("aisle", "table") — the same
+    # rule best_seat's docstring promises, pinned directly against rank().
+    m = seatmap(
+        [("14", ["WINDOW"], True), ("69", ["AISLE", "TABLE"], True)],
+        selectable=["14", "69"],
+    )
+    seats = {s["number"]: s for s in free_seats(m)}
+    wishes = ["window", "aisle", "table"]
+    assert rank(seats["14"], wishes) < rank(seats["69"], wishes)
+
+
+def test_rank_is_what_best_seat_minimises():
+    m = seatmap(
+        [("70", ["TABLE", "WINDOW"], True), ("9", ["TABLE", "WINDOW"], True)],
+        selectable=["70", "9"],
+    )
+    seats = free_seats(m)
+    wishes = ["window"]
+    best = best_seat(m, wishes)
+    assert best is not None
+    assert all(rank(best, wishes) <= rank(s, wishes) for s in seats)
 
 
 def test_current_seat_and_describe_seat():

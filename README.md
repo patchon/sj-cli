@@ -156,6 +156,13 @@ som tilldelats istället för att välja den, t.ex. `carriage 3 seat 34 · singl
 Det kostar ett extra anrop per resa som inte redan avgått, så det är valfritt — en resa vars
 sittplatskarta inte går att läsa behåller bara sin vanliga `carriage N seat M`-cell.
 
+När `seat_preference` är en rangordnad önskelista namnger `--seat-details` också en klart bättre
+ledig plats, om en sådan finns, direkt efter den tilldelade: `carriage 3 seat 19 · aisle, backward
+· could take 47 · single, window, forward` — ett enkelt sätt att se vilka biljetter som är värda
+att platsbyta med `--change-seat-date`/`--change-seat-booking`. Ledtråden behöver en önskelista
+att döma "bättre" mot, så den är tyst när `seat_preference = "ask"` och när nyckeln saknas —
+då finns inget att jämföra med.
+
 Varje fält valideras innan något nätverksanrop görs, och alla problem rapporteras på en gång.
 Giltiga stationer är de som finns i `STATION_MAP` i `src/sj_cli/client.py` (Stockholm, Linköping,
 Göteborg, Malmö, Uppsala, Lund — stavningarna "Central"/"C", oberoende av versaler). En
@@ -171,7 +178,8 @@ sj-cli --book --dry-run        # förhandsvisa: visa vad som skulle bokas, utan 
 sj-cli --book                  # boka på riktigt
 sj-cli --list-bookings         # aktiva bokningar, en ruta per resdag
 sj-cli --list-bookings --seat-details   # samma, plus varje resas sittplats (window/aisle/table/solo/
-                                #   single/forward/backward) — ett extra anrop per resa som inte avgått
+                                #   single/forward/backward) — ett extra anrop per resa som inte avgått;
+                                #   namnger även en bättre ledig plats när seat_preference är en önskelista
 sj-cli --list-travelpasses     # kort med giltighet, dagar kvar och pris
 sj-cli --cancel-date 2026-09-16                # avboka den dagens resor på den konfigurerade sträckan (bokningens övriga dagar behålls)
 sj-cli --cancel-date 2026-09-16,2026-09-21..2026-09-25   # flera datum: kommalista och/eller intervall (båda ändpunkterna ingår)
