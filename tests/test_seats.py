@@ -364,3 +364,37 @@ def test_assigned_seat_words_skips_seat_std_and_unknown_codes():
 
 def test_assigned_seat_words_with_no_direction_code_omits_direction():
     assert assigned_seat_words(["TABLE"]) == ["table"]
+
+
+def test_the_two_single_seat_signals_agree_and_disagreement_is_logged(caplog):
+    """
+    `ypos` (drawing coordinates) and `rowPosition` (physical slots) encode the
+    same 2+1 layout. Geometry decides; a disagreement is a diagnostic, not a
+    behaviour change — SJ's map can describe a different unit than the train.
+    """
+    import logging
+
+    from sj_cli.seats import _alone_by, _single_seat_numbers
+
+    # 2+1: position 1 alone at ypos 5, positions 3 and 4 paired across the aisle
+    agreeing = [
+        {"seatNumber": "11", "rowNumber": 1, "rowPosition": 1, "ypos": 5},
+        {"seatNumber": "13", "rowNumber": 1, "rowPosition": 3, "ypos": 108},
+        {"seatNumber": "14", "rowNumber": 1, "rowPosition": 4, "ypos": 144},
+    ]
+    assert _alone_by(agreeing, "ypos") == {"11"}
+    assert _alone_by(agreeing, "rowPosition") == {"11"}
+    with caplog.at_level(logging.DEBUG, logger="sj_cli.seats"):
+        assert _single_seat_numbers(agreeing) == {"11"}
+    assert "disagree" not in caplog.text
+
+    # rowPosition claims a pair where the geometry sees a lone seat
+    conflicting = [
+        {"seatNumber": "11", "rowNumber": 1, "rowPosition": 1, "ypos": 5},
+        {"seatNumber": "12", "rowNumber": 1, "rowPosition": 2, "ypos": 108},
+        {"seatNumber": "14", "rowNumber": 1, "rowPosition": 9, "ypos": 144},
+    ]
+    with caplog.at_level(logging.DEBUG, logger="sj_cli.seats"):
+        result = _single_seat_numbers(conflicting)
+    assert result == _alone_by(conflicting, "ypos")  # geometry still decides
+    assert "single-seat signals disagree" in caplog.text
