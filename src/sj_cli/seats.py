@@ -246,6 +246,28 @@ def number_key(value: str) -> tuple[int, int, str]:
     return (1, 0, value)
 
 
+def wish_rank(seat: Seat, wishes: list[str]) -> list[bool]:
+    """
+    How well one seat meets a wish list, comparable with `<`; lower is better.
+
+    Just the wish-satisfaction half of `rank`, without its carriage/seat
+    tie-break. Use this to ask "is this seat *materially* better?" — two seats
+    meeting exactly the same wishes tie here, even though `rank` still
+    separates them by number, and moving between them gains the traveller
+    nothing.
+
+    Args:
+        seat: the seat to judge.
+        wishes: vocabulary words in priority order.
+
+    Returns:
+        One flag per wish, False where the wish is met, so that lower sorts
+        better and an earlier wish outweighs every later one.
+
+    """
+    return [not satisfies(seat, wish) for wish in wishes]
+
+
 def rank(
     seat: Seat, wishes: list[str]
 ) -> tuple[list[bool], tuple[int, int, str], tuple[int, int, str]]:
@@ -276,7 +298,7 @@ def rank(
 
     """
     return (
-        [not satisfies(seat, w) for w in wishes],
+        wish_rank(seat, wishes),
         number_key(seat["carriage"]),
         number_key(seat["number"]),
     )

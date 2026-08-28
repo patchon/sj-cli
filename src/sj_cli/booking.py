@@ -48,9 +48,9 @@ from sj_cli.seats import (
     describe_seat,
     free_seats,
     number_key,
-    rank,
     satisfies,
     seat_words,
+    wish_rank,
 )
 from sj_cli.tokens import TokenManager
 
@@ -2476,7 +2476,7 @@ def _assigned_seat_details(seatmap: dict) -> list[str]:
 
 def _seat_hint(current: Seat | None, seatmap: dict, wishes: list[str]) -> str:
     """
-    ' · could take <n> · <words>' when a strictly better free seat exists.
+    ' · could take <n> · <words>' when a free seat meets more of the wishes.
 
     Compares by `seats.rank` — the exact lexicographic ranking `best_seat`
     uses to choose a seat for --book/--change-seat — never by seat identity.
@@ -2507,7 +2507,11 @@ def _seat_hint(current: Seat | None, seatmap: dict, wishes: list[str]) -> str:
     if current is None:
         return ""
     candidate = best_seat(seatmap, wishes)
-    if candidate is None or rank(candidate, wishes) >= rank(current, wishes):
+    # Compare wish satisfaction only: `rank` also tie-breaks on carriage and
+    # seat number, which would advertise seat 15 to someone already in seat 19
+    # when both meet exactly the same wishes — a move that gains the traveller
+    # nothing. Only a materially better match is worth reporting.
+    if candidate is None or wish_rank(candidate, wishes) >= wish_rank(current, wishes):
         return ""
     return f" · could take {candidate['number']} · {', '.join(seat_words(candidate))}"
 

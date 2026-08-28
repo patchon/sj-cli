@@ -278,3 +278,54 @@ def test_a_raising_seatmap_leaves_the_plain_seat_with_seat_preference_too(capsys
     assert "carriage 3 seat 39 ·" not in out
     assert "could take" not in out
     assert "seat details unavailable for 1 leg(s)" in out
+
+
+def test_no_hint_when_the_free_seat_meets_exactly_the_same_wishes():
+    """
+    Seat 19 and seat 15 both single+window+forward: moving 19 -> 15 gains the
+    traveller nothing, so the hint must stay silent. `rank` prefers 15 on its
+    seat-number tie-break, which is why `_seat_hint` compares `wish_rank`.
+    """
+    from sj_cli.booking import _seat_hint
+    from sj_cli.seats import assigned_seat
+    from tests.fakes import seatmap
+
+    # a 2+1 carriage: singles at ypos 5, pairs at 108/144
+    layout = (
+        ("15", ["WINDOW"], True, 1, 5),
+        ("16", ["AISLE"], True, 1, 108),
+        ("17", ["WINDOW"], True, 1, 144),
+        ("19", ["WINDOW"], True, 2, 5),
+        ("20", ["AISLE"], True, 2, 108),
+        ("21", ["WINDOW"], True, 2, 144),
+    )
+    # sitting in 19, only 15 is free — same wishes met, lower number
+    m = seatmap(free=layout, assigned=("3", "19"))
+    m["seatsPossibleToSelect"] = {"3": ["15"]}
+    here = assigned_seat(m)
+    assert here is not None and here["single"] and here["forward"]
+    assert _seat_hint(here, m, ["single", "forward"]) == ""
+
+    # now free a paired seat as well: still no gain, so still silent
+    m["seatsPossibleToSelect"] = {"3": ["15", "21"]}
+    assert _seat_hint(here, m, ["single", "forward"]) == ""
+
+
+def test_the_hint_appears_when_a_free_seat_meets_more_wishes():
+    from sj_cli.booking import _seat_hint
+    from sj_cli.seats import assigned_seat
+    from tests.fakes import seatmap
+
+    layout = (
+        ("15", ["WINDOW"], True, 1, 5),
+        ("16", ["AISLE"], True, 1, 108),
+        ("17", ["WINDOW"], True, 1, 144),
+    )
+    # sitting in the paired seat 17, the single 15 is free: a real improvement
+    m = seatmap(free=layout, assigned=("3", "17"))
+    m["seatsPossibleToSelect"] = {"3": ["15"]}
+    here = assigned_seat(m)
+    assert here is not None and not here["single"]
+    assert (
+        _seat_hint(here, m, ["single", "forward"]) == " · could take 15 · single, window, forward"
+    )
