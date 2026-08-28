@@ -145,6 +145,12 @@ resa (kräver en terminal), eller utelämna nyckeln så väljer SJ plats åt dig
 `!`-rad namnger önskemålet som inte kunde uppfyllas. Platsen SJ valde behålls bara när
 det inte finns någon ledig plats att byta till.
 
+Alla egenskaper kommer från SJ:s platskarta, och SJ varnar själva för att kartan inte alltid
+stämmer med tåget som rullar in: både nya och äldre X 2000 är i trafik, så tre platser per rad
+i 2 klass Lugn kan bli fyra, en fönsterplats kan bli en gångplats, ett bord kan försvinna och
+färdriktningen kan ändras. `sj-cli` rapporterar vad kartan säger — tåget som kommer har sista
+ordet.
+
 `--list-bookings --seat-details` läser samma ordförråd åt andra hållet: den visar vilken plats
 som tilldelats istället för att välja den, t.ex. `carriage 3 seat 34 · single, window, table, forward`.
 Det kostar ett extra anrop per resa som inte redan avgått, så det är valfritt — en resa vars
