@@ -158,6 +158,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "happen without doing any of it."
         ),
     )
+    parser.add_argument(
+        "--seat-details",
+        action="store_true",
+        help=(
+            "Modifier for --list-bookings: show each leg's seat characteristics "
+            "(window, aisle, table, forward/backward). Costs one request per leg."
+        ),
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--book",
@@ -219,10 +227,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     args = parser.parse_args(argv)
 
-    # No implicit default mode: a bare invocation (or a bare --dry-run, which
-    # is only a modifier) shows the help and fails. An empty value (`--cancel-date ""`)
-    # is an operation with an invalid argument, reported as such below.
-    given = [k for k, v in vars(args).items() if k != "dry_run" and v not in (None, False)]
+    # No implicit default mode: a bare invocation (or a bare --dry-run/--seat-details,
+    # which are only modifiers) shows the help and fails. An empty value
+    # (`--cancel-date ""`) is an operation with an invalid argument, reported
+    # as such below.
+    modifiers = ("dry_run", "seat_details")
+    given = [k for k, v in vars(args).items() if k not in modifiers and v not in (None, False)]
     if not given:
         parser.error("no operation given, choose one of the flags above")
 
@@ -237,6 +247,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "--dry-run only applies to --book, --cancel-date, --cancel-booking, "
             "--change-seat-date and --change-seat-booking"
         )
+
+    if args.seat_details and not args.list_bookings:
+        parser.error("--seat-details only applies to --list-bookings")
 
     # Validate-first: every cancel date is parsed and checked here, before
     # any auth or API work can start.
@@ -733,7 +746,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
         if args.list_bookings:
             print_header_box([("operation", "listing bookings"), *pass_rows])
             blank()
-            handle_list_bookings(client, access_token, active_pass)
+            handle_list_bookings(client, access_token, active_pass, seat_details=args.seat_details)
 
         elif args.cancel_date is not None:
             # Cancelling needs the route only: the config's dates selection

@@ -39,6 +39,7 @@ from sj_cli.output import (
 from sj_cli.seats import (
     COMFORT_NAMES,
     Seat,
+    assigned_seat_words,
     best_seat,
     carriage_comfort,
     current_seat,
@@ -2422,12 +2423,92 @@ def handle_change_seat(
     return ok
 
 
+def _assigned_seat_details(seatmap: dict) -> list[str]:
+    """
+    Display words for the seat assigned in one seat map.
+
+    Reads `passengerSeats[0].carriageSeatProperties` — the map's one entry
+    scoped to the assigned seat, unlike `free_seats()` which joins the whole
+    carriage. Empty when there is no assigned seat or none of its codes are
+    recognised (both count as "unavailable" to the caller).
+    """
+    assigned = next((s for s in seatmap.get("passengerSeats") or [] if isinstance(s, dict)), None)
+    if assigned is None:
+        return []
+    codes = [
+        code
+        for p in assigned.get("carriageSeatProperties") or []
+        if isinstance(p, dict) and (code := p.get("code"))
+    ]
+    return assigned_seat_words(codes)
+
+
+def _add_seat_details(
+    client: SJClient,
+    access_token: str,
+    tasks: list[tuple[dict, str, str]],
+) -> None:
+    """
+    Fetch each eligible segment's seat map once and append its characteristics.
+
+    Appends " · <words>" to that row's seat cell, for --seat-details.
+
+    Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        tasks: (row, booking_id, seatMapSearchId) for every segment eligible
+            for a seat-map fetch (see handle_list_bookings). Fetches are
+            cached by (booking_id, seatMapSearchId) so a map shared by two
+            legs is only fetched once.
+
+    A map that will not load, an empty passengerSeats, or no recognisable
+    property code all leave the row's plain seat cell untouched — a seat
+    detail is never worth breaking the listing over. Individual causes are
+    logged; the failures are reported as one aggregated `pwarn` afterwards,
+    not one per leg.
+
+    """
+    cache: dict[tuple[str, str], dict | None] = {}
+    failures = 0
+    with spinner("fetching seat details", trail=False):
+        for row, booking_id, search_id in tasks:
+            key = (booking_id, search_id)
+            if key not in cache:
+                try:
+                    cache[key] = client.get_seatmap(access_token, booking_id, search_id)
+                except Exception as e:
+                    logger.warning(f"seat map failed for booking {booking_id}: {e}")
+                    cache[key] = None
+            seatmap = cache[key]
+            words = _assigned_seat_details(seatmap) if seatmap is not None else []
+            if not words:
+                failures += 1
+                continue
+            row["seat"] = f"{row['seat']} · {', '.join(words)}"
+
+    if failures:
+        pwarn(f"seat details unavailable for {failures} leg(s)")
+
+
 def handle_list_bookings(
     client: SJClient,
     access_token: str,
     travel_pass: dict,
+    seat_details: bool = False,
 ) -> None:
-    """Fetch and display all active bookings per SPEC §5.4 (the caller prints the title)."""
+    """
+    Fetch and display all active bookings per SPEC §5.4 (the caller prints the title).
+
+    Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        travel_pass: The active travel pass, for the booking date range.
+        seat_details: With True, fetch the seat map for every not-yet-departed
+            segment that has one and append its seat's characteristics
+            (window, aisle, table, forward/backward) to the seat cell — one
+            extra request per eligible leg (see _add_seat_details).
+
+    """
     b_start, b_end = booking_date_range(travel_pass)
 
     with spinner("fetching bookings", trail=False):
@@ -2436,21 +2517,34 @@ def handle_list_bookings(
     # Transform raw API items into display rows
     now = sweden_now()
     display_rows = []
+    seat_tasks: list[tuple[dict, str, str]] = []
     for item in all_bookings:
         booking = item.get("booking") or {}
         if not is_active_booking(booking):
             continue  # cancelled, or a stale provisional --book will clean up
 
         booking_number = booking.get("bookingNumber") or "—"
+        booking_id = _booking_id(item, booking)
         for journey in booking.get("journeys") or []:
             for segment in journey.get("segments") or []:
                 row = _segment_to_display_row(segment, booking_number, now)
                 row["_sort_key"] = segment.get("departureDateTime") or ""
                 display_rows.append(row)
+                search_id = segment.get("seatMapSearchId")
+                if (
+                    seat_details
+                    and segment.get("seatMapAvailable")
+                    and search_id
+                    and row["past"] == "N"
+                ):
+                    seat_tasks.append((row, booking_id, search_id))
 
     if not display_rows:
         pstatus(False, f"no bookings found between {b_start} and {b_end}")
         return
+
+    if seat_tasks:
+        _add_seat_details(client, access_token, seat_tasks)
 
     # Sort by date, then departure time
     display_rows.sort(key=lambda r: r.pop("_sort_key", ""))
