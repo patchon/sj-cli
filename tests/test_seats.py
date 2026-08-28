@@ -1,26 +1,39 @@
 from sj_cli.seats import (
+    _single_seat_numbers,
+    assigned_seat,
     assigned_seat_words,
     best_seat,
     current_seat,
     describe_seat,
     free_seats,
     parse_preference,
+    satisfies,
     seat_words,
 )
 
 
 def _carriage_dict(number, seat_specs, reversed_):
+    # A spec is (number, codes, reversed) or, when a test needs real carriage
+    # geometry for single-seat detection, (number, codes, reversed, row, ypos).
+    def _seat(spec):
+        n, codes, rev, *geometry = spec
+        row_number = geometry[0] if len(geometry) > 0 else None
+        ypos = geometry[1] if len(geometry) > 1 else None
+        seat = {
+            "seatNumber": n,
+            "reversed": rev,
+            "carriageSeatProperties": [{"code": c} for c in codes],
+        }
+        if row_number is not None:
+            seat["rowNumber"] = row_number
+        if ypos is not None:
+            seat["ypos"] = ypos
+        return seat
+
     return {
         "carriageNumber": number,
         "reversed": reversed_,
-        "seats": [
-            {
-                "seatNumber": n,
-                "reversed": rev,
-                "carriageSeatProperties": [{"code": c} for c in codes],
-            }
-            for n, codes, rev in seat_specs
-        ],
+        "seats": [_seat(spec) for spec in seat_specs],
     }
 
 
@@ -152,6 +165,73 @@ def test_free_seats_tolerates_non_list_selectable_value():
     assert free_seats(m) == []
 
 
+def test_free_seats_detects_single_seats_in_a_two_plus_one_carriage():
+    # Row 1 of a 2+1 carriage: seat 11 sits alone on one side of the aisle
+    # (the widest gap between the carriage's distinct ypos values, 5 and
+    # {108, 144}); seats 13/14 are the paired seats on the other side.
+    m = seatmap(
+        [
+            ("11", ["WINDOW"], True, 1, 5),
+            ("13", ["AISLE"], True, 1, 108),
+            ("14", ["WINDOW"], True, 1, 144),
+        ],
+        selectable=["11", "13", "14"],
+    )
+    singles = {s["number"]: s["single"] for s in free_seats(m)}
+    assert singles == {"11": True, "13": False, "14": False}
+
+
+def test_free_seats_finds_no_singles_in_a_two_plus_two_carriage():
+    # Two pairs, one on each side of the aisle (the widest gap is between
+    # 40 and 108): no seat is ever alone in its (row, side) group.
+    m = seatmap(
+        [
+            ("1", ["WINDOW"], True, 1, 5),
+            ("2", ["AISLE"], True, 1, 40),
+            ("3", ["AISLE"], True, 1, 108),
+            ("4", ["WINDOW"], True, 1, 144),
+        ],
+        selectable=["1", "2", "3", "4"],
+    )
+    assert not any(s["single"] for s in free_seats(m))
+
+
+def test_single_seat_numbers_treats_one_ypos_value_as_no_aisle():
+    # A single distinct ypos value means no gap can be found, so no aisle
+    # can be identified — never guess one from a single data point.
+    assert _single_seat_numbers([{"seatNumber": "1", "rowNumber": 1, "ypos": 5}]) == set()
+    assert (
+        _single_seat_numbers(
+            [
+                {"seatNumber": "1", "rowNumber": 1, "ypos": 5},
+                {"seatNumber": "2", "rowNumber": 2, "ypos": 5},
+            ]
+        )
+        == set()
+    )
+
+
+def test_single_seat_numbers_on_no_seats_finds_nothing():
+    assert _single_seat_numbers([]) == set()
+
+
+def test_satisfies_and_best_seat_honour_single():
+    m = seatmap(
+        [
+            ("11", ["WINDOW"], True, 1, 5),
+            ("13", ["AISLE"], True, 1, 108),
+            ("14", ["WINDOW"], True, 1, 144),
+        ],
+        selectable=["11", "13", "14"],
+    )
+    seats = {s["number"]: s for s in free_seats(m)}
+    assert satisfies(seats["11"], "single") is True
+    assert satisfies(seats["13"], "single") is False
+    # "single" ranks like any other wish: an earlier wish outweighs a later one.
+    assert best_seat(m, ["single"])["number"] == "11"
+    assert best_seat(m, ["aisle", "single"])["number"] == "13"
+
+
 def test_best_seat_prefers_an_earlier_wish_over_every_later_one():
     m = seatmap(
         [("14", ["WINDOW"], True), ("69", ["AISLE", "TABLE"], True)],
@@ -227,9 +307,47 @@ def test_current_seat_with_no_assigned_seat_returns_none_none():
     assert current_seat(m) == (None, None)
 
 
+def test_assigned_seat_finds_it_in_the_carriage_layout():
+    m = seatmap(
+        [("11", ["WINDOW"], True, 1, 5), ("13", ["AISLE"], True, 1, 108)],
+        selectable=["11", "13"],
+        assigned=("3", "11"),
+    )
+    seat = assigned_seat(m)
+    assert seat is not None
+    assert (seat["carriage"], seat["number"], seat["single"]) == ("3", "11", True)
+    assert seat_words(seat) == ["single", "window", "forward"]
+
+
+def test_assigned_seat_returns_none_when_seat_missing_from_carriage_detail():
+    # The passenger's seat number is not among this carriage's seats — an
+    # unfamiliar/incomplete map, not a crash. Callers fall back to
+    # carriageSeatProperties on the assigned entry itself.
+    m = seatmap([("11", ["WINDOW"], True, 1, 5)], selectable=["11"], assigned=("3", "99"))
+    assert assigned_seat(m) is None
+
+
+def test_assigned_seat_returns_none_when_carriage_is_missing():
+    m = seatmap([("11", ["WINDOW"], True, 1, 5)], selectable=["11"], assigned=("9", "11"))
+    assert assigned_seat(m) is None
+
+
 def test_seat_words_skips_unknown_property_code():
     m = seatmap([("14", ["WINDOW", "SOME_UNKNOWN_CODE"], True)], selectable=["14"])
     assert seat_words(free_seats(m)[0]) == ["window", "forward"]
+
+
+def test_seat_words_places_single_between_no_animals_and_solo():
+    m = seatmap(
+        [
+            ("11", ["WINDOW", "WITHOUT_ANIMALS", "SOLO"], True, 1, 5),
+            ("13", ["AISLE"], True, 1, 108),
+            ("14", ["WINDOW"], True, 1, 144),
+        ],
+        selectable=["11", "13", "14"],
+    )
+    seat_11 = next(s for s in free_seats(m) if s["number"] == "11")
+    assert seat_words(seat_11) == ["no animals", "single", "solo", "window", "forward"]
 
 
 def test_assigned_seat_words_orders_like_seat_words():

@@ -39,6 +39,7 @@ from sj_cli.output import (
 from sj_cli.seats import (
     COMFORT_NAMES,
     Seat,
+    assigned_seat,
     assigned_seat_words,
     best_seat,
     carriage_comfort,
@@ -47,6 +48,7 @@ from sj_cli.seats import (
     free_seats,
     number_key,
     satisfies,
+    seat_words,
 )
 from sj_cli.tokens import TokenManager
 
@@ -2427,11 +2429,18 @@ def _assigned_seat_details(seatmap: dict) -> list[str]:
     """
     Display words for the seat assigned in one seat map.
 
-    Reads `passengerSeats[0].carriageSeatProperties` — the map's one entry
-    scoped to the assigned seat, unlike `free_seats()` which joins the whole
-    carriage. Empty when there is no assigned seat or none of its codes are
-    recognised (both count as "unavailable" to the caller).
+    Looks the assigned seat up in the carriage layout (`seats.assigned_seat`)
+    so it can report computed properties — currently just `single` — the
+    same way a free seat's card does. Falls back to
+    `passengerSeats[0].carriageSeatProperties` — the map's one entry scoped
+    to the assigned seat, read via property code only — when the lookup
+    fails (an unfamiliar map shape must degrade, not crash). Empty when
+    there is no assigned seat or none of its codes are recognised (both
+    count as "unavailable" to the caller).
     """
+    seat = assigned_seat(seatmap)
+    if seat is not None:
+        return seat_words(seat)
     assigned = next((s for s in seatmap.get("passengerSeats") or [] if isinstance(s, dict)), None)
     if assigned is None:
         return []

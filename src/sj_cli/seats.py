@@ -9,8 +9,13 @@ this module joins the two and ranks the result against the user's wish list.
 
 from typing import Any, Literal, TypedDict
 
-# Config word -> API property code. The two direction words are computed from
-# the map's `reversed` flags rather than read from a property, hence None.
+# Config word -> API property code. The direction words and "single" are
+# computed (from the map's `reversed` flags and seat geometry respectively)
+# rather than read from a property, hence None. "single" is not the same as
+# "solo": SOLO is SJ's first-class Singelplats product (a marketed code);
+# single is any seat with no neighbour, from a 2+1 carriage's geometry —
+# carriage 1 of a real X 2000 has 16 SOLO seats but only 14 geometric
+# singles, and carriage 3's singles carry no SOLO marking at all.
 SEAT_WORDS: dict[str, str | None] = {
     "window": "WINDOW",
     "aisle": "AISLE",
@@ -20,6 +25,7 @@ SEAT_WORDS: dict[str, str | None] = {
     "no animals": "WITHOUT_ANIMALS",
     "forward": None,
     "backward": None,
+    "single": None,
 }
 
 # Wishes that cannot both be met by one seat
@@ -46,6 +52,7 @@ class Seat(TypedDict):
     number: str
     codes: list[str]
     forward: bool
+    single: bool
 
 
 def _word(value: str) -> str:
@@ -99,6 +106,54 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
     return (None, errors) if errors else (wishes, [])
 
 
+def _single_seat_numbers(seats: list[dict[str, Any]]) -> set[str]:
+    """
+    Seat numbers that sit alone across the aisle, within one carriage.
+
+    X 2000 carriages are laid out either 2+2 or 2+1: on a 2+1 side, one seat
+    per row has no neighbour. SJ publishes no property code for this, but
+    the map does carry each seat's y-position, so the layout is recovered
+    from geometry rather than guessed: the aisle is the *widest* gap between
+    the carriage's distinct `ypos` values — a 2+2 carriage has two similar
+    gaps (pair | aisle | pair) and no seat is alone, while a 2+1 carriage's
+    aisle gap dwarfs the gap between its paired side's two seat positions.
+    Seats are then grouped by (row, which side of that gap they fall on); a
+    group of exactly one seat is a single seat.
+
+    Guards degenerate input — fewer than two distinct `ypos` values (so no
+    gap, hence no aisle, can be identified), or no seats at all — by
+    returning no singles rather than guessing.
+
+    Args:
+        seats: one carriage's `seats` list (raw API dicts).
+
+    Returns:
+        The `seatNumber`s (as given by the API, not necessarily numeric)
+        that are single seats.
+
+    """
+    ypos_values = sorted({s["ypos"] for s in seats if isinstance(s.get("ypos"), (int, float))})
+    if len(ypos_values) < 2:
+        return set()
+    # The widest gap's low edge is the boundary: ypos <= boundary is one side
+    # of the aisle, ypos > boundary the other (no other distinct value falls
+    # between them, since the gap is between *consecutive* distinct values).
+    gaps = [
+        (ypos_values[i + 1] - ypos_values[i], ypos_values[i]) for i in range(len(ypos_values) - 1)
+    ]
+    _, boundary = max(gaps)
+
+    groups: dict[tuple[Any, int], list[str]] = {}
+    for s in seats:
+        ypos = s.get("ypos")
+        number = s.get("seatNumber")
+        if not isinstance(ypos, (int, float)) or number is None:
+            continue
+        side = 0 if ypos <= boundary else 1
+        groups.setdefault((s.get("rowNumber"), side), []).append(str(number))
+    return {numbers[0] for numbers in groups.values() if len(numbers) == 1}
+
+
 def free_seats(seatmap: dict[str, Any]) -> list[Seat]:
     """
     Every selectable seat in the map, with its properties and facing.
@@ -121,9 +176,9 @@ def free_seats(seatmap: dict[str, Any]) -> list[Seat]:
     seats: list[Seat] = []
     for carriage, numbers in (seatmap.get("seatsPossibleToSelect") or {}).items():
         c = carriages.get(str(carriage)) or {}
-        by_number = {
-            str(s.get("seatNumber")): s for s in c.get("seats") or [] if isinstance(s, dict)
-        }
+        c_seats = [s for s in c.get("seats") or [] if isinstance(s, dict)]
+        by_number = {str(s.get("seatNumber")): s for s in c_seats}
+        singles = _single_seat_numbers(c_seats)
         for number in numbers if isinstance(numbers, list) else []:
             seat = by_number.get(str(number))
             if seat is None:
@@ -143,6 +198,7 @@ def free_seats(seatmap: dict[str, Any]) -> list[Seat]:
                     # own reversed flag matches its carriage's (verified
                     # against the live API 2026-08-27).
                     forward=bool(seat.get("reversed")) == bool(c.get("reversed")),
+                    single=str(number) in singles,
                 )
             )
     return seats
@@ -154,9 +210,11 @@ def satisfies(seat: Seat, wish: str) -> bool:
         return seat["forward"]
     if wish == "backward":
         return not seat["forward"]
+    if wish == "single":
+        return seat["single"]
     code = SEAT_WORDS.get(wish)
-    # SEAT_WORDS.get() returns None for a non-vocabulary wish and for the two
-    # direction words above (handled already) — never treat that as a code match.
+    # SEAT_WORDS.get() returns None for a non-vocabulary wish and for the
+    # computed words above (handled already) — never treat that as a code match.
     return code is not None and code in seat["codes"]
 
 
@@ -213,6 +271,57 @@ def current_seat(seatmap: dict[str, Any]) -> tuple[str | None, str | None]:
     )
 
 
+def assigned_seat(seatmap: dict[str, Any]) -> Seat | None:
+    """
+    The passenger's assigned seat, looked up in the carriage layout.
+
+    `free_seats()` joins `seatsPossibleToSelect` against `carriages[].seats[]`
+    for every free seat; this does the same join for one specific seat — the
+    one `current_seat()` names — so it can carry the same computed
+    properties (`single`, `forward`) a --seat-details listing needs but a
+    property code alone cannot give it.
+
+    Args:
+        seatmap: the API's seat-map response for one segment.
+
+    Returns:
+        A full Seat for the assigned seat, or None when the carriage or the
+        seat number cannot be found in `carriages[].seats[]` (an unfamiliar
+        map shape) — callers fall back to the assigned seat's own
+        `carriageSeatProperties` in that case.
+
+    """
+    carriage, number = current_seat(seatmap)
+    if carriage is None or number is None:
+        return None
+    c = next(
+        (
+            c
+            for c in seatmap.get("carriages") or []
+            if isinstance(c, dict) and str(c.get("carriageNumber")) == carriage
+        ),
+        None,
+    )
+    if c is None:
+        return None
+    c_seats = [s for s in c.get("seats") or [] if isinstance(s, dict)]
+    seat = next((s for s in c_seats if str(s.get("seatNumber")) == number), None)
+    if seat is None:
+        return None
+    singles = _single_seat_numbers(c_seats)
+    return Seat(
+        carriage=carriage,
+        number=number,
+        codes=[
+            code
+            for p in seat.get("carriageSeatProperties") or []
+            if isinstance(p, dict) and (code := p.get("code"))
+        ],
+        forward=bool(seat.get("reversed")) == bool(c.get("reversed")),
+        single=number in singles,
+    )
+
+
 def carriage_comfort(seatmap: dict[str, Any], carriage: str) -> str:
     """
     The display comfort of one carriage, or "" when the map does not say.
@@ -245,22 +354,33 @@ _DIRECTION_WORD_BY_CODE = {"IDR": "forward", "ODR": "backward"}
 
 
 def seat_words(seat: Seat) -> list[str]:
-    """A seat's properties as config vocabulary, for display. Unknown codes are skipped."""
-    words = sorted({_WORD_BY_CODE[c] for c in seat["codes"] if c in _WORD_BY_CODE})
-    return [*words, "forward" if seat["forward"] else "backward"]
+    """
+    A seat's properties as config vocabulary, for display. Unknown codes are skipped.
+
+    "single" (computed, not a code) sorts in alphabetically with the code
+    words — between "no animals" and "solo" — same as everywhere else in the
+    vocabulary; direction stays last.
+    """
+    words = {_WORD_BY_CODE[c] for c in seat["codes"] if c in _WORD_BY_CODE}
+    if seat["single"]:
+        words.add("single")
+    return [*sorted(words), "forward" if seat["forward"] else "backward"]
 
 
 def assigned_seat_words(codes: list[str]) -> list[str]:
     """
     Display words for an assigned seat's property codes, for --seat-details.
 
-    Reuses SEAT_WORDS as the vocabulary (WINDOW, AISLE, TABLE, SOLO,
-    EASY_ACCESS, WITHOUT_ANIMALS) plus the two direction codes a seat map
-    gives directly for the assigned seat (IDR -> forward, ODR -> backward;
-    see the module note above). SEAT_STD ("standard seat" — no information)
-    and any code this tool has no word for are skipped. Ordered exactly like
-    seat_words() — alphabetical, direction last — so a free seat's rendering
-    and an assigned seat's rendering never disagree.
+    Fallback path only: used when `assigned_seat()` cannot find the seat in
+    the carriage layout. Reuses SEAT_WORDS as the vocabulary (WINDOW, AISLE,
+    TABLE, SOLO, EASY_ACCESS, WITHOUT_ANIMALS) plus the two direction codes a
+    seat map gives directly for the assigned seat (IDR -> forward, ODR ->
+    backward; see the module note above). SEAT_STD ("standard seat" — no
+    information) and any code this tool has no word for are skipped.
+    Ordered exactly like seat_words() — alphabetical, direction last — so a
+    free seat's rendering and an assigned seat's rendering never disagree.
+    Codes carry no "single" information, so this path never reports it —
+    only the carriage-layout lookup can.
 
     Args:
         codes: property codes as given by the seat map, e.g.

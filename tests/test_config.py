@@ -278,6 +278,21 @@ def test_seat_preference_ask_is_normalised_too():
     assert cfg["search_parameters"]["seat_preference"] == "ask"
 
 
+def test_seat_preference_accepts_single_and_still_rejects_unknown_words():
+    # "single" (computed from carriage geometry) is a normal vocabulary word
+    # for config-validation purposes, same as "forward"/"backward".
+    cfg = future_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["single"]
+    CfgManager().verify_cfg(cfg)
+    assert cfg["search_parameters"]["seat_preference"] == ["single"]
+
+    cfg = future_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["single", "solo", "nonsense"]
+    with pytest.raises(SJConfigError) as e:
+        CfgManager().verify_cfg(cfg)
+    assert any("nonsense" in err for err in e.value.errors)
+
+
 def test_seat_preference_errors_are_collected():
     cfg = future_cfg()
     cfg["search_parameters"]["seat_preference"] = ["kitchen"]

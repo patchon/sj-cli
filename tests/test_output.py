@@ -325,9 +325,15 @@ def test_seat_choices_group_by_carriage(capsys):
     from sj_cli.output import print_seat_choices
 
     seats = [
-        {"carriage": "3", "number": "14", "codes": ["WINDOW"], "forward": True},
-        {"carriage": "3", "number": "17", "codes": ["AISLE"], "forward": False},
-        {"carriage": "3", "number": "70", "codes": ["TABLE", "WINDOW"], "forward": True},
+        {"carriage": "3", "number": "14", "codes": ["WINDOW"], "forward": True, "single": False},
+        {"carriage": "3", "number": "17", "codes": ["AISLE"], "forward": False, "single": False},
+        {
+            "carriage": "3",
+            "number": "70",
+            "codes": ["TABLE", "WINDOW"],
+            "forward": True,
+            "single": False,
+        },
     ]
     print_seat_choices(seats, {"3": "2 class calm"})
     out = capsys.readouterr().out
@@ -338,7 +344,9 @@ def test_seat_choices_group_by_carriage(capsys):
 def test_seat_choices_counts_one_seat_in_the_singular(capsys):
     from sj_cli.output import print_seat_choices
 
-    print_seat_choices([{"carriage": "3", "number": "14", "codes": [], "forward": True}])
+    print_seat_choices(
+        [{"carriage": "3", "number": "14", "codes": [], "forward": True, "single": False}]
+    )
     out = capsys.readouterr().out
     assert "free in carriage 3 · 1 seat\n" in out  # not "1 seats", and no comfort
     assert " · 1 seats" not in out
@@ -350,9 +358,9 @@ def test_seat_choices_list_carriages_in_numeric_order(capsys):
     # insertion order is 10, 2, 3: the listing must not follow it, and must
     # not sort "10" before "2" either
     seats = [
-        {"carriage": "10", "number": "1", "codes": [], "forward": True},
-        {"carriage": "2", "number": "1", "codes": [], "forward": True},
-        {"carriage": "3", "number": "1", "codes": [], "forward": True},
+        {"carriage": "10", "number": "1", "codes": [], "forward": True, "single": False},
+        {"carriage": "2", "number": "1", "codes": [], "forward": True, "single": False},
+        {"carriage": "3", "number": "1", "codes": [], "forward": True, "single": False},
     ]
     print_seat_choices(seats, {"2": "1 class"})
     headers = [line for line in capsys.readouterr().out.splitlines() if "free in carriage" in line]
@@ -365,7 +373,8 @@ def test_seat_choices_never_truncate_a_seat_with_every_property(capsys):
 
     every = ["EASY_ACCESS", "WITHOUT_ANIMALS", "SOLO", "TABLE", "WINDOW"]
     seats = [
-        {"carriage": "3", "number": str(70 + i), "codes": every, "forward": True} for i in range(3)
+        {"carriage": "3", "number": str(70 + i), "codes": every, "forward": True, "single": False}
+        for i in range(3)
     ]
     print_seat_choices(seats)
     out = capsys.readouterr().out

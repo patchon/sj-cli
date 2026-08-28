@@ -94,6 +94,60 @@ def test_a_departed_segment_is_not_fetched(capsys):
     assert "seat details unavailable" not in capsys.readouterr().out
 
 
+def test_seat_details_reports_single_for_a_single_seat(capsys):
+    c = FakeClient()
+    # Row 1 of a 2+1 carriage: seat 39 sits alone on one side of the aisle
+    # (the widest ypos gap), seats 41/42 are the paired seats on the other.
+    c.seatmaps["SM-D1"] = seatmap(
+        free=(
+            ("39", ["WINDOW"], True, 1, 5),
+            ("41", ["AISLE"], True, 1, 108),
+            ("42", ["WINDOW"], True, 1, 144),
+        ),
+        assigned=("3", "39"),
+    )
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True)
+
+    assert "carriage 3 seat 39 · single, window, forward" in capsys.readouterr().out
+
+
+def test_seat_details_does_not_report_single_for_a_paired_seat(capsys):
+    c = FakeClient()
+    # Seat 39 is paired with seat 40 on one side of the aisle; seat 41 is
+    # the carriage's actual single, alone on the other side.
+    c.seatmaps["SM-D1"] = seatmap(
+        free=(
+            ("39", ["AISLE"], True, 1, 108),
+            ("40", ["WINDOW"], True, 1, 144),
+            ("41", ["WINDOW"], True, 1, 5),
+        ),
+        assigned=("3", "39"),
+    )
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True)
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, forward" in out
+    assert "single" not in out
+
+
+def test_seat_details_falls_back_to_property_codes_when_layout_lookup_fails(capsys):
+    # Seat 39 is assigned but is not present in this map's carriage detail
+    # (the default `free` only has seat 70) — the carriage-layout lookup
+    # must fail cleanly and --seat-details must still render from the
+    # assigned seat's own codes (never "single": codes alone cannot say).
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = seatmap(assigned=("3", "39"), assigned_codes=["IDR", "AISLE"])
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True)
+
+    assert "carriage 3 seat 39 · aisle, forward" in capsys.readouterr().out
+
+
 def test_the_same_map_is_fetched_once_when_two_legs_share_it():
     c = FakeClient()
     c.seatmaps["SM-SHARED"] = seatmap(assigned=("3", "39"), assigned_codes=["WINDOW"])
