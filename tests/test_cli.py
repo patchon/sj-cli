@@ -62,7 +62,10 @@ def test_dry_run_rejected_for_modes_with_nothing_to_preview(capsys):
         parse_args(["--list-bookings", "--dry-run"])
     assert exc_info.value.code == 1
     err = capsys.readouterr().err
-    assert "● --dry-run only applies to --book, --cancel-date and --cancel-booking" in err
+    assert (
+        "● --dry-run only applies to --book, --cancel-date, --cancel-booking, "
+        "--change-seat-date and --change-seat-booking" in err
+    )
 
 
 def test_book_flag_parses():
@@ -200,6 +203,42 @@ def test_cancel_booking_rejects_empty_entries(capsys):
     out = capsys.readouterr().out
     assert "empty entry in the booking number list" in out
     assert "did you mean" not in out  # hint only when tokens look like dates
+
+
+# --- --change-seat-date / --change-seat-booking ------------------------------
+
+
+def test_change_seat_flags_are_mode_flags():
+    args = parse_args(["--change-seat-date", "2026-09-28"])
+    assert args.change_seat_dates == ["2026-09-28"]
+
+    args = parse_args(["--change-seat-booking", "zsvv7eml,KCG62Z6V"])
+    assert args.change_seat_booking_numbers == ["ZSVV7EML", "KCG62Z6V"]
+
+    with pytest.raises(SystemExit):
+        parse_args(["--book", "--change-seat-date", "2026-09-28"])
+
+    with pytest.raises(SystemExit):
+        parse_args(["--change-seat-date", "2026-09-28", "--change-seat-booking", "ZSVV7EML"])
+
+
+def test_change_seat_date_validates_before_anything_else(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["--change-seat-date", "2026-13-99"])
+    assert "invalid --change-seat-date" in capsys.readouterr().out
+
+
+def test_change_seat_booking_validates_its_numbers(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["--change-seat-booking", "!!!"])
+    assert "invalid --change-seat-booking" in capsys.readouterr().out
+
+
+def test_dry_run_is_allowed_with_change_seat():
+    args = parse_args(["--change-seat-date", "W40", "--dry-run"])
+    assert args.dry_run is True
+    args = parse_args(["--change-seat-booking", "ZSVV7EML", "--dry-run"])
+    assert args.dry_run is True
 
 
 # --- first-run setup gate in _run (missing config) --------------------------
