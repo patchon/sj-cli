@@ -310,3 +310,26 @@ def test_zero_receipt_amount_is_a_price_not_unknown():
 
     assert _extract_price({"totalAmount": {"amount": 0, "currency": "SEK"}}) == "0 SEK"
     assert _extract_price({"amount": 0}) == "0 SEK"
+
+
+def test_ask_optional_reports_eof_as_none(monkeypatch):
+    from sj_cli import output
+
+    monkeypatch.setattr("builtins.input", lambda: (_ for _ in ()).throw(EOFError))
+    assert output.ask_optional("seat: ") is None
+    monkeypatch.setattr("builtins.input", lambda: "")
+    assert output.ask_optional("seat: ") == ""
+
+
+def test_seat_choices_group_by_carriage(capsys):
+    from sj_cli.output import print_seat_choices
+
+    seats = [
+        {"carriage": "3", "number": "14", "codes": ["WINDOW"], "forward": True},
+        {"carriage": "3", "number": "17", "codes": ["AISLE"], "forward": False},
+        {"carriage": "3", "number": "70", "codes": ["TABLE", "WINDOW"], "forward": True},
+    ]
+    print_seat_choices(seats, comfort="2 klass Lugn")
+    out = capsys.readouterr().out
+    assert "free in carriage 3 · 2 klass Lugn · 3 seats" in out
+    assert "14 window, forward" in out and "70 table, window, forward" in out

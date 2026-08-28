@@ -1,6 +1,7 @@
 """Booking business logic for the SJ API client."""
 
 import logging
+import sys
 import time
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -18,6 +19,7 @@ from sj_cli.dates import (
 from sj_cli.errors import SJAuthError, error_text
 from sj_cli.output import (
     ask,
+    ask_optional,
     blank,
     format_class_name,
     format_duration,
@@ -29,11 +31,12 @@ from sj_cli.output import (
     print_day_header,
     print_day_note,
     print_leg_lines,
+    print_seat_choices,
     pstatus,
     pwarn,
     spinner,
 )
-from sj_cli.seats import ASK, Seat, best_seat, current_seat, describe_seat, satisfies
+from sj_cli.seats import ASK, Seat, best_seat, current_seat, describe_seat, free_seats, satisfies
 from sj_cli.tokens import TokenManager
 
 logger = logging.getLogger(__name__)
@@ -936,10 +939,52 @@ def _seat_update(segment: dict, seat: Seat) -> dict:
     }
 
 
+# Module state for one run: EOF or a missing terminal stops all further
+# prompts, so a 40-day run cannot hang or ask the same dead question twice.
+_ask_disabled = False
+
+
+def _reset_seat_prompts() -> None:
+    """Re-enable seat prompts (called once per run)."""
+    global _ask_disabled  # noqa: PLW0603
+    _ask_disabled = False
+
+
+def _ask_for_seat(seatmap: dict, label: str) -> Seat | None:
+    """Prompt for one leg's seat. None keeps the seat SJ assigned."""
+    global _ask_disabled  # noqa: PLW0603
+    if _ask_disabled:
+        return None
+    if not sys.stdin.isatty():
+        _ask_disabled = True
+        pwarn("seat selection needs a terminal, keeping the seats SJ assigned")
+        return None
+
+    seats = free_seats(seatmap)
+    if not seats:
+        pwarn(f"no free seat to choose from for {label}")
+        return None
+
+    _carriage, number = current_seat(seatmap)
+    by_number = {s["number"]: s for s in seats}
+    print_seat_choices(seats, comfort=seatmap.get("comfortDescription", ""))
+    while True:
+        answer = ask_optional(f"{label} seat [{number or '?'}]: ")
+        if answer is None:  # Ctrl-D: keep this seat and stop asking for the run
+            _ask_disabled = True
+            return None
+        answer = answer.strip()
+        if not answer:  # empty line: keep this seat, keep asking on later legs
+            return None
+        if answer in by_number:
+            return by_number[answer]
+        pwarn(f"seat {answer} is not free, pick one from the list")
+
+
 def _choose_seat(seatmap: dict, preference: list[str] | str, label: str) -> Seat | None:
     """The seat to take for one segment, or None to keep the current one."""
     if preference == ASK:
-        return None  # Task 5 replaces this with the interactive picker
+        return _ask_for_seat(seatmap, label)
     wishes = list(preference)
     seat = best_seat(seatmap, wishes)
     if seat is None:
@@ -974,8 +1019,8 @@ def _apply_seat_preference(
         booking_id: The booking's UUID.
         booking: The booking object as returned by the legs (journeys/segments).
         preference: The `seat_preference` config value: "ask" or a ranked
-            word list. The literal "ask" is a seam for Task 5's interactive
-            picker; today it just keeps whatever seat SJ assigned.
+            word list. "ask" prompts once per segment; not a terminal (or
+            Ctrl-D) degrades to keeping whatever seat SJ assigned.
         provisional: True while the booking is still a cart (the default,
             used by --book); False once it is confirmed.
 
@@ -1613,6 +1658,7 @@ def process_date_range(
         caller maps "failed"/"error" to exit code 1 (SPEC §5.7).
 
     """
+    _reset_seat_prompts()  # a fresh run always starts willing to ask
     params = cfg["search_parameters"]
     skip_weekends = params.get("skip_weekends", True)
     skip_holidays = params.get("skip_holidays", True)
