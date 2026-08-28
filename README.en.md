@@ -123,6 +123,12 @@ terminal), or omit the key and SJ assigns the seat. A preference is never a guar
 when nothing matches, the best remaining seat is taken anyway and a `!` line names the
 wish it missed. The seat SJ picked is kept only when no seat is free to move to.
 
+Every characteristic comes from SJ's seat map, and SJ warns that the map may not match the
+train that actually arrives: refurbished and older X 2000 units are both in service, so three
+seats per row in 2 klass Lugn can become four, a window seat can become an aisle seat, a table
+can disappear and the direction can flip. `sj-cli` reports what the map says — the train that
+rolls in has the last word.
+
 `--list-bookings --seat-details` reads the same vocabulary the other way round: it shows what
 was assigned instead of choosing it, e.g. `carriage 3 seat 34 · single, window, table, forward`.
 It costs one extra request per not-yet-departed leg, so it is opt-in; a leg whose seat map cannot
