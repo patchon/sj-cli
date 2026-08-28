@@ -25,6 +25,15 @@ SEAT_WORDS: dict[str, str | None] = {
 # Wishes that cannot both be met by one seat
 _CONTRADICTIONS = (("window", "aisle"), ("forward", "backward"))
 
+# API comfort code -> display name. The single source for both the offer
+# lookup (booking.find_offer_id) and the seat picker's carriage header, the
+# way SERVICE_TYPE_NAMES is the single source for service types.
+COMFORT_NAMES: dict[str, str] = {
+    "SECOND": "2 class",
+    "SECOND_CALM": "2 class calm",
+    "FIRST": "1 class",
+}
+
 ASK: Literal["ask"] = "ask"
 
 Preference = list[str] | Literal["ask"] | None
@@ -151,8 +160,8 @@ def satisfies(seat: Seat, wish: str) -> bool:
     return code is not None and code in seat["codes"]
 
 
-def _number_key(value: str) -> tuple[int, int, str]:
-    """Numeric seats sort numerically; anything odd (incl. non-ASCII digits) sorts last."""
+def number_key(value: str) -> tuple[int, int, str]:
+    """Numeric carriage/seat numbers sort numerically; anything odd sorts last."""
     if value.isascii() and value.isdigit():
         return (0, int(value), value)
     return (1, 0, value)
@@ -186,8 +195,8 @@ def best_seat(seatmap: dict[str, Any], wishes: list[str]) -> Seat | None:
         seats,
         key=lambda s: (
             [not satisfies(s, w) for w in wishes],
-            _number_key(s["carriage"]),
-            _number_key(s["number"]),
+            number_key(s["carriage"]),
+            number_key(s["number"]),
         ),
     )
 
@@ -202,6 +211,28 @@ def current_seat(seatmap: dict[str, Any]) -> tuple[str | None, str | None]:
         str(carriage) if carriage is not None else None,
         str(number) if number is not None else None,
     )
+
+
+def carriage_comfort(seatmap: dict[str, Any], carriage: str) -> str:
+    """
+    The display comfort of one carriage, or "" when the map does not say.
+
+    There is no `comfortDescription` field: comfort lives in
+    `carriages[].carriageComforts` (e.g. ["SECOND_CALM"]). A carriage can
+    list several codes (["SECOND_WHEELCHAIR", "SECOND"]) — the first one we
+    have a name for wins. When the carriage says nothing we recognise, fall
+    back to the class the passenger is booked in
+    (`passengerSeats[].inventoryClass`). An unrecognised code renders as
+    nothing rather than as a raw API word.
+    """
+    for c in seatmap.get("carriages") or []:
+        if isinstance(c, dict) and str(c.get("carriageNumber")) == str(carriage):
+            for code in c.get("carriageComforts") or []:
+                if code in COMFORT_NAMES:
+                    return COMFORT_NAMES[code]
+            break
+    assigned = next((s for s in seatmap.get("passengerSeats") or [] if isinstance(s, dict)), {})
+    return COMFORT_NAMES.get(str(assigned.get("inventoryClass")), "")
 
 
 _WORD_BY_CODE = {code: word for word, code in SEAT_WORDS.items() if code}

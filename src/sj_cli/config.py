@@ -308,9 +308,9 @@ class CfgManager:
         """
         Validate the optional `seat_preference` key (grammar: seats.parse_preference).
 
-        A valid word list is normalised in place, like `dates`. The change-seat
-        modes pass require_seat_preference=True: without the key they have
-        nothing to do.
+        A valid value is normalised in place, like `dates` — both the word
+        list and the "ask" literal. The change-seat modes pass
+        require_seat_preference=True: without the key they have nothing to do.
         """
         value = params.get("seat_preference")
         if value is None:
@@ -321,8 +321,9 @@ class CfgManager:
         if problems:
             errors.extend(problems)
             return
-        if isinstance(preference, list):
-            params["seat_preference"] = preference
+        # Write back unconditionally: "  ASK  " normalises to "ask" just like a
+        # word list does, and the booking layer must never see the raw string.
+        params["seat_preference"] = preference
 
     def _validate_dates(self, params: dict[str, Any], errors: list[str]) -> None:
         """

@@ -36,7 +36,17 @@ from sj_cli.output import (
     pwarn,
     spinner,
 )
-from sj_cli.seats import ASK, Seat, best_seat, current_seat, describe_seat, free_seats, satisfies
+from sj_cli.seats import (
+    COMFORT_NAMES,
+    Seat,
+    best_seat,
+    carriage_comfort,
+    current_seat,
+    describe_seat,
+    free_seats,
+    number_key,
+    satisfies,
+)
 from sj_cli.tokens import TokenManager
 
 logger = logging.getLogger(__name__)
@@ -370,12 +380,6 @@ def find_offer_id(
             for cls, keys in class_map.items()
         }
 
-    api_to_display = {
-        "SECOND": "2 class",
-        "SECOND_CALM": "2 class calm",
-        "FIRST": "1 class",
-    }
-
     # Iterate in preference order, not API dict order — the API lists SECOND
     # before SECOND_CALM, so walking offers.items() would always pick plain
     # 2 class even when calm is available.
@@ -404,7 +408,7 @@ def find_offer_id(
                     amount_val = -1
 
                 if amount_val == 0:
-                    matched_class = api_to_display.get(comf_key, requested_class)
+                    matched_class = COMFORT_NAMES.get(comf_key, requested_class)
                     logger.info(f"found offer: {comf_key} - {flex_type}")
                     specific_offer_id = flex_data.get("offerId")
                     if specific_offer_id:
@@ -925,6 +929,19 @@ def _segment_label(segment: dict, segments: list[dict]) -> str:
     return label.strip()
 
 
+def _seats_locked(seatmap: dict) -> bool:
+    """
+    Whether this seat map refuses a change.
+
+    API-null rule: `canChangeSeat` is a tri-state — true, false, or absent /
+    an explicit null. Only an explicit false (or a departed train) blocks the
+    attempt; "not stated" is deliberately read as "try anyway", because a
+    refusal costs one `!` line while reading it as "locked" would silently
+    skip every seat the API happened to null.
+    """
+    return bool(seatmap.get("hasDeparted")) or seatmap.get("canChangeSeat") is False
+
+
 def _seat_update(segment: dict, seat: Seat) -> dict:
     """One updateSegmentSeats entry.
 
@@ -965,25 +982,45 @@ def _ask_for_seat(seatmap: dict, label: str) -> Seat | None:
         pwarn(f"no free seat to choose from for {label}")
         return None
 
-    _carriage, number = current_seat(seatmap)
-    by_number = {s["number"]: s for s in seats}
-    print_seat_choices(seats, comfort=seatmap.get("comfortDescription", ""))
+    # Seat numbers repeat across carriages (74 of them on one X 2000 map), so
+    # the seat is keyed on the pair and the prompt's default shows the pair —
+    # which is also how the user types one: "3-31".
+    by_key = {(s["carriage"], s["number"]): s for s in seats}
+    carriage, number = current_seat(seatmap)
+    default = f"{carriage}-{number}" if carriage and number else number or "?"
+    comforts = {s["carriage"]: carriage_comfort(seatmap, s["carriage"]) for s in seats}
+    print_seat_choices(seats, comforts)
     while True:
-        answer = ask_optional(f"{label} seat [{number or '?'}]: ")
+        answer = ask_optional(f"{label} seat [{default}]: ")
         if answer is None:  # Ctrl-D: keep this seat and stop asking for the run
             _ask_disabled = True
             return None
         answer = answer.strip()
         if not answer:  # empty line: keep this seat, keep asking on later legs
             return None
-        if answer in by_number:
-            return by_number[answer]
-        pwarn(f"seat {answer} is not free, pick one from the list")
+        wanted_carriage, sep, wanted_number = (p.strip() for p in answer.partition("-"))
+        if sep and wanted_carriage and wanted_number:
+            seat = by_key.get((wanted_carriage, wanted_number))
+            if seat is not None:
+                return seat
+            pwarn(f"seat {answer} is not free, pick one from the list")
+            continue
+        matches = [s for s in seats if s["number"] == answer]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            pwarn(f"seat {answer} is not free, pick one from the list")
+            continue
+        where = sorted({s["carriage"] for s in matches}, key=number_key)
+        pwarn(f"seat {answer} is in carriages {', '.join(where)}, answer like {where[0]}-{answer}")
 
 
 def _choose_seat(seatmap: dict, preference: list[str] | str, label: str) -> Seat | None:
     """The seat to take for one segment, or None to keep the current one."""
-    if preference == ASK:
+    # Any string is the "ask" literal — parse_preference normalises it and
+    # rejects every other string. Guarding on the type rather than on the
+    # value keeps a stray string from being iterated as a list of wishes.
+    if isinstance(preference, str):
         return _ask_for_seat(seatmap, label)
     wishes = list(preference)
     seat = best_seat(seatmap, wishes)
@@ -1027,7 +1064,8 @@ def _apply_seat_preference(
     Returns:
         (booking, seats_changed) — the updated booking when a PATCH
         succeeded (trusting the API's response over the request), the one
-        passed in otherwise, and how many seats were actually requested.
+        passed in otherwise, and how many of the requested seats the
+        response confirms.
 
     """
     segments = [
@@ -1047,7 +1085,7 @@ def _apply_seat_preference(
             logger.warning(f"seat map failed for {label}: {e}")
             pwarn(f"could not read the seat map for {label}: {error_text(e)}")
             continue
-        if seatmap.get("hasDeparted") or not seatmap.get("canChangeSeat", True):
+        if _seats_locked(seatmap):
             logger.info(f"seats cannot be changed for {label}")
             pdim(f"{label}: seat cannot be changed")
             continue
@@ -1073,6 +1111,8 @@ def _apply_seat_preference(
 
     _, _, updated = _booking_from_response(resp)
     if not updated:
+        # An empty body: the PATCH was accepted and there is nothing to check
+        # it against, so the requested seats are the best answer we have.
         return booking, len(updates)
 
     # Trust the response over the request: the API may hand back a different
@@ -1084,13 +1124,18 @@ def _apply_seat_preference(
                 seat_info = product.get("seat") or {}
                 got.add((seat_info.get("carriageNumber"), seat_info.get("number")))
 
+    confirmed = 0
     for update in updates:
-        if (update["carriageNumber"], update["seatNumber"]) not in got:
+        if (update["carriageNumber"], update["seatNumber"]) in got:
+            confirmed += 1
+        else:
             pwarn(
                 f"asked for carriage {update['carriageNumber']} seat {update['seatNumber']}, "
                 "the booking says otherwise"
             )
-    return updated, len(updates)
+    # Confirmed, never requested: "N seat(s) changed" must not contradict the
+    # "the booking says otherwise" line printed just above it.
+    return updated, confirmed
 
 
 def handle_booking_process(
@@ -2124,6 +2169,26 @@ def _route_label(segments: list[dict]) -> str:
     return f"{origin} → {dest}"
 
 
+def _scoped_to(booking: dict, segments: list[dict]) -> dict:
+    """
+    `booking`, cut down to the legs `segments` covers.
+
+    The seat PATCH answers with the whole booking, while a --change-seat-date
+    target is one day of it: without this the card would print the days it
+    never touched, under the target day's header. Segments are matched on
+    (service, departure), and a response that carries none of them falls back
+    to the segments asked about, so the card is never empty.
+    """
+    keys = {(seg.get("serviceIdentifier"), seg.get("departureDateTime")) for seg in segments}
+    kept = [
+        seg
+        for journey in booking.get("journeys") or []
+        for seg in journey.get("segments") or []
+        if (seg.get("serviceIdentifier"), seg.get("departureDateTime")) in keys
+    ]
+    return {"journeys": [{"segments": kept or segments}]}
+
+
 def _preview_seats(
     client: SJClient,
     access_token: str,
@@ -2155,12 +2220,12 @@ def _preview_seats(
             logger.warning(f"seat map failed for {label}: {e}")
             pwarn(f"could not read the seat map for {label}: {error_text(e)}")
             continue
-        if seatmap.get("hasDeparted") or not seatmap.get("canChangeSeat", True):
+        if _seats_locked(seatmap):
             logger.info(f"seats cannot be changed for {label}")
             pdim(f"{label}: seat cannot be changed")
             continue
 
-        if preference == ASK:
+        if isinstance(preference, str):  # "ask": read-only, never prompt in a dry run
             carriage, number = current_seat(seatmap)
             current = f"carriage {carriage} seat {number}" if carriage else "no assigned seat"
             pdim(f"{label}: currently {current} · {len(free_seats(seatmap))} free seat(s)")
@@ -2214,18 +2279,25 @@ def handle_change_seat(
 
     Returns:
         True when everything matched was handled (or nothing matched at
-        all); False when a named booking was not found or a seat change
-        raised while being applied.
+        all); False when seat_preference is missing, a named booking was not
+        found, or a seat change raised while being applied.
 
     """
     _reset_seat_prompts()  # a fresh run always starts willing to ask
     params = cfg["search_parameters"]
-    preference = params.get("seat_preference") or ASK
+    # The CLI validates the key before we get here (require_seat_preference),
+    # but do not let a missing one quietly turn into "ask": an unattended run
+    # would sit on a prompt it can never answer.
+    preference = params.get("seat_preference")
+    if not preference:
+        pstatus(False, 'no seat_preference in [search_parameters] (set it to "ask" or a word list)')
+        return False
 
     # (booking item, booking, matched date or None) — None means "every leg",
     # used for the booking-number path where no date scoping applies.
     targets: list[tuple[dict, dict, str | None]] = []
     ok = True
+    reported = False  # a per-target ● already said how this run ended
 
     if dates:
         origin_id = client.resolve_station(params["station_from"])
@@ -2270,6 +2342,7 @@ def handle_change_seat(
             if not found:
                 blank()
                 pstatus(False, f"no active booking found with number {number}")
+                reported = True
                 ok = False
                 continue
             targets.append((*found, None))
@@ -2328,7 +2401,7 @@ def handle_change_seat(
                     )
                     if changed:
                         seats_changed_total += changed
-                        print_leg_lines(_booked_rows(updated, booking_number))
+                        print_leg_lines(_booked_rows(_scoped_to(updated, workable), booking_number))
                     else:
                         pdim("no seats changed")
             except Exception as e:
@@ -2341,7 +2414,9 @@ def handle_change_seat(
         pstatus(True, f"{seats_changed_total} seat(s) changed")
     elif any_target:
         pstatus(None, "dry run · nothing to change" if dry_run else "nothing changed")
-    else:
+    elif not reported:
+        # One closing ● per operation: an unresolved booking number already
+        # printed its own, so do not follow it with "no bookings matched".
         pstatus(False, "no bookings matched")
 
     return ok

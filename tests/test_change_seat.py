@@ -2,6 +2,8 @@
 
 from datetime import timedelta
 
+import pytest
+
 from sj_cli.booking import handle_change_seat
 from sj_cli.dates import sweden_now
 from tests.fakes import FakeClient, base_cfg, seatmap
@@ -11,7 +13,37 @@ from tests.fakes import FakeClient, base_cfg, seatmap
 # would be reported as "already departed" and every test below would pass
 # vacuously (no seat map read, no PATCH, for the wrong reason).
 FUTURE_DATE = (sweden_now() + timedelta(days=30)).date().isoformat()
+FUTURE_DATE_2 = (sweden_now() + timedelta(days=31)).date().isoformat()
 PAST_DATE = (sweden_now() - timedelta(days=2)).date().isoformat()
+
+
+def _segment(date, tag, dep_time, origin="740000002"):
+    return {
+        "direction": "OUTBOUND",
+        "serviceIdentifier": f"SI-{tag}",
+        "seatMapAvailable": True,
+        "seatMapSearchId": f"SM-{tag}",
+        "departureDateTime": f"{date}T{dep_time}:00+02:00",
+        "arrivalDateTime": f"{date}T{dep_time[:2]}:59:00+02:00",
+        "departureStation": {"uicStationCode": origin},
+        "arrivalStation": {"uicStationCode": "740000001"},
+        "requiredProducts": [{"seat": {"number": "39", "carriageNumber": "3"}}],
+    }
+
+
+def two_day_booking(number="NUM1"):
+    """One booking, two travel days — the shape --change-seat-date must scope to."""
+    return {
+        "booking": {
+            "bookingNumber": number,
+            "bookingId": f"ID-{number}",
+            "bookingStatus": "CONFIRMED",
+            "journeys": [
+                {"segments": [_segment(FUTURE_DATE, "D1", "06:00")]},
+                {"segments": [_segment(FUTURE_DATE_2, "D2", "09:00")]},
+            ],
+        }
+    }
 
 
 def booking_item(number="NUM1", date=FUTURE_DATE, direction="OUTBOUND", origin="740000002"):
@@ -120,3 +152,113 @@ def test_change_seat_skips_a_past_segment(capsys):
     assert not c.seat_updates
     # No seat map should even be read for a segment we already know is past.
     assert not [call for call in c.calls if call[0] == "seatmap"]
+
+
+def test_change_seat_by_date_touches_and_shows_only_that_day(capsys):
+    """A booking spanning two days: the other day is neither patched nor printed."""
+    c = FakeClient()
+    c.bookings_list = [two_day_booking()]
+    c.seatmaps = {"SM-D1": seatmap(), "SM-D2": seatmap()}
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE]) is True
+
+    ids = [u["serviceIdentifier"] for _, updates, _ in c.seat_updates for u in updates]
+    assert ids == ["SI-D1"]  # only the named day's segment was patched
+    assert not [call for call in c.calls if call[0] == "seatmap" and call[2] == "SM-D2"]
+
+    out = capsys.readouterr().out
+    assert FUTURE_DATE_2 not in out
+    assert "06:00" in out and "09:00" not in out  # the card shows one day, not the booking
+    assert "carriage 3 seat 70" in out
+    assert "● 1 seat(s) changed" in out
+
+
+@pytest.mark.parametrize("preference", ["ask", "  ASK  "])
+def test_change_seat_dry_run_in_ask_mode_reports_without_prompting(capsys, monkeypatch, preference):
+    from sj_cli import booking
+
+    monkeypatch.setattr(booking, "ask_optional", lambda _: pytest.fail("a dry run must not ask"))
+    monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
+
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    cfg = base_cfg()
+    # Any string is "ask": an unnormalised one must not be read as a wish list
+    cfg["search_parameters"]["seat_preference"] = preference
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE], dry_run=True) is True
+    assert not c.seat_updates
+    out = capsys.readouterr().out
+    assert "currently carriage 3 seat 39 · 1 free seat(s)" in out
+
+
+def test_change_seat_by_booking_number_skips_a_cancelled_booking(capsys):
+    c = FakeClient()
+    item = booking_item()
+    item["booking"]["bookingStatus"] = "CANCELLED"
+    c.bookings_list = [item]
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, booking_numbers=["NUM1"]) is False
+    assert not c.seat_updates
+    assert "no active booking found with number NUM1" in capsys.readouterr().out
+
+
+def test_an_unresolved_booking_number_closes_with_one_status_line(capsys):
+    c = FakeClient()
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, booking_numbers=["NOPE"]) is False
+    out = capsys.readouterr().out
+    assert out.count("●") == 1  # one closing status per operation
+    assert "no active booking found with number NOPE" in out
+    assert "no bookings matched" not in out
+
+
+def test_change_seat_without_a_preference_fails_instead_of_prompting(capsys):
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    cfg = base_cfg()  # no seat_preference at all
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE]) is False
+    assert not c.calls  # nothing was even fetched
+    assert "● no seat_preference in [search_parameters]" in capsys.readouterr().out
+
+
+def test_a_seat_the_api_kept_is_not_counted_as_changed(capsys, monkeypatch):
+    """The closing ● must not claim a change the booking contradicts."""
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    # the PATCH is accepted but the booking still shows the old seat
+    monkeypatch.setattr(
+        c,
+        "update_seats",
+        lambda _t, bid, updates, **_k: (
+            c.seat_updates.append((bid, updates, False))
+            or {"bookingId": bid, "booking": c._listed_booking(bid)}
+        ),
+    )
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE])
+    out = capsys.readouterr().out
+    assert "! asked for carriage 3 seat 70, the booking says otherwise" in out
+    assert "● nothing changed" in out
+    assert "seat(s) changed" not in out
+
+
+def test_an_unstated_can_change_seat_is_tried_anyway():
+    """canChangeSeat null means "not stated", not "locked" (API-null rule)."""
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    c.seatmaps = {"SM-OUTBOUND": {**seatmap(), "canChangeSeat": None}}
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE])
+    assert c.seat_updates

@@ -329,7 +329,47 @@ def test_seat_choices_group_by_carriage(capsys):
         {"carriage": "3", "number": "17", "codes": ["AISLE"], "forward": False},
         {"carriage": "3", "number": "70", "codes": ["TABLE", "WINDOW"], "forward": True},
     ]
-    print_seat_choices(seats, comfort="2 klass Lugn")
+    print_seat_choices(seats, {"3": "2 class calm"})
     out = capsys.readouterr().out
-    assert "free in carriage 3 · 2 klass Lugn · 3 seats" in out
+    assert "free in carriage 3 · 2 class calm · 3 seats" in out
     assert "14 window, forward" in out and "70 table, window, forward" in out
+
+
+def test_seat_choices_counts_one_seat_in_the_singular(capsys):
+    from sj_cli.output import print_seat_choices
+
+    print_seat_choices([{"carriage": "3", "number": "14", "codes": [], "forward": True}])
+    out = capsys.readouterr().out
+    assert "free in carriage 3 · 1 seat\n" in out  # not "1 seats", and no comfort
+    assert " · 1 seats" not in out
+
+
+def test_seat_choices_list_carriages_in_numeric_order(capsys):
+    from sj_cli.output import print_seat_choices
+
+    # insertion order is 10, 2, 3: the listing must not follow it, and must
+    # not sort "10" before "2" either
+    seats = [
+        {"carriage": "10", "number": "1", "codes": [], "forward": True},
+        {"carriage": "2", "number": "1", "codes": [], "forward": True},
+        {"carriage": "3", "number": "1", "codes": [], "forward": True},
+    ]
+    print_seat_choices(seats, {"2": "1 class"})
+    headers = [line for line in capsys.readouterr().out.splitlines() if "free in carriage" in line]
+    assert [h.split("carriage ")[1].split(" ")[0] for h in headers] == ["2", "3", "10"]
+    assert "· 1 class ·" in headers[0]  # the comfort belongs to its own carriage
+
+
+def test_seat_choices_never_truncate_a_seat_with_every_property(capsys):
+    from sj_cli.output import print_seat_choices
+
+    every = ["EASY_ACCESS", "WITHOUT_ANIMALS", "SOLO", "TABLE", "WINDOW"]
+    seats = [
+        {"carriage": "3", "number": str(70 + i), "codes": every, "forward": True} for i in range(3)
+    ]
+    print_seat_choices(seats)
+    out = capsys.readouterr().out
+    for i in range(3):
+        assert f"{70 + i} easy access, no animals, solo, table, window, forward" in out
+    # too wide for three columns: one entry per line, and no line runs over 80
+    assert all(len(line) <= 80 for line in out.splitlines())

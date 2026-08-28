@@ -268,6 +268,16 @@ def test_seat_preference_is_validated_and_normalised():
     assert cfg["search_parameters"]["seat_preference"] == ["window", "easy access"]
 
 
+def test_seat_preference_ask_is_normalised_too():
+    # Not only the word list: an unnormalised "  ASK  " that reached the
+    # booking layer would be iterated character by character and silently
+    # pick a seat instead of prompting.
+    cfg = future_cfg()
+    cfg["search_parameters"]["seat_preference"] = "  ASK  "
+    CfgManager().verify_cfg(cfg)
+    assert cfg["search_parameters"]["seat_preference"] == "ask"
+
+
 def test_seat_preference_errors_are_collected():
     cfg = future_cfg()
     cfg["search_parameters"]["seat_preference"] = ["kitchen"]
@@ -284,3 +294,12 @@ def test_seat_preference_can_be_required_without_the_rest_of_search_params():
 
     cfg["search_parameters"] = {"seat_preference": "ask"}
     CfgManager().verify_cfg(cfg, require_search=False, require_seat_preference=True)
+
+
+def test_seat_preference_is_required_even_when_the_section_exists():
+    # The section is there, the key is not: the change-seat modes still have
+    # nothing to do, so this must fail like the missing-section case.
+    cfg = future_cfg()
+    with pytest.raises(SJConfigError) as e:
+        CfgManager().verify_cfg(cfg, require_seat_preference=True)
+    assert any("seat_preference" in err for err in e.value.errors)

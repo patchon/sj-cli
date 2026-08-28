@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from sj_cli.dates import parse_api_datetime, sweden_now, to_sweden
-from sj_cli.seats import Seat, seat_words
+from sj_cli.seats import Seat, number_key, seat_words
 
 logger = logging.getLogger(__name__)
 
@@ -431,25 +431,33 @@ def print_leg_lines(rows: list[dict]) -> None:
         _emit(line)
 
 
-def print_seat_choices(seats: list[Seat], comfort: str = "") -> None:
+def print_seat_choices(seats: list[Seat], comforts: dict[str, str] | None = None) -> None:
     """
-    List the free seats to choose from: a dim header, then three per line.
+    List the free seats to choose from: a dim header per carriage, then a grid.
 
-    Grouped by carriage, each seat as 'number words' in the config
-    vocabulary, so what the user types at the prompt is what is shown here.
+    Grouped by carriage (lowest first), each seat as 'number words' in the
+    config vocabulary, so what the user types at the prompt is what is shown
+    here. `comforts` maps a carriage number to its display comfort, as
+    `seats.carriage_comfort` reads it; a carriage the map says nothing
+    about simply omits it.
     """
     by_carriage: dict[str, list[Seat]] = {}
     for seat in seats:
         by_carriage.setdefault(seat["carriage"], []).append(seat)
 
-    for carriage, group in by_carriage.items():
+    for carriage, group in sorted(by_carriage.items(), key=lambda kv: number_key(kv[0])):
         parts = [f"{s['number']} {', '.join(seat_words(s))}" for s in group]
         header = f"free in carriage {carriage}"
+        comfort = (comforts or {}).get(carriage, "")
         if comfort:
             header += f" · {comfort}"
-        pdim(f"{header} · {len(group)} seats")
-        for i in range(0, len(parts), 3):
-            pdim("  " + "   ".join(pad(p, 26) for p in parts[i : i + 3]).rstrip())
+        pdim(f"{header} · {len(group)} seat{'' if len(group) == 1 else 's'}")
+        # Columns sized to the widest entry (a seat can carry every property),
+        # three at most and fewer when three would not fit an 80-column line.
+        width = max(visible_len(p) for p in parts)
+        columns = max(1, min(3, 78 // (width + 3)))
+        for i in range(0, len(parts), columns):
+            pdim("  " + "   ".join(pad(p, width) for p in parts[i : i + columns]).rstrip())
 
 
 def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
