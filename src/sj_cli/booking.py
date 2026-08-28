@@ -1049,6 +1049,7 @@ def _apply_seat_preference(
             continue
         if seatmap.get("hasDeparted") or not seatmap.get("canChangeSeat", True):
             logger.info(f"seats cannot be changed for {label}")
+            pdim(f"{label}: seat cannot be changed")
             continue
 
         seat = _choose_seat(seatmap, preference, label)
@@ -2104,6 +2105,246 @@ def handle_cancel_booking(
             True, f"{n_selected} of {n_total} journey(s) cancelled from booking {booking_number}"
         )
     return True
+
+
+def _route_label(segments: list[dict]) -> str:
+    """'A → B' for one direction, 'A ⇄ B' when the opposite direction is also present."""
+    pairs = [
+        (
+            (seg.get("departureStation") or {}).get("name") or "—",
+            (seg.get("arrivalStation") or {}).get("name") or "—",
+        )
+        for seg in segments
+    ]
+    if not pairs:
+        return "—"
+    origin, dest = pairs[0]
+    if any(pair == (dest, origin) for pair in pairs):
+        return f"{origin} ⇄ {dest}"
+    return f"{origin} → {dest}"
+
+
+def _preview_seats(
+    client: SJClient,
+    access_token: str,
+    booking_id: str,
+    booking: dict,
+    preference: list[str] | str,
+) -> None:
+    """
+    Dry-run seat preview: report what --change-seat would do, without writing.
+
+    Mirrors _apply_seat_preference's segment walk (same seat-map fetch, same
+    hasDeparted/canChangeSeat skip) but only reads: it never calls
+    update_seats, and in "ask" mode it never prompts — it reports the
+    current seat and how many are free instead.
+    """
+    segments = [
+        seg for journey in booking.get("journeys") or [] for seg in journey.get("segments") or []
+    ]
+    for segment in segments:
+        label = _segment_label(segment, segments)
+        search_id = segment.get("seatMapSearchId")
+        if not (segment.get("seatMapAvailable") and search_id):
+            logger.info(f"no seat map for {label}")
+            continue
+        try:
+            with spinner(f"reading the seat map for {label}", trail=False):
+                seatmap = client.get_seatmap(access_token, booking_id, search_id)
+        except Exception as e:
+            logger.warning(f"seat map failed for {label}: {e}")
+            pwarn(f"could not read the seat map for {label}: {error_text(e)}")
+            continue
+        if seatmap.get("hasDeparted") or not seatmap.get("canChangeSeat", True):
+            logger.info(f"seats cannot be changed for {label}")
+            pdim(f"{label}: seat cannot be changed")
+            continue
+
+        if preference == ASK:
+            carriage, number = current_seat(seatmap)
+            current = f"carriage {carriage} seat {number}" if carriage else "no assigned seat"
+            pdim(f"{label}: currently {current} · {len(free_seats(seatmap))} free seat(s)")
+            continue
+
+        seat = best_seat(seatmap, list(preference))
+        if seat is None:
+            pwarn(f"no free seat to choose from for {label}")
+            continue
+        if (seat["carriage"], seat["number"]) == current_seat(seatmap):
+            pdim(f"{label}: already on the best seat")
+            continue
+        pinfo(f"{label}: would take {describe_seat(seat)}")
+
+
+def handle_change_seat(
+    client: SJClient,
+    access_token: str,
+    cfg: dict,
+    dates: list[str] | None = None,
+    booking_numbers: list[str] | None = None,
+    travel_pass: dict | None = None,
+    dry_run: bool = False,
+) -> bool:
+    """
+    Re-seat existing bookings, by date (configured route) or by booking number.
+
+    Mirrors the cancel pair's scoping: dates take that day's journeys on the
+    configured route (handle_cancel_mode's matching), an explicit booking
+    number takes every leg of that booking whatever route it runs
+    (handle_cancel_booking's not-found reporting). Seats are chosen exactly
+    as in --book (_apply_seat_preference) and written through the
+    confirmed-booking endpoint (provisional=False).
+
+    A segment that has already departed, or whose seat map reports
+    canChangeSeat: false, is left alone and noted rather than attempted.
+
+    Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        cfg: The full config dict.
+        dates: Swedish dates (YYYY-MM-DD); each day's journeys on the
+            configured route (either direction) are re-seated.
+        booking_numbers: Explicit booking numbers; every leg of each is
+            re-seated, whatever route it runs — a number is already an
+            explicit target, so no route filter applies.
+        travel_pass: Travel pass dict, for the date range a booking-number
+            search covers (see booking_date_range); None uses the fallback
+            window.
+        dry_run: Read seat maps and report the choice, but never PATCH.
+
+    Returns:
+        True when everything matched was handled (or nothing matched at
+        all); False when a named booking was not found or a seat change
+        raised while being applied.
+
+    """
+    _reset_seat_prompts()  # a fresh run always starts willing to ask
+    params = cfg["search_parameters"]
+    preference = params.get("seat_preference") or ASK
+
+    # (booking item, booking, matched date or None) — None means "every leg",
+    # used for the booking-number path where no date scoping applies.
+    targets: list[tuple[dict, dict, str | None]] = []
+    ok = True
+
+    if dates:
+        origin_id = client.resolve_station(params["station_from"])
+        dest_id = client.resolve_station(params["station_to"])
+        for day in dates:
+            with spinner(f"fetching bookings for {day}", trail=False):
+                day_bookings = fetch_all_bookings(client, access_token, day, day)
+            # Same matching as handle_cancel_mode: whole journeys (a change
+            # still matches), on the route in either direction, that date.
+            matched_numbers = set()
+            for item in day_bookings:
+                booking = item.get("booking") or {}
+                if not is_active_booking(booking):
+                    continue
+                for journey in booking.get("journeys") or []:
+                    j_origin, j_dest, j_date = _journey_endpoints(journey)
+                    if j_date != day:
+                        continue
+                    if (j_origin, j_dest) in {(origin_id, dest_id), (dest_id, origin_id)}:
+                        b_num = booking.get("bookingNumber")
+                        if b_num:
+                            matched_numbers.add(b_num)
+            for item in day_bookings:
+                booking = item.get("booking") or {}
+                if booking.get("bookingNumber") in matched_numbers:
+                    targets.append((item, booking, day))
+
+    if booking_numbers:
+        b_start, b_end = booking_date_range(travel_pass)
+        with spinner("fetching bookings", trail=False):
+            all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
+        by_number: dict[str, tuple[dict, dict]] = {}
+        for item in all_bookings:
+            booking = item.get("booking") or {}
+            if not is_active_booking(booking):
+                continue
+            num = booking.get("bookingNumber")
+            if num:
+                by_number.setdefault(num, (item, booking))
+        for number in booking_numbers:
+            found = by_number.get(number)
+            if not found:
+                blank()
+                pstatus(False, f"no active booking found with number {number}")
+                ok = False
+                continue
+            targets.append((*found, None))
+
+    any_target = bool(targets)
+    seats_changed_total = 0
+    now = sweden_now()
+
+    for item, booking, matched_date in targets:
+        booking_number = booking.get("bookingNumber") or "—"
+        booking_id = _booking_id(item, booking)
+        all_segs = [
+            seg
+            for journey in booking.get("journeys") or []
+            for seg in journey.get("segments") or []
+        ]
+        # A date target scopes to that day's segments only — the booking's
+        # other days are kept, exactly like --cancel-date's only_date.
+        scoped = [
+            seg
+            for seg in all_segs
+            if not matched_date or _segment_date(seg.get("departureDateTime", "")) == matched_date
+        ]
+        if not scoped:
+            continue  # the journey that matched is gone by the time we re-read it
+
+        dated = sorted(scoped, key=lambda s: s.get("departureDateTime") or "")
+        header_date = matched_date or _segment_date(dated[0].get("departureDateTime", ""))
+        print_day_header(header_date, _route_label(scoped))
+        with indented():
+            workable = []
+            for seg in scoped:
+                row = _segment_to_display_row(seg, booking_number, now)
+                if row["past"] == "Y":
+                    pdim(f"{_segment_label(seg, all_segs)}: already departed, skipped")
+                    continue
+                workable.append(seg)
+
+            if not workable:
+                pdim("nothing to change")
+                blank()
+                continue
+
+            target_booking = {"journeys": [{"segments": workable}]}
+            try:
+                if dry_run:
+                    _preview_seats(client, access_token, booking_id, target_booking, preference)
+                else:
+                    updated, changed = _apply_seat_preference(
+                        client,
+                        access_token,
+                        booking_id,
+                        target_booking,
+                        preference,
+                        provisional=False,
+                    )
+                    if changed:
+                        seats_changed_total += changed
+                        print_leg_lines(_booked_rows(updated, booking_number))
+                    else:
+                        pdim("no seats changed")
+            except Exception as e:
+                logger.error(f"seat change failed for booking {booking_number}: {e}")
+                pwarn(f"seat change failed for booking {booking_number}: {error_text(e)}")
+                ok = False
+        blank()
+
+    if seats_changed_total:
+        pstatus(True, f"{seats_changed_total} seat(s) changed")
+    elif any_target:
+        pstatus(None, "dry run · nothing to change" if dry_run else "nothing changed")
+    else:
+        pstatus(False, "no bookings matched")
+
+    return ok
 
 
 def handle_list_bookings(
