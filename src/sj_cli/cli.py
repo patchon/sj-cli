@@ -17,6 +17,7 @@ from sj_cli.booking import (
     fetch_all_bookings,
     handle_cancel_booking,
     handle_cancel_mode,
+    handle_change_seat,
     handle_list_bookings,
     process_date_range,
 )
@@ -152,8 +153,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help=(
-            "Preview modifier for --book, --cancel-date and --cancel-booking: "
-            "show what would happen without doing any of it."
+            "Preview modifier for --book, --cancel-date, --cancel-booking, "
+            "--change-seat-date and --change-seat-booking: show what would "
+            "happen without doing any of it."
         ),
     )
     group = parser.add_mutually_exclusive_group()
@@ -175,6 +177,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--cancel-booking",
         metavar="BOOKING_NUMBER",
         help="Cancel booking(s) by number, comma-separated (e.g. 3HT2NEIL or 3HT2NEIL,ABCD1234).",
+    )
+    group.add_argument(
+        "--change-seat-date",
+        metavar="DATES",
+        help=(
+            "Change seats for one or more dates on the configured route, using "
+            "seat_preference: same date grammar as --cancel-date."
+        ),
+    )
+    group.add_argument(
+        "--change-seat-booking",
+        metavar="BOOKING_NUMBER",
+        help="Change seats on booking(s) by number, comma-separated, using seat_preference.",
     )
     group.add_argument(
         "--list-bookings",
@@ -212,9 +227,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("no operation given, choose one of the flags above")
 
     if args.dry_run and not (
-        args.book or args.cancel_date is not None or args.cancel_booking is not None
+        args.book
+        or args.cancel_date is not None
+        or args.cancel_booking is not None
+        or args.change_seat_date is not None
+        or args.change_seat_booking is not None
     ):
-        parser.error("--dry-run only applies to --book, --cancel-date and --cancel-booking")
+        parser.error(
+            "--dry-run only applies to --book, --cancel-date, --cancel-booking, "
+            "--change-seat-date and --change-seat-booking"
+        )
 
     # Validate-first: every cancel date is parsed and checked here, before
     # any auth or API work can start.
@@ -227,6 +249,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.cancel_booking_numbers, errors = parse_booking_numbers(args.cancel_booking)
         if errors:
             print_status_card(False, "invalid --cancel-booking", lines=errors)
+            sys.exit(1)
+    if args.change_seat_date is not None:
+        args.change_seat_dates, errors = parse_cancel_dates(args.change_seat_date)
+        if errors:
+            print_status_card(False, "invalid --change-seat-date", lines=errors)
+            sys.exit(1)
+    if args.change_seat_booking is not None:
+        args.change_seat_booking_numbers, errors = parse_booking_numbers(args.change_seat_booking)
+        if errors:
+            print_status_card(False, "invalid --change-seat-booking", lines=errors)
             sys.exit(1)
 
     return args
@@ -598,9 +630,17 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     try:
         cfg = cm.load()
         # Route/dates are only needed by the booking-shaped operations, the
-        # dates selection only by --book (--cancel-date takes its own dates)
+        # dates selection only by --book (--cancel-date and --change-seat-date
+        # take their own dates); seat_preference only by the change-seat modes.
         cm.verify_cfg(
-            cfg, require_search=args.book or args.cancel_date is not None, require_dates=args.book
+            cfg,
+            require_search=(
+                args.book or args.cancel_date is not None or args.change_seat_date is not None
+            ),
+            require_dates=args.book,
+            require_seat_preference=(
+                args.change_seat_date is not None or args.change_seat_booking is not None
+            ),
         )
     except SJConfigError as e:
         print_status_card(False, "invalid configuration", lines=e.errors or [str(e)])
@@ -724,6 +764,31 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                     client, access_token, active_pass, bn, dry_run=args.dry_run
                 )
             if not ok:
+                print()
+                sys.exit(1)
+
+        elif args.change_seat_date is not None:
+            operation = ("dry run · " if args.dry_run else "") + "changing seats"
+            print_header_box([("operation", operation), *pass_rows])
+            blank()
+            if not handle_change_seat(
+                client, access_token, cfg, dates=args.change_seat_dates, dry_run=args.dry_run
+            ):
+                print()
+                sys.exit(1)
+
+        elif args.change_seat_booking is not None:
+            operation = ("dry run · " if args.dry_run else "") + "changing seats"
+            print_header_box([("operation", operation), *pass_rows])
+            blank()
+            if not handle_change_seat(
+                client,
+                access_token,
+                cfg,
+                booking_numbers=args.change_seat_booking_numbers,
+                travel_pass=active_pass,
+                dry_run=args.dry_run,
+            ):
                 print()
                 sys.exit(1)
 
