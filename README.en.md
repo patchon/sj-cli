@@ -110,7 +110,16 @@ book_partial = false                 # optional: book the return leg alone if th
 skip_weekends = true                 # optional
 skip_holidays = true                 # optional: Swedish red days incl. Midsommar-/Jul-/Nyårsafton
 service_types = ["SJ_HIGH", "SJ_IC"] # optional train-type filter; omit or ["ALL"] for none
+seat_preference = ["window", "table", "forward"]  # optional; or "ask" to be prompted
 ```
+
+`seat_preference` is a ranked wish list: the best free seat wins, and an earlier word
+outweighs every later one combined — `["window", "table"]` takes a plain window seat
+over an aisle seat at a table. Words: `window`, `aisle`, `table`, `solo`,
+`easy access`, `no animals`, `forward`, `backward`. Set it to `"ask"` to be prompted
+for every leg instead (needs a terminal), or omit the key and SJ assigns the seat.
+A preference is never a guarantee: when nothing matches, the seat SJ picked is kept
+and a `!` line says so.
 
 Every field is validated before any network call, and all problems are reported at once. Valid
 stations are the ones in `STATION_MAP` in `src/sj_cli/client.py` (Stockholm, Linköping, Göteborg, Malmö,
@@ -131,6 +140,9 @@ sj-cli --cancel-date 2026-09-16,2026-09-21..2026-09-25   # several dates: comma 
 sj-cli --cancel-date W43                       # a whole ISO week (same grammar as dates)
 sj-cli --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what would be cancelled, no prompts
 sj-cli --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
+sj-cli --change-seat-date 2026-09-28            # re-seat that day (configured route)
+sj-cli --change-seat-booking ZSVV7EML           # re-seat one booking, any route
+sj-cli --change-seat-date W40 --dry-run         # preview which seats it would take
 sj-cli --login                 # authenticate, cache the token, exit
 sj-cli --logout                # end the sj.se session, delete cached token + cookies
 sj-cli --login-status          # exit 0 if logged in — valid or refreshable token (scripting)
@@ -174,7 +186,7 @@ duplicate booking. Timeouts are generous (30 s) because the booking calls themse
 
 ```bash
 ./venv/bin/pip install -e . --group dev   # once: project + pytest, ruff, mypy
-./venv/bin/pytest                         # ~250 tests, <1 s, no network (scripted fake client)
+./venv/bin/pytest                         # ~320 tests, <1 s, no network (scripted fake client)
 ./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatting
 ./venv/bin/mypy                           # type check
 ```

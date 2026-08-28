@@ -14,16 +14,17 @@ Standard src layout declared in `pyproject.toml` (PEP 621, `pip install -e .`). 
 
 | Module | Role |
 |---|---|
-| `cli.py` | Entry point. CLI argument parsing (see §5.6), top-level orchestration. |
+| `cli.py` | Entry point. CLI argument parsing (see §5.7), top-level orchestration. |
 | `auth.py` | Authentication orchestration. B2C login flow, token lifecycle (validate → refresh → full login), SMS input with timeout. |
 | `client.py` | HTTP client. All SJ API communication via `httpx.Client`. Low-level request methods only — no business logic. Includes HTTP retry logic. |
-| `booking.py` | Booking business logic. Search, departure selection, offer matching, provisional booking creation, checkout, cancellation, duplicate detection. |
+| `booking.py` | Booking business logic. Search, departure selection, offer matching, provisional booking creation, checkout, seat selection, cancellation, duplicate detection, change-seat modes. |
 | `config.py` | Configuration loading and validation (`CfgManager`). |
 | `tokens.py` | Token cache management (`TokenManager`). Load, save, validate expiry, check refresh availability. |
 | `logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. |
 | `errors.py` | Custom exceptions (`SJAPIError`, `SJAuthError`, `SJConfigError`) and `error_text()`, the one-line, redacted rendering every printed exception goes through. |
 | `output.py` | User-facing output helpers. `pinfo()`/`pdim()`, ANSI styling, spinner, per-day booking cards, status cards (auth modes), travel-pass cards. |
 | `dates.py` | Swedish red-day calendar (Easter computed, no dependency). `skip_reason()` for weekend/holiday skipping. |
+| `seats.py` | Seat selection: the config vocabulary, the seat-map join and the ranking. Pure logic — no HTTP, no printing. |
 
 ### Design principles
 
@@ -35,7 +36,7 @@ Standard src layout declared in `pyproject.toml` (PEP 621, `pip install -e .`). 
 ### Data flow
 
 ```
-CLI args (see §5.6)
+CLI args (see §5.7)
   ↓
 config.toml → config.CfgManager → validate all fields
   ↓
@@ -50,9 +51,11 @@ Mode dispatch:
   --list-travelpasses     → fetch & display travel-pass cards → exit
   --cancel-date DATES     → per date: find bookings on route → interactive cancel → exit
   --cancel-booking NUMS   → find bookings by number → interactive cancel → exit
+  --change-seat-date DATES    → find bookings on route → apply seat_preference → exit
+  --change-seat-booking NUMS  → find bookings by number → apply seat_preference → exit
   --login                 → exit after auth
   --logout                → end B2C session, delete caches → exit (skips config/auth)
-  (--dry-run modifies --book / --cancel-*: preview only, nothing mutated)
+  (--dry-run modifies --book / --cancel-* / --change-seat-*: preview only, nothing mutated)
   --book                  → booking loop:
                               clean up stale provisionals
                               for each selected date:
@@ -131,11 +134,12 @@ book_partial = false              # optional, default false (see §6.5)
 skip_weekends = true              # optional, default true
 skip_holidays = true              # optional, default true
 service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
+seat_preference = ["window", "table", "forward"]  # optional; or "ask" to be prompted (§4.3)
 ```
 
 ### 4.3 Validation rules
 
-Validation runs at startup before any API calls, scoped to the operation: `[auth]` is always validated; `[search_parameters]` only for the operations that use it (`--book`, `--cancel-date`) — login, listing and cancel-by-number work with a config holding only credentials (e.g. one freshly written by the first-run setup) — and the `dates` selection only for `--book`: `--cancel-date` takes its own dates and needs just the route. Fail fast: the errors render as a status card — `● invalid configuration` (red dot + bold verdict), a blank line, then one plain indented line per error — and the run exits 1. `SJConfigError` carries the individual messages as `.errors`; file-level failures (missing/unparsable config) render the same card with a single line.
+Validation runs at startup before any API calls, scoped to the operation: `[auth]` is always validated; `[search_parameters]` only for the operations that use the route (`--book`, `--cancel-date`, `--change-seat-date`) — login, listing, `--cancel-booking` and `--change-seat-booking` work with a config holding only credentials — and the `dates` selection only for `--book`: `--cancel-date` and `--change-seat-date` take their own dates (from the CLI) and need just the route. `seat_preference` sits outside that scoping: it is validated whenever `[search_parameters]` is present, in every mode, and is additionally required — its absence is itself an error — for `--change-seat-date` and `--change-seat-booking` (§5.4). Fail fast: the errors render as a status card — `● invalid configuration` (red dot + bold verdict), a blank line, then one plain indented line per error — and the run exits 1. `SJConfigError` carries the individual messages as `.errors`; file-level failures (missing/unparsable config) render the same card with a single line.
 
 | Field | Rules |
 |---|---|
@@ -155,6 +159,7 @@ Validation runs at startup before any API calls, scoped to the operation: `[auth
 | `skip_weekends` | Optional. Boolean. Defaults to `true`. Skip Saturdays and Sundays. |
 | `skip_holidays` | Optional. Boolean. Defaults to `true`. Skip Swedish red days (see §6.4). |
 | `service_types` | Optional. List of strings from `ALL, SJ_HIGH, SJ_IC, SJ_REG, SJ_NT, X_TRAINOPS, X_PTA, X_EXPBUS`. `ALL` cannot be combined with other values. |
+| `seat_preference` | Optional (absent means SJ assigns the seat); required for `--change-seat-date` / `--change-seat-booking` (§5.4). Either the literal `"ask"` (prompt for every leg) or a list of ranked vocabulary words: `window`, `aisle`, `table`, `solo`, `easy access`, `no animals`, `forward`, `backward` — an earlier word in the list outweighs every later one combined. Words are normalised in place (lower-cased, inner whitespace collapsed to one space). Rejected: a value that is neither `"ask"` nor a list of strings (`seat_preference must be "ask" or a list of: aisle, backward, easy access, forward, no animals, solo, table, window`); an empty list (`seat_preference is empty — omit the key to let SJ assign the seat`); an unknown word (`seat_preference: unknown "middle". Valid words: …`); a word listed twice (`seat_preference lists window twice`); and the two contradictions `window`+`aisle` and `forward`+`backward` (`seat_preference cannot ask for both window and aisle`). |
 
 Report all validation errors at once (don't stop at the first one).
 
@@ -170,7 +175,7 @@ Report all validation errors at once (don't stop at the first one).
 sj-cli --book
 ```
 
-Reads config, authenticates, and books tickets for every selected date (`dates`, §4.3). No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only` — a contiguous selection renders as `1 sep – 30 oct 2026`, anything else as `W43, W45..46 (19 oct – 15 nov 2026)`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.4): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): ● coloured by outcome — green when the run booked something, dim when it changed nothing (a dry run, or every day already booked or skipped), red when a day failed or errored — and dim summary text.
+Reads config, authenticates, and books tickets for every selected date (`dates`, §4.3). No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only` — a contiguous selection renders as `1 sep – 30 oct 2026`, anything else as `W43, W45..46 (19 oct – 15 nov 2026)`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.5): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): ● coloured by outcome — green when the run booked something, dim when it changed nothing (a dry run, or every day already booked or skipped), red when a day failed or errored — and dim summary text.
 
 ```
 ╭──────────────────────────────────╮
@@ -208,7 +213,7 @@ thu 24 sep 2026   Göteborg Central ⇄ Stockholm Central
 ● 4 day(s) · 1 booked · 1 already booked · 1 not booked · 2 skipped
 ```
 
-The booked legs are rendered from the booking object the API returns (train, carriage/seat, class, booking number), so they are identical to what `--list-bookings` shows afterwards. A checkout failure prints `checkout failed, provisional left (cleaned up on next --book run)` and counts as `checkout failed` in the footer; an exception while processing a day prints `error: …` and counts as `error(s)`. Either turns the closing `●` red and makes the run exit 1 (§5.7); days without a 0-price offer are skips (`not booked`), not failures. The route in the header shows what the day needs: `A ⇄ B` both legs, `A → B` outbound only, `B → A` return only (with a `return already booked, searching outbound only` / `outbound already booked, searching return only` line beneath).
+The booked legs are rendered from the booking object the API returns (train, carriage/seat, class, booking number), so they are identical to what `--list-bookings` shows afterwards. A checkout failure prints `checkout failed, provisional left (cleaned up on next --book run)` and counts as `checkout failed` in the footer; an exception while processing a day prints `error: …` and counts as `error(s)`. Either turns the closing `●` red and makes the run exit 1 (§5.8); days without a 0-price offer are skips (`not booked`), not failures. The route in the header shows what the day needs: `A ⇄ B` both legs, `A → B` outbound only, `B → A` return only (with a `return already booked, searching outbound only` / `outbound already booked, searching return only` line beneath).
 
 ### 5.2 Dry-run mode
 
@@ -253,7 +258,7 @@ sj-cli --cancel-date W43                      # a whole ISO week
 sj-cli --cancel-booking ERU0HWB2,8Y41N08J   # by booking number, any case
 ```
 
-For each matching booking: show its day card (same shape as §5.4, no title), then confirm. `y`/`yes` (any case) confirms; anything else aborts. `--cancel-date` cancels only that day's journeys: a booking made on sj.se may hold journeys on other days, which are neither shown nor touched — `1 other journey in booking X on other dates is kept` under the card, the prompt reads `cancel this journey from booking X?`, and the status line `1 of 2 journey(s) cancelled from booking X`.
+For each matching booking: show its day card (same shape as §5.5, no title), then confirm. `y`/`yes` (any case) confirms; anything else aborts. `--cancel-date` cancels only that day's journeys: a booking made on sj.se may hold journeys on other days, which are neither shown nor touched — `1 other journey in booking X on other dates is kept` under the card, the prompt reads `cancel this journey from booking X?`, and the status line `1 of 2 journey(s) cancelled from booking X`.
 
 ```
 ╭────────────────────────────────────╮
@@ -276,7 +281,36 @@ tue 15 sep 2026   Göteborg Central → Stockholm Central
 
 If the booking has several future journeys, they are listed as numbered leg lines (`1.`, `2.`, … and `a.` for all); the selected legs are echoed as leg lines under `selected for cancellation:` before the final `? cancel selected journey(s)? [y/n]:`. All cancel prompts (`? select [1/2/a]:`, the `[y/n]` confirmations) use the shared inline `?`-marked prompt (`ask()` in `output`). Past journeys are shown but cannot be selected. A booking with a pending cancellation offers confirm / revert / nothing. With `--dry-run`, the day cards are shown and the run stops there — no prompts, no cancellation calls — closing with `● dry run · N journey(s) would be cancelled from booking X` per booking (or `● dry run · booking X has a pending cancellation, nothing done`).
 
-### 5.4 List current bookings
+### 5.4 Change-seat mode
+
+```bash
+sj-cli --change-seat-date 2026-09-16                 # re-seat that day's journeys on the configured route
+sj-cli --change-seat-date W43 --dry-run              # preview which seats it would take, nothing written
+sj-cli --change-seat-booking ERU0HWB2,8Y41N08J       # re-seat booking(s) by number, any route
+```
+
+Re-seats already-confirmed bookings using `seat_preference` (§4.3), which both flags require. `--change-seat-date` matches the same way `--cancel-date` does — active bookings with a journey on the configured route (either direction) on that Swedish date — and touches only that day's segments; a booking's other days are left alone. `--change-seat-booking` takes booking numbers directly (same grammar as `--cancel-booking`: comma-separated, any case) and re-seats every segment of the booking, whatever route it runs; an unknown number is reported (`● no active booking found with number X`) and the run continues with the rest. Unlike `--cancel-date`'s one-section-per-date output, both flags process everything they were given in a single pass and close with one status line.
+
+A segment that has already departed is skipped before any seat map is read (`already departed, skipped`); one whose seat map itself reports `hasDeparted` or `canChangeSeat: false` is left alone the same way (`seat cannot be changed`) — neither counts as a failure. Otherwise seats are chosen exactly as during `--book` (§6.1 step 10): the seat map is read via `GET /bookings/{id}/seatmap/{seatMapSearchId}`, the best free seat — or, in `"ask"` mode, the interactively picked one — is written through `PATCH /bookings/{id}/seats`, the confirmed-booking endpoint (no confirm step, unlike cancellation). `--dry-run` reads the same seat maps and reports the choice without writing anything: `would take carriage 3 seat 34 · window, forward` per leg in word-list mode, or the current seat plus how many are free in `"ask"` mode, which never prompts under `--dry-run` (matching §5.2).
+
+```
+╭──────────────────────────────────╮
+│  operation    changing seats     │
+│  account      user@example.com   │
+│  travelpass   SJ Årskort Silver  │
+│  holder       John Doe           │
+╰──────────────────────────────────╯
+
+tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 klass Lugn   ERU0HWB2
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 7 seat 12   2 klass Lugn   ERU0HWB2
+
+● 2 seat(s) changed
+```
+
+The closing status is green only for a real run that actually wrote a seat (`N seat(s) changed`); a real run that matched something but changed nothing — every segment already held its best seat, or none were changeable — closes dim (`nothing changed`), and so does every dry run that matched something (`dry run · nothing to change`): a dry run never turns the line green, even when its per-leg lines say `would take …`, because nothing is actually written. Nothing matching at all closes red (`no bookings matched`). As everywhere in this feature (§10.2): a seat preference is never worth failing a booking over — a map that will not load, no matching seat, or a rejected PATCH each degrade to keeping the seat SJ assigned and print a `!` line rather than aborting; only an unresolved `--change-seat-booking` number affects the exit code (§5.8).
+
+### 5.5 List current bookings
 
 ```bash
 sj-cli --list-bookings
@@ -309,21 +343,23 @@ mon 31 aug 2026   Göteborg Central ⇄ Stockholm Central
 - Styling: bold header/booking numbers, dimmed past days, coloured arrows. ANSI colour is emitted only when stdout is a TTY and `NO_COLOR` is unset (`TERM=dumb` also disables it); piped output is plain text. Emoji appear only in run-mode title lines, never in footers or aligned rows.
 - The card renderer (`day_header`, `leg_lines` in `output.py`) is shared by list, book, dry-run and cancel output; columns that are empty on every row of a card are omitted, so book/list cards show train · seat · class · number while dry-run cards show train · class · flexibility/note. Travel passes render as cards in the same grammar (`print_travelpasses`): bold pass name + card number as the header, then dim-labelled facts (holder, valid with days left, price from the receipt); unknown facts are omitted, and a `● N travel pass(es)` status line closes the mode.
 
-### 5.5 Environment variables
+### 5.6 Environment variables
 
 | Variable | Effect |
 |---|---|
 | `LOG_LEVEL` | Set log verbosity: `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Default: `CRITICAL` (silent). |
 | `NO_COLOR` | If set (any value), disable ANSI colour/bold in output. Colour is also disabled automatically when stdout is not a TTY. |
 
-### 5.6 CLI flag summary
+### 5.7 CLI flag summary
 
 | Flag | Description | Interactive? |
 |---|---|---|
-| `--dry-run` | Modifier for `--book`/`--cancel-date`/`--cancel-booking`: preview only, nothing booked or cancelled, no prompts. Usage error alone or with any other flag. | Only SMS on first login. |
-| `--book` | Book tickets for the configured dates (`dates`, §4.3). | Only SMS on first login. |
+| `--dry-run` | Modifier for `--book`/`--cancel-date`/`--cancel-booking`/`--change-seat-date`/`--change-seat-booking`: preview only, nothing booked, cancelled or re-seated, no prompts. Usage error alone or with any other flag. | Only SMS on first login. |
+| `--book` | Book tickets for the configured dates (`dates`, §4.3). | Only SMS on first login; also prompts per leg when `seat_preference = "ask"` (not under `--dry-run`). |
 | `--cancel-date DATES` | Cancel bookings on the configured route for one or more dates: a `YYYY-MM-DD` date, an ISO week (`W43`, `2027-W02`; a bare week is this ISO year), a comma-separated list, and/or inclusive `START..END` ranges, mixed freely. Every token is validated up front (the same grammar as the config's `dates` key, §4.3); any problem renders an `● invalid --cancel-date` card echoing each bad value and exits 1 before any API call. Dates are deduplicated and processed in order, one section per date. | Yes (journey choice + confirmation). |
 | `--cancel-booking NUM[,NUM…]` | Cancel booking(s) by booking number, comma-separated, any case (deduplicated, order kept). Validated up front: a value that cannot be a booking number (anything beyond letters and digits) or that looks like a date or week (`2026-09-16`, `W43`, `2027-W02`, a `..` range) renders an `● invalid --cancel-booking` card echoing each bad value — with a `did you mean --cancel-date?` hint for the date/week-shaped ones — and exits 1 before any API call. One output section per booking, blank-line separated. | Yes (journey choice + confirmation). |
+| `--change-seat-date DATES` | Re-seat bookings on the configured route for one or more dates, using `seat_preference` (required, §4.3): same date grammar and up-front validation as `--cancel-date` (§5.4). All given dates are processed in one pass, closing with a single status line. | Only SMS on first login, unless `seat_preference = "ask"` (prompts per leg per day, not under `--dry-run`). |
+| `--change-seat-booking NUM[,NUM…]` | Re-seat booking(s) by number, comma-separated, any case — same validation as `--cancel-booking` — using `seat_preference` (required, §4.3). No route filter: a number is already an explicit target (§5.4). | Only SMS on first login, unless `seat_preference = "ask"` (prompts per leg, not under `--dry-run`). |
 | `--list-bookings` | Display all active bookings as per-day cards. | Only SMS on first login. |
 | `--list-travelpasses` | Display travel passes with validity and receipt details. | Only SMS on first login. |
 | `--login` | Header box (`operation   logging in` + config email), auth trail, then the login-status card. Verdict `● logged in` when a full login ran, `● already logged in` when the cached/refreshed session sufficed. The card judges the session just established, not the cache file; a cache that could not be written is said first (`! token cache not saved: … · the next run will need to log in again`). | Only SMS on first login. |
@@ -352,12 +388,12 @@ Flags are mutually exclusive, and one mode flag is required — there is no impl
 
 `--logout` needs no config: it calls the B2C OIDC end-session endpoint (`{URL_AUTH_FLOW_BASE}/oauth2/v2.0/logout`, authenticated by the cached SSO cookies) and deletes `token.json` and `cookies.json`. Output: a header box (`operation   logging out`, plus `account` from the cached token's profile_info when available — all offline), then trail steps (`✓ ending sj.se session` when cookies existed, `✓ removing cached token and cookies` when caches existed), then a bare verdict card — `● logged out`, or `● already logged out` when there was nothing to do (server call skipped). The local caches are cleared even when the server call fails, but that failure renders `● logout failed` with the error line and exits 1. After a logout the next login requires the SMS step again.
 
-### 5.7 Exit codes
+### 5.8 Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Any failure: config or auth error; a `--book` run in which any day's checkout failed or errored; a `--cancel-*` run in which any cancellation was refused by the API, declined at a prompt, or (`--cancel-booking`) the number was not found. A day with no offer, or a `--cancel-date` date with nothing to cancel, is not a failure. |
+| 1 | Any failure: config or auth error; a `--book` run in which any day's checkout failed or errored; a `--cancel-*` run in which any cancellation was refused by the API, declined at a prompt, or (`--cancel-booking`) the number was not found; a `--change-seat-*` run in which (`--change-seat-booking`) a named number was not found. A day with no offer, a `--cancel-date` date with nothing to cancel, or a seat that `--change-seat-*` could not match or write (kept as SJ assigned, reported with `!`, §5.4) is not a failure. |
 
 Every failure that ends a run closes with a red `●` status line naming the cause (`● initialization failed: …`, `● error: …`, `● token refresh failed: …`, `● no valid travel pass found`). Error texts are one line (httpx's "for more information" line is dropped), never empty (an exception without a message shows its type) and never carry an auth code from a URL.
 
@@ -377,8 +413,9 @@ For each selected date (`dates`, §4.3) from today on:
 7. **Find 0-price offer**: locate an offer matching the requested class + flexibility with `amount == 0`. If not found, warn and skip (see §8).
 8. **Create provisional booking**: create the booking with the outbound offer.
 9. **Add return leg** (if roundtrip): get offers for the return departure and add to the existing booking via PATCH.
-10. **Update customer details**: set the config email and the phone number the API already placed on the provisional (`customer.phoneNumber` of the create response, the passenger's as a fallback). Never a placeholder: with no number on the booking the field is left out.
-11. **Checkout**: finalize the booking.
+10. **Choose seats** (if `seat_preference` is set, §4.3): for each segment, read its seat map and pick the best free seat against the wish list — or, in `"ask"` mode, prompt for it — then write every chosen seat in one PATCH to the still-provisional booking (`_apply_seat_preference`, shared with the change-seat modes, §5.4). Never worth the booking: a map that will not load, no matching seat, or a rejected PATCH each degrade to keeping the seat SJ assigned and print a `!` line rather than raise.
+11. **Update customer details**: set the config email and the phone number the API already placed on the provisional (`customer.phoneNumber` of the create response, the passenger's as a fallback). Never a placeholder: with no number on the booking the field is left out.
+12. **Checkout**: finalize the booking.
 
 ### 6.2 Provisional booking cleanup
 
@@ -515,8 +552,9 @@ Everything the user sees goes through `output.py` and prints regardless of log l
 
 - `pinfo()` plain message, `pdim()` dimmed context, `spinner()` progress with a dim `✓`/`✗` trail line (or none with `trail=False`), `print_day_header()` / `print_day_note()` / `print_leg_lines()` for cards, `indented()` to nest everything printed inside a block under a day header.
 - **Casing convention**: prose is lowercase (`no departure found for outbound`, `✓ checking offers…`), identifiers keep their case — booking numbers upper-case (`ERU0HWB2`), station names as SJ writes them (`Göteborg Central`), train names as given. Operation values (`booking tickets`, `listing bookings`) are lowercase; the header box's travelpass/holder values keep their real casing. Nothing is lowercased automatically any more; `pinfo` prints what it is given.
-- Two output families share one vocabulary. **Pass-scoped modes** (book, dry-run, cancel, list-bookings, list-travelpasses): open with the header box (`print_header_box`, rounded dim borders): `operation` (bold: `booking tickets` / `dry run · booking tickets` / `cancelling bookings` / `listing bookings` / `listing travel passes`), `account` (the configured login email — always the second row, app-wide), `travelpass`, `holder` (account+owner only for travel passes — the passes are the content). Book/dry-run follow with the `describe_run` facts block (`route`/`days`/`times`/`ticket`, card grammar), then dim progress trail (routine fetches are silent: spinner only), cards, and a closing ● status line (`pstatus`: green when something changed / dim when the run only reported — list footers and dry runs / red failed-or-aborted-or-nothing-found, dim text — cancel outcomes like `● booking X cancelled` / `● cancellation aborted` use the same line). **Auth modes** (login, logout, login-status): session-scoped and offline-capable, so no pass header — they open with a session-scoped header box instead (`operation` + `account`: config email for `--login`, cached profile_info email for `--logout`/`--login-status`), then any trail steps, then the status card (`print_status_card`: green/red dot + bold verdict, blank line, dim 7-char-padded labels with plain values, §5.6; `--login` ends by rendering the same card `--login-status` shows); travel passes render pass cards in the same fact grammar. No emoji anywhere in the output. Colour/bold/dim only on a TTY without `NO_COLOR`; the palette is the terminal's own bright ANSI slots (`91` red, `92` green, `93` yellow, `95` magenta, `96` cyan), never hardcoded RGB, so the output follows whatever theme the user runs. Every printed line starts with a one-space left margin (`_MARGIN` in `output`) so output sits off the terminal edge; blank lines stay empty.
-- Prompts accept `y`/`yes` for confirmation, any case. Every input prompt is inline (answer typed on the same line) and marked with a cyan `?` — the SMS prompt via `prompt()`, all interactive choices/confirmations via `ask()` (both in `output`). A `?` question that asks about a block above it (a card or numbered list) is separated from that block by a blank line; a prompt that is itself a trail step (the SMS code) stays attached to its trail. Trail lines use human step names (`✓ performing login`, `✓ sending sms code`, `✓ completing login` — not OAuth plumbing terms) with the mark coloured — green `✓` on success, red `✗` on failure — and the step text dim. Glyph colours form one quartet: cyan `?` input needed, green `✓` step succeeded, red `✗` step failed, yellow `!` deviation worth noticing (`pwarn`: class fallbacks, time deviations, alternative-departure attempts, rejected SMS codes, checkout failures, missing departures) — plus the `●` on verdict cards (green/red) and on every operation's closing status line (`pstatus`: green changed something, dim only reported, red failed). Marks are coloured, message text stays dim. A blank line separates a login trail from the card or title that follows.
+- Two output families share one vocabulary. **Pass-scoped modes** (book, dry-run, cancel, list-bookings, list-travelpasses): open with the header box (`print_header_box`, rounded dim borders): `operation` (bold: `booking tickets` / `dry run · booking tickets` / `cancelling bookings` / `listing bookings` / `listing travel passes`), `account` (the configured login email — always the second row, app-wide), `travelpass`, `holder` (account+owner only for travel passes — the passes are the content). Book/dry-run follow with the `describe_run` facts block (`route`/`days`/`times`/`ticket`, card grammar), then dim progress trail (routine fetches are silent: spinner only), cards, and a closing ● status line (`pstatus`: green when something changed / dim when the run only reported — list footers and dry runs / red failed-or-aborted-or-nothing-found, dim text — cancel outcomes like `● booking X cancelled` / `● cancellation aborted` use the same line). **Auth modes** (login, logout, login-status): session-scoped and offline-capable, so no pass header — they open with a session-scoped header box instead (`operation` + `account`: config email for `--login`, cached profile_info email for `--logout`/`--login-status`), then any trail steps, then the status card (`print_status_card`: green/red dot + bold verdict, blank line, dim 7-char-padded labels with plain values, §5.7; `--login` ends by rendering the same card `--login-status` shows); travel passes render pass cards in the same fact grammar. No emoji anywhere in the output. Colour/bold/dim only on a TTY without `NO_COLOR`; the palette is the terminal's own bright ANSI slots (`91` red, `92` green, `93` yellow, `95` magenta, `96` cyan), never hardcoded RGB, so the output follows whatever theme the user runs. Every printed line starts with a one-space left margin (`_MARGIN` in `output`) so output sits off the terminal edge; blank lines stay empty.
+- Prompts accept `y`/`yes` for confirmation, any case. Every input prompt is inline (answer typed on the same line) and marked with a cyan `?` — the SMS prompt via `prompt()`, all interactive choices/confirmations via `ask()` (both in `output`). A `?` question that asks about a block above it (a card or numbered list) is separated from that block by a blank line; a prompt that is itself a trail step (the SMS code) stays attached to its trail. Trail lines use human step names (`✓ performing login`, `✓ sending sms code`, `✓ completing login` — not OAuth plumbing terms) with the mark coloured — green `✓` on success, red `✗` on failure — and the step text dim. Glyph colours form one quartet: cyan `?` input needed, green `✓` step succeeded, red `✗` step failed, yellow `!` deviation worth noticing (`pwarn`: class fallbacks, time deviations, alternative-departure attempts, rejected SMS codes, checkout failures, missing departures, unmet seat wishes) — plus the `●` on verdict cards (green/red) and on every operation's closing status line (`pstatus`: green changed something, dim only reported, red failed). Marks are coloured, message text stays dim. A blank line separates a login trail from the card or title that follows.
+- **Seat selection** (`seat_preference`, §4.3), shared by `--book` and the change-seat modes (§5.4): in `"ask"` mode, before prompting, `print_seat_choices` lists the free seats grouped by carriage — a dim `free in carriage N · <comfort> · N seats` header, then three per line as `number words` in the same vocabulary the config uses (e.g. `34 window, forward`) — followed by an inline `?`-marked prompt with the current seat as the default (`outbound seat [17]: `). An empty answer keeps that seat; typing a number not on the list re-asks (`! seat 12 is not free, pick one from the list`); Ctrl-D keeps the current seat and stops asking for the rest of the run; no terminal at all does the same for the whole run in one line (`! seat selection needs a terminal, keeping the seats SJ assigned`) and is the default outcome for a cron/`</dev/null` run. A ranked-list preference that cannot be fully honoured still takes the best remaining seat, naming the top wish it missed (`! outbound: no window seat free, taking carriage 3 seat 70 · table, forward`); a seat map that will not load, a segment with nothing free to choose from, and an API response naming a different seat than the one asked for are each their own `!` line too. None of this ever fails a day, a booking or the run: a seat is never worth losing a booking over, so every failure here keeps whatever seat SJ assigned and moves on.
 
 ### 10.3 Log levels (stderr)
 
