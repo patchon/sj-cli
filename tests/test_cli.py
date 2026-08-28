@@ -64,7 +64,7 @@ def test_dry_run_rejected_for_modes_with_nothing_to_preview(capsys):
     err = capsys.readouterr().err
     assert (
         "● --dry-run only applies to --book, --cancel-date, --cancel-booking, "
-        "--change-seat-date and --change-seat-booking" in err
+        "--change-seat-date, --change-seat-booking and --upgrade-class" in err
     )
 
 
@@ -261,6 +261,42 @@ def test_dry_run_is_allowed_with_change_seat():
     assert args.dry_run is True
 
 
+# --- --upgrade-class ----------------------------------------------------------
+
+
+def test_upgrade_class_is_a_mode_flag():
+    args = parse_args(["--upgrade-class", "2026-09-28", "--dry-run"])
+    assert args.upgrade_class_dates == ["2026-09-28"]
+    assert args.dry_run is True
+
+    with pytest.raises(SystemExit):
+        parse_args(["--book", "--upgrade-class", "2026-09-28", "--dry-run"])
+
+
+def test_upgrade_class_validates_dates_before_anything_else(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["--upgrade-class", "2026-13-99", "--dry-run"])
+    assert "invalid --upgrade-class" in capsys.readouterr().out
+
+
+def test_upgrade_class_requires_dry_run(capsys):
+    # The write path (actually booking an upgrade) is not implemented yet;
+    # this must fail clearly, before any auth or network call, rather than
+    # silently doing nothing.
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--upgrade-class", "2026-09-28"])
+    assert exc_info.value.code == 1
+    out = capsys.readouterr().out
+    assert "● --upgrade-class needs --dry-run" in out
+    assert "not implemented yet" in out
+
+
+def test_dry_run_is_allowed_with_upgrade_class():
+    args = parse_args(["--upgrade-class", "W40", "--dry-run"])
+    assert args.dry_run is True
+    assert args.upgrade_class_dates
+
+
 # --- first-run setup gate in _run (missing config) --------------------------
 
 
@@ -439,6 +475,39 @@ def test_change_seat_date_needs_the_route_config(tmp_path, monkeypatch, capsys):
     assert exc.value.code == 1
     out = capsys.readouterr().out
     assert "● invalid configuration" in out
+
+
+@pytest.mark.parametrize(("ok", "code"), [(True, None), (False, 1)])
+def test_upgrade_class_exit_code_follows_the_outcome(tmp_path, monkeypatch, ok, code):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "handle_upgrade_class", lambda *_a, **_k: ok)
+    if code is None:
+        cli._run(parse_args(["--upgrade-class", "2026-09-28", "--dry-run"]), _StubClient())
+    else:
+        with pytest.raises(SystemExit) as exc:
+            cli._run(parse_args(["--upgrade-class", "2026-09-28", "--dry-run"]), _StubClient())
+        assert exc.value.code == code
+
+
+def test_upgrade_class_needs_the_route_config(tmp_path, monkeypatch, capsys):
+    # Same reasoning as --change-seat-date above: the probe needs
+    # station_from/station_to and comfort_class, so require_search=True.
+    from sj_cli import cli
+    from sj_cli.config import CfgManager
+    from sj_cli.tokens import TokenManager
+
+    (tmp_path / "config.toml").write_text(
+        '[auth]\nemail = "a@b.se"\npassword = "x"\n\n[search_parameters]\nroundtrip = false\n'
+    )
+    monkeypatch.setattr(cli, "CfgManager", lambda: CfgManager(tmp_path / "config.toml"))
+    monkeypatch.setattr(cli, "TokenManager", lambda: TokenManager(tmp_path / "token.json"))
+
+    with pytest.raises(SystemExit) as exc:
+        cli._run(parse_args(["--upgrade-class", "2026-09-28", "--dry-run"]), _NoCallClient())
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "● invalid configuration" in out
+    assert "station_from" in out
     assert "station_from" in out
 
 

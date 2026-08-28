@@ -38,6 +38,7 @@ from sj_cli.output import (
     spinner,
 )
 from sj_cli.seats import (
+    COMFORT_CODES,
     COMFORT_NAMES,
     Seat,
     assigned_seat,
@@ -2444,6 +2445,305 @@ def handle_change_seat(
         # printed its own, so do not follow it with "no bookings matched".
         pstatus(False, "no bookings matched")
 
+    return ok
+
+
+# --- upgrade-class (read-only preview; the write path is a later change) ----
+#
+# A journey search made WITH the travel pass returns every class
+# `unavailable` for any departure that overlaps a booking the account
+# already holds (SJ's UI calls this "Samtidigt som annan bokning") and gives
+# no reason for it — `unavailableReasons` is `[]` whether the departure is
+# free or blocked. The same departure searched WITHOUT a travel pass id
+# shows the truth, so that is the only search this feature can use. A
+# pass-free search only proves seats exist (SJ sells them); it cannot prove
+# the pass would claim one for free — that is a separate quota — so the
+# report says "no seats" with certainty and "seats exist" as a maybe, never
+# a promise.
+
+
+def _leg_comfort_code(segment: dict, booking: dict) -> str | None:
+    """
+    API comfort code (SECOND, SECOND_CALM, FIRST) a booked segment holds.
+
+    A segment carries its own copy of the booking-level ``productFamilies``
+    entry for its sales category (under ``productFamily``), so this reads
+    it directly and needs no id lookup. The booking-level dict — keyed by
+    productFamily id — is only a fallback, and only when it holds exactly
+    one entry: a booking with legs in two different classes cannot be
+    resolved that way, and guessing the wrong one is worse than reporting
+    nothing.
+    """
+    code = (segment.get("productFamily") or {}).get("salesCategoryComfort")
+    if code:
+        return str(code)
+    families = booking.get("productFamilies")
+    if isinstance(families, dict):
+        values = list(families.values())
+    elif isinstance(families, list):
+        values = families
+    else:
+        values = []
+    if len(values) == 1 and isinstance(values[0], dict):
+        fallback = values[0].get("salesCategoryComfort")
+        return str(fallback) if fallback else None
+    return None
+
+
+def _match_departure(departures: list[dict], segment: dict) -> dict | None:
+    """
+    The departure in a pass-free search that is the same one already booked.
+
+    Matched on departure time and, where both sides carry one, the train
+    identifier (publicServiceName/serviceName): a day can have several
+    departures close together, and picking the one closest to time_leave
+    instead (select_best_departure's job elsewhere) would silently report a
+    different train's availability under this leg. When more than one
+    departure shares the exact minute and the train id cannot disambiguate
+    them, this gives up rather than guess.
+    """
+    target_minutes = get_departure_time_minutes(segment)
+    if target_minutes == -1:
+        return None
+    time_matches = [d for d in departures if get_departure_time_minutes(d) == target_minutes]
+    if not time_matches:
+        return None
+    seg_train = segment.get("publicServiceName") or segment.get("serviceName") or None
+    if not seg_train:
+        return time_matches[0] if len(time_matches) == 1 else None
+    for dep in time_matches:
+        legs = dep.get("legs") or [{}]
+        dep_train = legs[0].get("publicServiceName") or legs[0].get("serviceName") or None
+        if dep_train == seg_train:
+            return dep
+    return time_matches[0] if len(time_matches) == 1 else None
+
+
+def _class_has_seats(offer_response: dict, class_code: str) -> bool:
+    """
+    Whether a get_offers response shows a purchasable seat in class_code.
+
+    Unlike find_offer_id (which looks for a 0-price offer for the pass),
+    this only asks whether SJ sells a seat in the class at all, at any
+    price — that is the whole signal the upgrade probe needs, and a paid
+    price still counts. It says nothing about whether the pass could claim
+    a seat for free.
+    """
+    seat_offers = offer_response.get("seatOffers") or {}
+    offers = seat_offers.get("offers") or {}
+    class_data = offers.get(class_code) or {}
+    flexibilities = class_data.get("flexibilities") or {}
+    return any(flex.get("available") for flex in flexibilities.values())
+
+
+def _poll_departures(client: SJClient, access_token: str, search_id: str) -> list[dict]:
+    """Poll a departure search until departures appear, up to 5 tries 1s apart."""
+    for attempt in range(5):
+        if attempt:
+            time.sleep(1.0)
+        results = client.get_search_results(access_token, search_id)
+        travels = results.get("travels") or []
+        if travels:
+            departures = travels[0].get("departures") or []
+            if departures:
+                return departures
+    return []
+
+
+def _probe_upgrade(
+    client: SJClient,
+    access_token: str,
+    segment: dict,
+    wanted_code: str,
+    service_types: list[str] | None,
+) -> bool | None:
+    """
+    Whether SJ sells a seat in wanted_code on the departure `segment` books.
+
+    Searches the same route and date WITHOUT the travel pass (see the
+    module note above for why) and matches the exact departure the booking
+    already holds via _match_departure.
+
+    Returns:
+        True/False once the departure was found and its offers read; None
+        when the search returned no usable search id or the same departure
+        could not be identified among the results — an unknown answer, not
+        "no seats".
+
+    """
+    dep_name = (segment.get("departureStation") or {}).get("name") or ""
+    arr_name = (segment.get("arrivalStation") or {}).get("name") or ""
+    date_str = _segment_date(segment.get("departureDateTime", ""))
+    if not (dep_name and arr_name and date_str):
+        return None
+
+    # Positional, like every other search_journey call site: deliberately no
+    # travel pass id (return_date=None, travel_pass_id=None) — see the module
+    # note above for why this is the one search that must go without it.
+    search_resp = client.search_journey(
+        access_token, dep_name, arr_name, date_str, None, None, service_types
+    )
+    search_id = search_resp.get("departureSearchId")
+    if not search_id:
+        return None
+    passenger_token = search_resp.get("passengerListId") or ""
+
+    departures = _poll_departures(client, access_token, search_id)
+    departure = _match_departure(departures, segment)
+    if departure is None:
+        return None
+
+    departure_id = departure.get("departureId")
+    if not departure_id:
+        return None
+    offer_response = client.get_offers(access_token, departure_id, passenger_token)
+    return _class_has_seats(offer_response, wanted_code)
+
+
+def handle_upgrade_class(
+    client: SJClient,
+    access_token: str,
+    cfg: dict,
+    dates: list[str],
+    dry_run: bool = True,
+) -> bool:
+    """
+    Report which legs on the configured route, in a fallback class, could plausibly be upgraded.
+
+    Read-only in every mode: this only searches (without the travel pass)
+    and reads offers — it never books, cancels, changes a seat, or writes
+    anything else. Actually attempting an upgrade is not implemented yet,
+    hence the dry_run gate below; a later change adds it.
+
+    For every active booking with a future leg on the configured route
+    inside `dates`: a leg already in comfort_class needs nothing and prints
+    no card (it is only counted). A leg in a fallback class is probed on
+    the pass-free search for comfort_class (_probe_upgrade) and reported as
+    worth trying (SJ sells a seat there) or not possible (no seats at all).
+
+    Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        cfg: The full config dict.
+        dates: Swedish dates (YYYY-MM-DD) to check.
+        dry_run: Must be True — the write path does not exist yet.
+
+    Returns:
+        True when the run completed, whether or not anything needed
+        upgrading, and even when nothing matched the dates at all (that is
+        reported, not a failure); False when dry_run is False, or a probe
+        raised while checking a leg.
+
+    """
+    if not dry_run:
+        pstatus(False, "--upgrade-class can only preview for now — pass --dry-run")
+        return False
+
+    params = cfg["search_parameters"]
+    wanted_class = params["comfort_class"]
+    wanted_code = COMFORT_CODES.get(wanted_class)
+    if wanted_code is None:
+        pstatus(False, f"unknown comfort_class {wanted_class!r}")
+        return False
+
+    origin_name = params["station_from"]
+    dest_name = params["station_to"]
+    origin_id = client.resolve_station(origin_name)
+    dest_id = client.resolve_station(dest_name)
+    service_types = params.get("service_types")
+    if service_types == ["ALL"]:
+        service_types = None
+
+    now = sweden_now()
+    ok = True
+    any_target = False
+    not_in_class = 0
+    worth_trying = 0
+
+    for day in dates:
+        with spinner(f"fetching bookings for {day}", trail=False):
+            day_bookings = fetch_all_bookings(client, access_token, day, day)
+
+        # Legs on the configured route (either direction), that date, not
+        # yet departed — same journey-then-segment scoping as
+        # handle_change_seat's date path, so a booking spanning other days
+        # only contributes the day being processed right now.
+        legs: list[tuple[dict, dict]] = []
+        for item in day_bookings:
+            booking = item.get("booking") or {}
+            if not is_active_booking(booking):
+                continue
+            for journey in booking.get("journeys") or []:
+                j_origin, j_dest, j_date = _journey_endpoints(journey)
+                if j_date != day:
+                    continue
+                if (j_origin, j_dest) not in {(origin_id, dest_id), (dest_id, origin_id)}:
+                    continue
+                for seg in journey.get("segments") or []:
+                    row = _segment_to_display_row(seg, booking.get("bookingNumber") or "", now)
+                    if row["date"] != day or row["past"] == "Y":
+                        continue
+                    legs.append((booking, seg))
+
+        if not legs:
+            continue
+        any_target = True
+
+        to_check: list[tuple[dict, dict, str | None]] = []
+        for booking, seg in legs:
+            code = _leg_comfort_code(seg, booking)
+            if code == wanted_code:
+                continue  # already the wanted class: nothing to upgrade
+            to_check.append((booking, seg, code))
+
+        if not to_check:
+            continue
+        to_check.sort(key=lambda t: t[1].get("departureDateTime") or "")
+
+        print_day_header(day, _route_label([seg for _, seg, _ in to_check]))
+        with indented():
+            for booking, seg, code in to_check:
+                not_in_class += 1
+                booking_number = booking.get("bookingNumber") or "—"
+                all_segs = [
+                    s for j in booking.get("journeys") or [] for s in j.get("segments") or []
+                ]
+                held_name = COMFORT_NAMES.get(code or "", "an unknown class")
+                pinfo(f"{_train_label(seg, all_segs)} · {booking_number} · holds {held_name}")
+                with indented():
+                    try:
+                        purchasable = _probe_upgrade(
+                            client, access_token, seg, wanted_code, service_types
+                        )
+                    except Exception as e:
+                        logger.warning(f"upgrade probe failed for {booking_number}: {e}")
+                        pwarn(f"{wanted_class}: could not check ({error_text(e)})")
+                        ok = False
+                        continue
+                    if purchasable is None:
+                        pwarn(
+                            f"{wanted_class}: could not find this departure in a pass-free search"
+                        )
+                    elif purchasable:
+                        worth_trying += 1
+                        pinfo(
+                            f"{wanted_class}: seats exist (SJ sells them) "
+                            "— an upgrade may be possible"
+                        )
+                    else:
+                        pdim(f"{wanted_class}: no seats on this departure")
+        blank()
+
+    if not any_target:
+        pstatus(
+            False, f"no bookings found for the given dates on route {origin_name} → {dest_name}"
+        )
+        return ok
+
+    pstatus(
+        None,
+        f"dry run · {not_in_class} leg(s) not in {wanted_class} · {worth_trying} worth trying",
+    )
     return ok
 
 

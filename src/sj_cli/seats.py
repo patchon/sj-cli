@@ -43,6 +43,10 @@ COMFORT_NAMES: dict[str, str] = {
     "FIRST": "1 class",
 }
 
+# Config word -> API comfort code, the reverse of COMFORT_NAMES. Both are
+# 1:1 over the same three values, so inverting is exact.
+COMFORT_CODES: dict[str, str] = {name: code for code, name in COMFORT_NAMES.items()}
+
 ASK: Literal["ask"] = "ask"
 
 Preference = list[str] | Literal["ask"] | None

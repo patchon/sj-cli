@@ -144,6 +144,10 @@ class FakeClient:
         self.seatmap_error: Exception | None = None
         self.seat_update_error: Exception | None = None
         self.bookings_list: list[dict] = []
+        # One entry per search_journey call, in order — the upgrade-class probe's
+        # whole point is that this must be None (a pass-free search); tests assert
+        # against it directly rather than digging through .calls' plain tuples.
+        self.search_tp_ids: list[str | None] = []
 
     def resolve_station(self, name):
         return self.STATIONS.get(name, name)
@@ -152,9 +156,16 @@ class FakeClient:
         self, token, origin, dest, date, return_date=None, tp_id=None, service_types=None
     ):
         self.calls.append(("search", origin, dest, date, return_date))
+        self.search_tp_ids.append(tp_id)
         if return_date:
             return {"passengerListId": "PT", **self.search_ids}
-        # one-way: the flow reads departureSearchId regardless of direction
+        if tp_id is None:
+            # The upgrade-class probe: a deterministic id per route+date so a
+            # test can serve distinct departures for distinct days without
+            # colliding with the booking flow's static OUT/IN ids below.
+            sid = f"{origin}->{dest}@{date}"
+            return {"passengerListId": "PT", "departureSearchId": sid}
+        # one-way with the pass: the flow reads departureSearchId regardless of direction
         sid = "OUT" if origin == "Göteborg Central" else "IN"
         return {"passengerListId": "PT", "departureSearchId": sid}
 

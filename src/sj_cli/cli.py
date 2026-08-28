@@ -19,6 +19,7 @@ from sj_cli.booking import (
     handle_cancel_mode,
     handle_change_seat,
     handle_list_bookings,
+    handle_upgrade_class,
     process_date_range,
 )
 from sj_cli.client import SJClient
@@ -154,8 +155,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Preview modifier for --book, --cancel-date, --cancel-booking, "
-            "--change-seat-date and --change-seat-booking: show what would "
-            "happen without doing any of it."
+            "--change-seat-date, --change-seat-booking and --upgrade-class: show what "
+            "would happen without doing any of it. Required for --upgrade-class."
         ),
     )
     parser.add_argument(
@@ -200,6 +201,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Change seats on booking(s) by number, comma-separated, using seat_preference.",
     )
     group.add_argument(
+        "--upgrade-class",
+        metavar="DATES",
+        help=(
+            "Report which legs on the configured route, for one or more dates (same date "
+            "grammar as --cancel-date), are in a fallback comfort class and could plausibly "
+            "be upgraded to comfort_class. Read-only: requires --dry-run (the write path is "
+            "not implemented yet)."
+        ),
+    )
+    group.add_argument(
         "--list-bookings",
         action="store_true",
         help="Display all active bookings in a table.",
@@ -242,10 +253,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         or args.cancel_booking is not None
         or args.change_seat_date is not None
         or args.change_seat_booking is not None
+        or args.upgrade_class is not None
     ):
         parser.error(
             "--dry-run only applies to --book, --cancel-date, --cancel-booking, "
-            "--change-seat-date and --change-seat-booking"
+            "--change-seat-date, --change-seat-booking and --upgrade-class"
         )
 
     if args.seat_details and not args.list_bookings:
@@ -272,6 +284,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.change_seat_booking_numbers, errors = parse_booking_numbers(args.change_seat_booking)
         if errors:
             print_status_card(False, "invalid --change-seat-booking", lines=errors)
+            sys.exit(1)
+    if args.upgrade_class is not None:
+        args.upgrade_class_dates, errors = parse_cancel_dates(args.upgrade_class)
+        if errors:
+            print_status_card(False, "invalid --upgrade-class", lines=errors)
+            sys.exit(1)
+        if not args.dry_run:
+            print_status_card(
+                False,
+                "--upgrade-class needs --dry-run",
+                lines=["the write path is not implemented yet; only the preview exists so far"],
+            )
             sys.exit(1)
 
     return args
@@ -643,12 +667,16 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     try:
         cfg = cm.load()
         # Route/dates are only needed by the booking-shaped operations, the
-        # dates selection only by --book (--cancel-date and --change-seat-date
-        # take their own dates); seat_preference only by the change-seat modes.
+        # dates selection only by --book (--cancel-date, --change-seat-date
+        # and --upgrade-class take their own dates); seat_preference only by
+        # the change-seat modes.
         cm.verify_cfg(
             cfg,
             require_search=(
-                args.book or args.cancel_date is not None or args.change_seat_date is not None
+                args.book
+                or args.cancel_date is not None
+                or args.change_seat_date is not None
+                or args.upgrade_class is not None
             ),
             require_dates=args.book,
             require_seat_preference=(
@@ -815,6 +843,16 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 booking_numbers=args.change_seat_booking_numbers,
                 travel_pass=active_pass,
                 dry_run=args.dry_run,
+            ):
+                print()
+                sys.exit(1)
+
+        elif args.upgrade_class is not None:
+            operation = ("dry run · " if args.dry_run else "") + "checking class upgrades"
+            print_header_box([("operation", operation), *pass_rows])
+            blank()
+            if not handle_upgrade_class(
+                client, access_token, cfg, dates=args.upgrade_class_dates, dry_run=args.dry_run
             ):
                 print()
                 sys.exit(1)
