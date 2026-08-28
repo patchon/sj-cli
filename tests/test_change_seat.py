@@ -262,3 +262,27 @@ def test_an_unstated_can_change_seat_is_tried_anyway():
 
     handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE])
     assert c.seat_updates
+
+
+def test_a_standalone_return_booking_is_labelled_by_train_not_direction():
+    """
+    The API marks every standalone booking's only leg OUTBOUND, so a return
+    trip booked on its own would otherwise print "outbound" over a
+    Stockholm → Linköping card. Real case: booking K883DH2T, 2026-08-31.
+    """
+    from sj_cli.booking import _segment_label, _train_label
+
+    segment = {
+        "direction": "OUTBOUND",  # the API's word for it, even though it is the way home
+        "publicServiceName": "543",
+        "serviceBrandNameDescription": "X 2000",
+    }
+    assert _segment_label(segment, [segment]) == "outbound"
+    assert _train_label(segment, [segment]) == "X 2000 543"
+
+
+def test_the_train_label_falls_back_when_the_service_is_unnamed():
+    from sj_cli.booking import _train_label
+
+    segment = {"direction": "INBOUND"}
+    assert _train_label(segment, [segment]) == "return"
