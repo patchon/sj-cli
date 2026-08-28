@@ -1,13 +1,16 @@
 """
 Seat selection: the config vocabulary, the seat-map join and the ranking.
 
-Pure logic — no HTTP and no printing. The SJ seat map hands us
+Pure logic — no HTTP and no user-facing output. The SJ seat map hands us
 ``seatsPossibleToSelect`` (free seats, already filtered to the booked comfort
 class) plus a ``carriages[].seats[]`` list carrying each seat's properties;
 this module joins the two and ranks the result against the user's wish list.
 """
 
+import logging
 from typing import Any, Literal, TypedDict
+
+logger = logging.getLogger(__name__)
 
 # Config word -> API property code. The direction words and "single" are
 # computed (from the map's `reversed` flags and seat geometry respectively)
@@ -106,23 +109,51 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
     return (None, errors) if errors else (wishes, [])
 
 
+def _alone_by(seats: list[dict[str, Any]], field: str) -> set[str]:
+    """
+    Seat numbers alone on their side of the aisle, judged by one coordinate.
+
+    Works for any field that increases across the carriage, because the aisle
+    always shows up as the widest gap between consecutive distinct values:
+    `ypos` (drawing coordinates) and `rowPosition` (physical slots, which
+    number the aisle too) both qualify. Seats are grouped by (row, side of
+    that gap); a group of exactly one seat is a single seat.
+
+    Degenerate input — fewer than two distinct values, so no gap can be
+    identified, or no seats at all — yields no singles rather than a guess.
+    """
+    values = sorted({s[field] for s in seats if isinstance(s.get(field), (int, float))})
+    if len(values) < 2:
+        return set()
+    gaps = [(values[i + 1] - values[i], values[i]) for i in range(len(values) - 1)]
+    _, boundary = max(gaps)
+
+    groups: dict[tuple[Any, bool], list[str]] = {}
+    for s in seats:
+        value = s.get(field)
+        number = s.get("seatNumber")
+        if not isinstance(value, (int, float)) or number is None:
+            continue
+        groups.setdefault((s.get("rowNumber"), value > boundary), []).append(str(number))
+    return {numbers[0] for numbers in groups.values() if len(numbers) == 1}
+
+
 def _single_seat_numbers(seats: list[dict[str, Any]]) -> set[str]:
     """
     Seat numbers that sit alone across the aisle, within one carriage.
 
     X 2000 carriages are laid out either 2+2 or 2+1: on a 2+1 side, one seat
-    per row has no neighbour. SJ publishes no property code for this, but
-    the map does carry each seat's y-position, so the layout is recovered
-    from geometry rather than guessed: the aisle is the *widest* gap between
-    the carriage's distinct `ypos` values — a 2+2 carriage has two similar
-    gaps (pair | aisle | pair) and no seat is alone, while a 2+1 carriage's
-    aisle gap dwarfs the gap between its paired side's two seat positions.
-    Seats are then grouped by (row, which side of that gap they fall on); a
-    group of exactly one seat is a single seat.
+    per row has no neighbour. SJ publishes no property code for this, so it is
+    recovered from the map's own geometry (`ypos`) via `_alone_by`.
 
-    Guards degenerate input — fewer than two distinct `ypos` values (so no
-    gap, hence no aisle, can be identified), or no seats at all — by
-    returning no singles rather than guessing.
+    `rowPosition` encodes the same layout independently — a 2+1 carriage uses
+    positions 1 | 3, 4 (position 2 *is* the aisle), a 2+2 one 1, 2 | 4, 5 — so
+    it serves as a cross-check. Both signals agreed on every carriage of every
+    train captured so far. Geometry stays authoritative: on a disagreement
+    neither field is more trustworthy than the other, and preferring silence
+    would hide real single seats. The disagreement is logged instead, so a
+    seat that turns out to have a neighbour can be diagnosed with
+    LOG_LEVEL=DEBUG rather than guessed at.
 
     Args:
         seats: one carriage's `seats` list (raw API dicts).
@@ -132,26 +163,16 @@ def _single_seat_numbers(seats: list[dict[str, Any]]) -> set[str]:
         that are single seats.
 
     """
-    ypos_values = sorted({s["ypos"] for s in seats if isinstance(s.get("ypos"), (int, float))})
-    if len(ypos_values) < 2:
-        return set()
-    # The widest gap's low edge is the boundary: ypos <= boundary is one side
-    # of the aisle, ypos > boundary the other (no other distinct value falls
-    # between them, since the gap is between *consecutive* distinct values).
-    gaps = [
-        (ypos_values[i + 1] - ypos_values[i], ypos_values[i]) for i in range(len(ypos_values) - 1)
-    ]
-    _, boundary = max(gaps)
-
-    groups: dict[tuple[Any, int], list[str]] = {}
-    for s in seats:
-        ypos = s.get("ypos")
-        number = s.get("seatNumber")
-        if not isinstance(ypos, (int, float)) or number is None:
-            continue
-        side = 0 if ypos <= boundary else 1
-        groups.setdefault((s.get("rowNumber"), side), []).append(str(number))
-    return {numbers[0] for numbers in groups.values() if len(numbers) == 1}
+    geometry = _alone_by(seats, "ypos")
+    by_position = _alone_by(seats, "rowPosition")
+    if by_position != geometry:
+        logger.debug(
+            "single-seat signals disagree: ypos says %s, rowPosition says %s "
+            "(using ypos; SJ's map may describe a different unit than the train)",
+            sorted(geometry),
+            sorted(by_position),
+        )
+    return geometry
 
 
 def free_seats(seatmap: dict[str, Any]) -> list[Seat]:
