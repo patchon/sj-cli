@@ -136,16 +136,17 @@ seat_preference = ["window", "table", "forward"]  # valfritt; eller "ask" för a
 `seat_preference` är en rangordnad önskelista: den bästa lediga platsen vinner, och ett
 tidigare ord väger tyngre än alla senare tillsammans — `["window", "table"]` väljer en
 vanlig fönsterplats framför en gångplats vid bord. Ord: `window` (fönster), `aisle`
-(gång), `table` (bord), `solo` (singelplats), `easy access` (lättåtkomlig),
-`no animals` (djurfritt), `forward` (med färdriktningen), `backward` (mot
-färdriktningen). Sätt den till `"ask"` för att bli tillfrågad om varje resa (kräver en
-terminal), eller utelämna nyckeln så väljer SJ plats åt dig. En önskan är aldrig en
-garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en `!`-rad
-namnger önskemålet som inte kunde uppfyllas. Platsen SJ valde behålls bara när det
-inte finns någon ledig plats att byta till.
+(gång), `table` (bord), `solo` (SJ:s förstaklassprodukt "Singelplats"), `single`
+(en plats utan granne, beräknad från vagnens 2+1-layout — inte samma sak som `solo`),
+`easy access` (lättåtkomlig), `no animals` (djurfritt), `forward` (med färdriktningen),
+`backward` (mot färdriktningen). Sätt den till `"ask"` för att bli tillfrågad om varje
+resa (kräver en terminal), eller utelämna nyckeln så väljer SJ plats åt dig. En önskan
+är aldrig en garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en
+`!`-rad namnger önskemålet som inte kunde uppfyllas. Platsen SJ valde behålls bara när
+det inte finns någon ledig plats att byta till.
 
 `--list-bookings --seat-details` läser samma ordförråd åt andra hållet: den visar vilken plats
-som tilldelats istället för att välja den, t.ex. `carriage 3 seat 34 · window, table, forward`.
+som tilldelats istället för att välja den, t.ex. `carriage 3 seat 34 · single, window, table, forward`.
 Det kostar ett extra anrop per resa som inte redan avgått, så det är valfritt — en resa vars
 sittplatskarta inte går att läsa behåller bara sin vanliga `carriage N seat M`-cell.
 
@@ -163,8 +164,8 @@ source venv/bin/activate
 sj-cli --book --dry-run        # förhandsvisa: visa vad som skulle bokas, utan att boka
 sj-cli --book                  # boka på riktigt
 sj-cli --list-bookings         # aktiva bokningar, en ruta per resdag
-sj-cli --list-bookings --seat-details   # samma, plus varje resas sittplats (window/aisle/table/
-                                #   forward/backward) — ett extra anrop per resa som inte avgått
+sj-cli --list-bookings --seat-details   # samma, plus varje resas sittplats (window/aisle/table/solo/
+                                #   single/forward/backward) — ett extra anrop per resa som inte avgått
 sj-cli --list-travelpasses     # kort med giltighet, dagar kvar och pris
 sj-cli --cancel-date 2026-09-16                # avboka den dagens resor på den konfigurerade sträckan (bokningens övriga dagar behålls)
 sj-cli --cancel-date 2026-09-16,2026-09-21..2026-09-25   # flera datum: kommalista och/eller intervall (båda ändpunkterna ingår)

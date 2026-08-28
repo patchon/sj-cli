@@ -54,27 +54,45 @@ def seatmap(
     """
     Seat map fixture: free is [(seat number, property codes, reversed)].
 
+    Each entry may carry two more elements — (row number, ypos) — for tests
+    that need real carriage geometry: seats.py's single-seat heuristic (the
+    widest gap between a carriage's distinct ypos values is the aisle) needs
+    at least two distinct ypos values to mean anything, and geometry is
+    omitted by default. A 2+1 carriage (one single-seat side, one paired
+    side) needs three ypos values, e.g. row 1: ("11", [...], False, 1, 5),
+    ("13", [...], True, 1, 108), ("14", [...], False, 1, 144) — seat 11
+    alone at ypos 5 is a single, 13/14 paired at 108/144 are not.
+
     extra adds further carriages as (carriage number, free, comforts) tuples —
     seat numbers repeat across carriages on a real map, so tests that care
     about the pair need more than one. assigned_codes, when given, puts
     carriageSeatProperties on the assigned (passengerSeats[0]) entry — for
-    --seat-details, which reads that seat's own codes rather than joining it
-    against the carriage the way free_seats() does.
+    --seat-details' fallback path, which reads that seat's own codes rather
+    than joining it against the carriage layout the way free_seats() (and
+    the primary, layout-lookup path) does.
     """
+
+    def _seat(spec):
+        n, codes, rev, *geometry = spec
+        row_number = geometry[0] if len(geometry) > 0 else None
+        ypos = geometry[1] if len(geometry) > 1 else None
+        seat = {
+            "seatNumber": n,
+            "reversed": rev,
+            "carriageSeatProperties": [{"code": c} for c in codes],
+        }
+        if row_number is not None:
+            seat["rowNumber"] = row_number
+        if ypos is not None:
+            seat["ypos"] = ypos
+        return seat
 
     def _carriage(number, seats, carriage_comforts):
         return {
             "carriageNumber": number,
             "reversed": True,
             "carriageComforts": list(carriage_comforts),
-            "seats": [
-                {
-                    "seatNumber": n,
-                    "reversed": rev,
-                    "carriageSeatProperties": [{"code": c} for c in codes],
-                }
-                for n, codes, rev in seats
-            ],
+            "seats": [_seat(spec) for spec in seats],
         }
 
     carriages = [(carriage, free, comforts), *extra]
@@ -87,7 +105,7 @@ def seatmap(
         assigned_seat["carriageSeatProperties"] = [{"code": c} for c in assigned_codes]
     return {
         "carriages": [_carriage(*c) for c in carriages],
-        "seatsPossibleToSelect": {c: [n for n, _, _ in seats] for c, seats, _ in carriages},
+        "seatsPossibleToSelect": {c: [spec[0] for spec in seats] for c, seats, _ in carriages},
         "passengerSeats": [assigned_seat],
         "canChangeSeat": can_change,
         "hasDeparted": False,

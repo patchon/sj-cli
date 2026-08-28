@@ -29,6 +29,8 @@ service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 # seat_preference — optional. Omit it and SJ assigns the seat.
 #   "ask"                              prompt for every leg of every day
 #   ["window", "table", "forward"]     ranked wish list, best free seat wins
-# Words: window, aisle, table, solo, easy access, no animals, forward, backward
+# Words: window, aisle, table, solo, single, easy access, no animals, forward, backward
+#   solo is SJ's first-class "Singelplats" product; single is any seat with no
+#   neighbour, computed from the 2+1 carriage layout — not the same thing
 # (an earlier word outranks every later one; contradictions are rejected)
 #seat_preference = ["window", "table"]
