@@ -33,6 +33,7 @@ from sj_cli.output import (
     pwarn,
     spinner,
 )
+from sj_cli.seats import ASK, Seat, best_seat, current_seat, describe_seat, satisfies
 from sj_cli.tokens import TokenManager
 
 logger = logging.getLogger(__name__)
@@ -911,6 +912,141 @@ def _create_provisional(
     return _booking_from_response(b_resp)
 
 
+def _segment_label(segment: dict, segments: list[dict]) -> str:
+    """'outbound' / 'return', plus the train number when a direction has several."""
+    direction = segment.get("direction")
+    label = "outbound" if direction == "OUTBOUND" else "return"
+    same = [s for s in segments if s.get("direction") == direction]
+    if len(same) > 1:
+        label = f"{label} {segment.get('publicServiceName') or segment.get('serviceName') or ''}"
+    return label.strip()
+
+
+def _seat_update(segment: dict, seat: Seat) -> dict:
+    """One updateSegmentSeats entry.
+
+    Keys: seatNumber, seatStrategy, direction, carriageNumber, serviceIdentifier.
+    """
+    return {
+        "seatNumber": seat["number"],
+        "seatStrategy": "EXACT",
+        "direction": segment.get("direction"),
+        "carriageNumber": seat["carriage"],
+        "serviceIdentifier": segment.get("serviceIdentifier"),
+    }
+
+
+def _choose_seat(seatmap: dict, preference: list[str] | str, label: str) -> Seat | None:
+    """The seat to take for one segment, or None to keep the current one."""
+    if preference == ASK:
+        return None  # Task 5 replaces this with the interactive picker
+    wishes = list(preference)
+    seat = best_seat(seatmap, wishes)
+    if seat is None:
+        pwarn(f"no free seat to choose from for {label}")
+        return None
+    # best_seat is best-effort — name the top wish it could not honour
+    missed = [w for w in wishes if not satisfies(seat, w)]
+    if missed:
+        pwarn(f"{label}: no {missed[0]} seat free, taking {describe_seat(seat)}")
+    return seat
+
+
+def _apply_seat_preference(
+    client: SJClient,
+    access_token: str,
+    booking_id: str,
+    booking: dict,
+    preference: list[str] | str,
+    provisional: bool = True,
+) -> tuple[dict, int]:
+    """
+    Choose seats for every segment of a booking and write them in one PATCH.
+
+    Shared by --book (provisional path) and, from Task 6, the change-seat
+    modes (confirmed path). Any failure degrades to "keep the seat SJ
+    assigned": a seat is never worth losing a booking over, so nothing here
+    raises — every error is caught, logged and reported with `pwarn`.
+
+    Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        booking_id: The booking's UUID.
+        booking: The booking object as returned by the legs (journeys/segments).
+        preference: The `seat_preference` config value: "ask" or a ranked
+            word list. The literal "ask" is a seam for Task 5's interactive
+            picker; today it just keeps whatever seat SJ assigned.
+        provisional: True while the booking is still a cart (the default,
+            used by --book); False once it is confirmed.
+
+    Returns:
+        (booking, seats_changed) — the updated booking when a PATCH
+        succeeded (trusting the API's response over the request), the one
+        passed in otherwise, and how many seats were actually requested.
+
+    """
+    segments = [
+        seg for journey in booking.get("journeys") or [] for seg in journey.get("segments") or []
+    ]
+    updates = []
+    for segment in segments:
+        label = _segment_label(segment, segments)
+        search_id = segment.get("seatMapSearchId")
+        if not (segment.get("seatMapAvailable") and search_id):
+            logger.info(f"no seat map for {label}")
+            continue
+        try:
+            with spinner(f"reading the seat map for {label}", trail=False):
+                seatmap = client.get_seatmap(access_token, booking_id, search_id)
+        except Exception as e:
+            logger.warning(f"seat map failed for {label}: {e}")
+            pwarn(f"could not read the seat map for {label}: {error_text(e)}")
+            continue
+        if seatmap.get("hasDeparted") or not seatmap.get("canChangeSeat", True):
+            logger.info(f"seats cannot be changed for {label}")
+            continue
+
+        seat = _choose_seat(seatmap, preference, label)
+        if seat is None:
+            continue
+        if (seat["carriage"], seat["number"]) == current_seat(seatmap):
+            pdim(f"{label}: already on the best seat")
+            continue
+        updates.append(_seat_update(segment, seat))
+
+    if not updates:
+        return booking, 0
+
+    try:
+        with spinner(f"choosing {len(updates)} seat(s)"):
+            resp = client.update_seats(access_token, booking_id, updates, provisional=provisional)
+    except Exception as e:
+        logger.warning(f"seat update failed: {e}")
+        pwarn(f"seats not changed: {error_text(e)}")
+        return booking, 0
+
+    _, _, updated = _booking_from_response(resp)
+    if not updated:
+        return booking, len(updates)
+
+    # Trust the response over the request: the API may hand back a different
+    # seat than the one asked for.
+    got: set[tuple[Any, Any]] = set()
+    for journey in updated.get("journeys") or []:
+        for seg in journey.get("segments") or []:
+            for product in seg.get("requiredProducts") or []:
+                seat_info = product.get("seat") or {}
+                got.add((seat_info.get("carriageNumber"), seat_info.get("number")))
+
+    for update in updates:
+        if (update["carriageNumber"], update["seatNumber"]) not in got:
+            pwarn(
+                f"asked for carriage {update['carriageNumber']} seat {update['seatNumber']}, "
+                "the booking says otherwise"
+            )
+    return updated, len(updates)
+
+
 def handle_booking_process(
     client: SJClient,
     access_token: str,
@@ -1032,6 +1168,16 @@ def handle_booking_process(
     if not booking_id:
         logger.error("failed to create booking")
         return None
+
+    # Seats before checkout: a seat is chosen on the still-provisional cart,
+    # never worth losing the booking over — _apply_seat_preference never
+    # raises. Kept out of the checkout spinner below (spinner() isn't
+    # reentrant: nesting would stomp its single "is a spinner active" flag).
+    preference = params.get("seat_preference")
+    if preference:
+        booking, _ = _apply_seat_preference(
+            client, access_token, booking_id, booking, preference, provisional=True
+        )
 
     checked_out = True
     try:

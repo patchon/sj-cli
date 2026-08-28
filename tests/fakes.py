@@ -42,6 +42,30 @@ def offers(*, calm_price=0, second_price=0, first_price=None, flex="FULLFLEX", a
     return {"seatOffers": {"offers": out}}
 
 
+def seatmap(free=(("70", ["TABLE", "WINDOW"], True),), assigned=("3", "39"), can_change=True):
+    """Seat map fixture: free is [(seat number, property codes, reversed)]."""
+    return {
+        "carriages": [
+            {
+                "carriageNumber": "3",
+                "reversed": True,
+                "seats": [
+                    {
+                        "seatNumber": n,
+                        "reversed": rev,
+                        "carriageSeatProperties": [{"code": c} for c in codes],
+                    }
+                    for n, codes, rev in free
+                ],
+            }
+        ],
+        "seatsPossibleToSelect": {"3": [n for n, _, _ in free]},
+        "passengerSeats": [{"carriageNumber": assigned[0], "seatNumber": assigned[1]}],
+        "canChangeSeat": can_change,
+        "hasDeparted": False,
+    }
+
+
 class FakeClient:
     """
     Scripted stand-in for SJClient covering the booking flow.
@@ -69,6 +93,10 @@ class FakeClient:
         self._booking_counter = 0
         self._last_dep: dict | None = None
         self._bookings: dict[str, dict] = {}
+        self.seatmaps: dict[str, dict] = {}  # seatMapSearchId -> seat map
+        self.seat_updates: list[tuple] = []  # (booking_id, updates, provisional)
+        self.seatmap_error: Exception | None = None
+        self.seat_update_error: Exception | None = None
 
     def resolve_station(self, name):
         return self.STATIONS.get(name, name)
@@ -111,6 +139,9 @@ class FakeClient:
             "serviceBrandNameDescription": "X 2000",
             "publicServiceName": "520" if direction == "OUTBOUND" else "543",
             "requiredProducts": [{"seat": {"carriageNumber": "3", "number": "17"}}],
+            "seatMapAvailable": True,
+            "seatMapSearchId": f"SM-{direction}",
+            "serviceIdentifier": f"SI-{direction}",
         }
 
     def _response(self, booking_id):
@@ -143,6 +174,30 @@ class FakeClient:
         if not self.checkout_ok:
             raise RuntimeError("checkout exploded")
         return {}
+
+    def get_seatmap(self, token, booking_id, seatmap_search_id):
+        self.calls.append(("seatmap", booking_id, seatmap_search_id))
+        if self.seatmap_error:
+            raise self.seatmap_error
+        return self.seatmaps.get(seatmap_search_id, seatmap())
+
+    def update_seats(self, token, booking_id, updates, provisional=True):
+        self.calls.append(("seats", booking_id, provisional))
+        self.seat_updates.append((booking_id, updates, provisional))
+        if self.seat_update_error:
+            raise self.seat_update_error
+        booking = self._bookings.get(booking_id, {})
+        for update in updates:
+            for journey in booking.get("journeys") or []:
+                for seg in journey.get("segments") or []:
+                    if seg.get("direction") != update["direction"]:
+                        continue
+                    for product in seg.get("requiredProducts") or []:
+                        product["seat"] = {
+                            "number": update["seatNumber"],
+                            "carriageNumber": update["carriageNumber"],
+                        }
+        return {"bookingId": booking_id, "booking": booking}
 
 
 class FakeTokenManager:

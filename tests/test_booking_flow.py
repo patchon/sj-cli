@@ -14,7 +14,8 @@ from sj_cli.booking import (
     process_booking_flow,
     process_date_range,
 )
-from tests.fakes import FakeClient, FakeTokenManager, base_cfg, dep, offers
+from sj_cli.errors import SJAPIError
+from tests.fakes import FakeClient, FakeTokenManager, base_cfg, dep, offers, seatmap
 
 D = "2026-09-01"
 OUT = [
@@ -561,3 +562,90 @@ def test_midrun_refresh_failure_stops_the_run_with_a_summary(capsys):
     assert "  error: token refresh failed: timed out\n" in out
     assert "! stopping: no valid session for the remaining dates\n" in out
     assert "\n ● 1 day(s) · 1 error(s)" in out
+
+
+# --- seat selection at book time ---------------------------------------------
+
+
+def test_book_mode_sets_seats_before_checkout():
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window", "table"]
+    run_range(c, cfg, dry_run=False)
+
+    kinds = [call[0] for call in c.calls]
+    assert kinds.index("seats") < kinds.index("checkout")
+    _, updates, provisional = c.seat_updates[0]
+    assert provisional is True
+    assert {u["direction"] for u in updates} == {"OUTBOUND", "INBOUND"}
+    assert updates[0]["seatStrategy"] == "EXACT"
+    assert updates[0]["serviceIdentifier"] == "SI-OUTBOUND"
+
+
+def test_book_mode_without_the_key_never_touches_the_seat_endpoints():
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    run_range(c, base_cfg(), dry_run=False)
+    assert not [call for call in c.calls if call[0] in ("seatmap", "seats")]
+
+
+def test_book_mode_skips_the_patch_when_the_seat_is_already_best():
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    c.seatmaps = {
+        "SM-OUTBOUND": seatmap(free=(("70", ["TABLE", "WINDOW"], True),), assigned=("3", "70")),
+        "SM-INBOUND": seatmap(free=(("70", ["TABLE", "WINDOW"], True),), assigned=("3", "70")),
+    }
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+    run_range(c, cfg, dry_run=False)
+    assert not c.seat_updates
+
+
+def test_a_seat_failure_still_books_the_day(capsys):
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    c.seatmap_error = SJAPIError("seat map unavailable")
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+    counts = run_range(c, cfg, dry_run=False)
+    assert counts["booked"] == 1
+    out = capsys.readouterr().out
+    assert "! could not read the seat map" in out
+    assert "✓ checking out booking" in out
+
+
+def test_dry_run_never_reads_a_seat_map():
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+    run_range(c, cfg, dry_run=True)
+    assert not [call for call in c.calls if call[0] in ("seatmap", "seats")]
+
+
+def test_a_seat_the_api_did_not_give_us_is_reported(capsys, monkeypatch):
+    """The API is free to hand back a different seat than the one asked for."""
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    monkeypatch.setattr(
+        c,
+        "update_seats",
+        lambda _token, bid, _updates, **_kw: {
+            "bookingId": bid,
+            "booking": c._bookings.get(bid, {}),
+        },
+    )
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+    counts = run_range(c, cfg, dry_run=False)
+    assert counts["booked"] == 1
+    assert "! asked for carriage" in capsys.readouterr().out
+
+
+def test_a_wish_that_cannot_be_met_is_reported(capsys):
+    """best_seat is best-effort: say so when the top wish was not honoured."""
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    c.seatmaps = {
+        "SM-OUTBOUND": seatmap(free=(("17", ["AISLE"], True),), assigned=("3", "39")),
+        "SM-INBOUND": seatmap(free=(("17", ["AISLE"], True),), assigned=("3", "39")),
+    }
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+    run_range(c, cfg, dry_run=False)
+    assert "! outbound: no window seat free, taking carriage 3 seat 17" in capsys.readouterr().out
