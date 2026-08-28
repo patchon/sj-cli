@@ -97,6 +97,7 @@ class FakeClient:
         self.seat_updates: list[tuple] = []  # (booking_id, updates, provisional)
         self.seatmap_error: Exception | None = None
         self.seat_update_error: Exception | None = None
+        self.bookings_list: list[dict] = []
 
     def resolve_station(self, name):
         return self.STATIONS.get(name, name)
@@ -174,6 +175,12 @@ class FakeClient:
         if not self.checkout_ok:
             raise RuntimeError("checkout exploded")
         return {}
+
+    def get_bookings(self, token, start_date, end_date, page=0):
+        self.calls.append(("bookings", start_date, end_date))
+        # fetch_all_bookings reads "bookings" and paginates on "nextPage";
+        # omitting nextPage ends the loop after one page.
+        return {"bookings": self.bookings_list}
 
     def get_seatmap(self, token, booking_id, seatmap_search_id):
         self.calls.append(("seatmap", booking_id, seatmap_search_id))
