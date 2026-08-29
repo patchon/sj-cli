@@ -16,6 +16,10 @@ RAW = [
     {"name": "Nameless", "uicStationCode": None},
     {"uicStationCode": "740099999"},
     "junk",
+    # Lowest code of the lot, but only a word-prefix match for "uppsala"/"upps"
+    # (rank 2) and a name-prefix match for "central" (rank 1) — pins that rank
+    # beats code order, not the other way around.
+    {"name": "Centralstationen Uppsala", "uicStationCode": "740000000", "synonyms": []},
 ]
 
 
@@ -32,6 +36,7 @@ def test_parse_stations_keeps_named_coded_entries_only():
         "Uppsala Central",
         "Uppsala Norra",
         "Göteborg Stockholmsgatan",
+        "Centralstationen Uppsala",
     ]
     assert stations[1] == {
         "name": "Göteborg Central",
@@ -54,8 +59,13 @@ def test_fold_strips_case_diacritics_and_spacing():
 def test_match_ranks_exact_prefix_word_substring_then_synonym():
     idx = StationIndex(parse_stations(RAW))
     assert names(idx.match("Uppsala Central"))[0] == "Uppsala Central"
-    assert names(idx.match("upps")) == ["Uppsala Central", "Uppsala Norra"]
+    assert names(idx.match("upps")) == [
+        "Uppsala Central",
+        "Uppsala Norra",
+        "Centralstationen Uppsala",
+    ]
     assert names(idx.match("central")) == [
+        "Centralstationen Uppsala",
         "Stockholm Central",
         "Göteborg Central",
         "Malmö Central",
@@ -85,3 +95,28 @@ def test_exact_looks_up_names_and_synonyms():
     assert idx.exact("Gothenburg Central station")["code"] == "740000002"
     assert idx.exact("Nowhere") is None
     assert idx.exact("") is None
+
+
+def test_match_rank_beats_code_order():
+    # "Centralstationen Uppsala" (740000000) has the lowest code of the whole
+    # list, but for "uppsala" it is only a word-prefix match (rank 2) while
+    # "Uppsala Central" and "Uppsala Norra" are name-prefix matches (rank 1).
+    # Sorting by code alone would put it first; it must sort last instead.
+    idx = StationIndex(parse_stations(RAW))
+    assert names(idx.match("uppsala")) == [
+        "Uppsala Central",
+        "Uppsala Norra",
+        "Centralstationen Uppsala",
+    ]
+
+
+def test_exact_prefers_the_lowest_code_on_a_tie():
+    # Same name, listed higher-code first so list order can't mask the tie-break.
+    stations = parse_stations(
+        [
+            {"name": "Alvesta", "uicStationCode": "740000900", "synonyms": []},
+            {"name": "Alvesta", "uicStationCode": "740000090", "synonyms": []},
+        ]
+    )
+    idx = StationIndex(stations)
+    assert idx.exact("alvesta")["code"] == "740000090"
