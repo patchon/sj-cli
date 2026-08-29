@@ -123,6 +123,28 @@ def poll_departures(client: SJClient, access_token: str, search_id: str) -> list
     return []
 
 
+def drop_departed(departures: list[dict], now: datetime) -> tuple[list[dict], int]:
+    """
+    The departures not yet gone at `now`, and how many were dropped.
+
+    A departure timed exactly at `now` is kept (SJ decides at the offers
+    step), and so is one whose time cannot be parsed — never hide a train on
+    a parse slip. `now` is aware (sweden_now()); the API timestamps are too.
+    """
+    kept: list[dict] = []
+    dropped = 0
+    for departure in departures:
+        try:
+            departed = parse_api_datetime(departure.get("departureDateTime") or "") < now
+        except (ValueError, TypeError):
+            departed = False
+        if departed:
+            dropped += 1
+        else:
+            kept.append(departure)
+    return kept, dropped
+
+
 def _departure_time(departure: dict) -> str:
     """Departure time (HH:MM, Swedish wall-clock as the API writes it) of a departure dict."""
     try:
@@ -658,6 +680,7 @@ def _try_alternative_departure(
     if not travels:
         return None
     departures = travels[0].get("departures") or []
+    departures, _ = drop_departed(departures, sweden_now())
 
     requested_class = params["comfort_class"]
     allow_fallback = params.get("allow_class_fallback", True)
@@ -725,6 +748,9 @@ def poll_and_select(
     (select_best_departure).
     """
     departures = poll_departures(client, access_token, search_id)
+    departures, dropped = drop_departed(departures, sweden_now())
+    if dropped:
+        logger.debug(f"{dropped} departure(s) already gone at search time, skipped")
     if not departures:
         logger.warning(f"no departures found for search {search_id}")
         return None
