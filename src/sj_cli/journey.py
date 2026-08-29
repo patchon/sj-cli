@@ -194,24 +194,27 @@ def _choose_leg(
         )
         if picked is None:
             return None
+        # The row dict is untyped, so this is also what tells the type checker
+        # the class is a str; the widget's reject() already refuses a
+        # class-less row, so the guard is unreachable in practice — and a
+        # None class must never reach find_offer_id, which reads it as "any
+        # offer will do" and would book a class the search said had no seats.
+        class_: str | None = picked["class_"]
+        if class_ is None:
+            continue
         leg = resolve_offer(
-            client,
-            access_token,
-            params,
-            passenger_token,
-            picked["dep"],
-            route,
-            picked["class_"],
-            label,
+            client, access_token, params, passenger_token, picked["dep"], route, class_, label
         )
         if leg is not None:
-            if leg["comfort_class"] != picked["class_"]:
-                pwarn(f"{label} class fallback: {picked['class_']} → {leg['comfort_class']}")
+            if leg["comfort_class"] != class_:
+                pwarn(f"{label} class fallback: {class_} → {leg['comfort_class']}")
             return leg
         complaint = f"no 0-price offer at {picked['departure']} · pick another"
         pwarn(complaint)
         picked["disabled"] = complaint
-        default = rows.index(picked)
+        # Not rows.index(picked): highlighting the row just disabled would
+        # make Enter a dead key on the re-opened list.
+        default = _closest_enabled(rows, target_time)
 
 
 def _warn_held_bookings(
@@ -317,7 +320,8 @@ def handle_book_journey(
     Returns:
         True when a booking was checked out (or a dry run completed); False
         when refused, aborted, declined, nothing was found, or the checkout
-        failed (the provisional is left for the next --book run's cleanup).
+        failed (the provisional is left behind: --book's cleanup only
+        covers the configured route, so SJ's own expiry ends it).
 
     """
     params = cfg["search_parameters"]
@@ -437,7 +441,15 @@ def handle_book_journey(
 
     # The write
     cart = Cart(client, access_token, cfg, passenger_token)
-    cart.add(outbound, "outbound")
+    try:
+        cart.add(outbound, "outbound")
+    except Exception as e:
+        # The offer was resolved while the user browsed the lists, so it may
+        # have gone stale; a failed first add leaves the cart empty (nothing
+        # is held), which is a plain end to the run, not a crash.
+        logger.error(f"outbound leg failed: {e}")
+        pstatus(False, f"could not create the booking ({error_text(e)}) · nothing was booked")
+        return False
     if inbound is not None:
         try:
             cart.add(inbound, "return")
@@ -456,7 +468,8 @@ def handle_book_journey(
     if not result["checked_out"]:
         pstatus(
             False,
-            f"booking {number} not checked out · provisional left (cleaned up on next --book run)",
+            f"booking {number} not checked out · provisional left, "
+            "SJ releases it or cancel it on sj.se",
         )
         return False
     pstatus(True, f"booked {number}")
