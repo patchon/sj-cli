@@ -129,25 +129,105 @@ def _departure_time(departure: dict) -> str:
         return "—"
 
 
-def describe_departure(dep: dict, route: str) -> dict:
+class DepartureFacts(TypedDict):
+    """What describe_departure says about a departure (see there)."""
+
+    departure: str
+    arrival: str
+    duration: str
+    train: str
+    route: str
+
+
+def describe_departure(dep: dict, route: str) -> DepartureFacts:
     """
     The display facts of a departure.
 
-    Returns {"departure": "05:29", "arrival": "09:04", "duration": "3h 35m",
-    "train": "X 2000 420", "route": route} — the one shape the dry-run rows,
-    the journey picker and the log lines share. The train is brand + public
-    number from the first leg; the route is the caller's "A → B".
+    {"departure": "05:29", "arrival": "09:04", "duration": "3h 35m", "train":
+    "X 2000 420", "route": route} — the one shape the dry-run rows, the
+    journey picker and the log lines share. The train is the first leg's
+    brand (its serviceType name when the brand is null, as half the
+    departures on an unfiltered search are) + public number, and names the
+    changes of a multi-leg journey ("· 1 change"); the route is the caller's
+    "A → B".
     """
     legs = dep.get("legs") or [{}]
-    brand = legs[0].get("serviceBrandNameDescription") or ""
-    number = legs[0].get("publicServiceName") or legs[0].get("serviceName") or ""
+    first = legs[0]
+    brand = first.get("serviceBrandNameDescription") or (
+        (first.get("serviceType") or {}).get("name") or ""
+    )
+    number = first.get("publicServiceName") or first.get("serviceName") or ""
+    train = " ".join(x for x in (brand, number) if x)
+    changes = dep.get("numberOfChanges")
+    if changes is None:
+        changes = max(len(legs) - 1, 0)
+    if changes:
+        train = f"{train} · {changes} change{'' if changes == 1 else 's'}"
     return {
         "departure": _departure_time(dep),
         "arrival": _get_arrival_time(dep),
         "duration": format_duration(dep.get("duration", "")),
-        "train": " ".join(x for x in (brand, number) if x),
+        "train": train,
         "route": route,
     }
+
+
+class Leg(DepartureFacts):
+    """A departure together with the pass offer that books it (see resolve_offer)."""
+
+    comfort_class: str
+    offer_id: str
+    alternative: bool
+
+
+def resolve_offer(
+    client: SJClient,
+    access_token: str,
+    params: dict,
+    passenger_token: str,
+    dep: dict,
+    route: str,
+    class_: str,
+    label: str,
+) -> Leg | None:
+    """
+    Read a departure's offers and pick the pass's 0-price one.
+
+    class_ is the class to start from (the one the departure carries seats
+    in, or the configured one); find_offer_id still falls down the class
+    chain when the config allows it, so the returned leg's comfort_class can
+    differ from class_ — the caller decides whether that is worth a line.
+    Prints only the spinner ("checking offers for {label} at {time}").
+
+    Returns:
+        The Leg (describe_departure facts + comfort_class + offer_id,
+        alternative False), or None when the pass has no 0-price offer on
+        this departure at all.
+
+    """
+    facts = describe_departure(dep, route)
+    departure_id: Any = dep.get("departureId")
+    with spinner(f"checking offers for {label} at {facts['departure']}"):
+        response = client.get_offers(access_token, departure_id, passenger_token)
+    found = find_offer_id(
+        response,
+        class_,
+        params.get("flexibility", "FULLFLEX"),
+        params.get("allow_class_fallback", True),
+    )
+    if not found:
+        return None
+    offer_id, matched_class = found
+    return Leg(
+        departure=facts["departure"],
+        arrival=facts["arrival"],
+        duration=facts["duration"],
+        train=facts["train"],
+        route=route,
+        comfort_class=matched_class,
+        offer_id=offer_id,
+        alternative=False,
+    )
 
 
 def booking_date_range(
@@ -518,35 +598,37 @@ def find_offer_id(
 def _try_alternative_departure(
     client: SJClient,
     access_token: str,
+    params: dict,
+    passenger_token: str,
     search_id: str,
     target_time: str,
-    requested_class: str,
-    flexibility: str,
-    allow_fallback: bool,
-    passenger_token: str,
+    route: str,
+    label: str,
     skip_departure_id: str,
     prefer_earlier: bool = True,
-) -> dict | None:
+) -> Leg | None:
     """
     Try one alternative departure when the closest one has no 0-price offer.
+
+    Outbound legs only look earlier than target_time (arrive on time),
+    return legs only later (don't leave early); the closest such departure
+    with a bookable class is tried, and only that one.
 
     Args:
         client: The SJ HTTP client.
         access_token: Valid access token.
+        params: cfg["search_parameters"].
+        passenger_token: Passenger token for the offers call.
         search_id: Search ID from the original search.
         target_time: Target time as HH:MM.
-        requested_class: Requested comfort class.
-        flexibility: Requested flexibility type.
-        allow_fallback: If True, fall back through class chain.
-        passenger_token: Passenger token for offers.
+        route: "A → B" for the leg's description.
+        label: "outbound" or "return", for the messages.
         skip_departure_id: Departure ID to skip (the one that failed).
-        prefer_earlier: If True, pick the closest departure BEFORE the target
-            time (outbound — arrive on time). If False, pick the closest
-            departure AFTER the target time (inbound — don't leave early).
+        prefer_earlier: True for outbound (not later than target), False for
+            the return (not earlier).
 
     Returns:
-        Dict with offer_id, time_str, arrival, class, and departure data
-        if found, None otherwise.
+        The alternative as a Leg (alternative True), or None.
 
     """
     results = client.get_search_results(access_token, search_id)
@@ -555,11 +637,12 @@ def _try_alternative_departure(
         return None
     departures = travels[0].get("departures") or []
 
+    requested_class = params["comfort_class"]
+    allow_fallback = params.get("allow_class_fallback", True)
     target_minutes = time_str_to_minutes(target_time)
     candidates = []
     for dep in departures:
-        dep_id = dep.get("departureId")
-        if dep_id == skip_departure_id:
+        if dep.get("departureId") == skip_departure_id:
             continue
         dep_minutes = get_departure_time_minutes(dep)
         if dep_minutes == -1:
@@ -584,27 +667,24 @@ def _try_alternative_departure(
     # Sort by proximity and try only the closest one
     candidates.sort(key=lambda x: x[2])
     dep, valid_class, _ = candidates[0]
-    time_str = dep.get("departureDateTime", "").split("T")[1][:5]
-    dep_id = dep.get("departureId")
-
-    with spinner(f"checking alternative departure at {time_str}"):
-        offers = client.get_offers(access_token, dep_id, passenger_token)
-    result = find_offer_id(offers, valid_class, flexibility, allow_fallback)
-    if result:
-        offer_id, matched_class = result
-        pinfo(f"found offer at alternative departure {time_str}")
-        if matched_class != valid_class:
-            pinfo(f"class fallback: {valid_class} → {matched_class}")
-        return {
-            "offer_id": offer_id,
-            "time_str": time_str,
-            "arrival": _get_arrival_time(dep),
-            "class": matched_class,
-            "departure": dep,
-        }
-
-    pwarn(f"alternative departure {time_str} also unavailable, skipping")
-    return None
+    leg = resolve_offer(
+        client,
+        access_token,
+        params,
+        passenger_token,
+        dep,
+        route,
+        valid_class,
+        f"alternative {label}",
+    )
+    if leg is None:
+        pwarn(f"alternative departure {_departure_time(dep)} also unavailable, skipping")
+        return None
+    pinfo(f"found offer at alternative departure {leg['departure']}")
+    if leg["comfort_class"] != valid_class:
+        pinfo(f"class fallback: {valid_class} → {leg['comfort_class']}")
+    leg["alternative"] = True
+    return leg
 
 
 def poll_and_select(
@@ -868,7 +948,7 @@ def _resolve_leg(
         {"found": False} when no departure exists at all; otherwise
         {"found": True, "has_offer": bool, "departure": "HH:MM",
          "arrival": "HH:MM", "duration": "4h 37m", "train": "X 2000 520",
-         "route": "A → B", "class": str, "offer_id": str | None,
+         "route": "A → B", "comfort_class": str, "offer_id": str | None,
          "alternative": bool} describing the chosen departure (the
          alternative one if that is where the offer was found).
 
@@ -879,7 +959,6 @@ def _resolve_leg(
     route = f"{origin} → {dest}" if outbound else f"{dest} → {origin}"
     target_time = params["time_leave"] if outbound else params.get("time_return", "17:00")
     requested_class = params["comfort_class"]
-    flexibility = params.get("flexibility", "FULLFLEX")
     allow_fallback = params.get("allow_class_fallback", True)
 
     with spinner(f"searching {label} at {target_time}"):
@@ -901,21 +980,20 @@ def _resolve_leg(
         )
     logger.info(f"selected {label}: {best['time_str']}")
 
-    with spinner(f"checking offers for {label} at {best['time_str']}"):
-        offers = client.get_offers(access_token, best["id"], passenger_token)
-    offer_result = find_offer_id(offers, best["class"], flexibility, allow_fallback)
-    if offer_result:
-        offer_id, matched_class = offer_result
-        if matched_class != best["class"]:
-            pwarn(f"{label} class fallback: {best['class']} → {matched_class}")
-        return {
-            "found": True,
-            "has_offer": True,
-            **describe_departure(best["departure"], route),
-            "class": matched_class,
-            "offer_id": offer_id,
-            "alternative": False,
-        }
+    best_leg = resolve_offer(
+        client,
+        access_token,
+        params,
+        passenger_token,
+        best["departure"],
+        route,
+        best["class"],
+        label,
+    )
+    if best_leg:
+        if best_leg["comfort_class"] != best["class"]:
+            pwarn(f"{label} class fallback: {best['class']} → {best_leg['comfort_class']}")
+        return {"found": True, "has_offer": True, **best_leg}
 
     # Another departure is only an option when the config allows a different
     # time at all; with exact time only, an offer-less exact match is the end.
@@ -925,31 +1003,24 @@ def _resolve_leg(
         alt = _try_alternative_departure(
             client,
             access_token,
+            params,
+            passenger_token,
             search_id,
             target_time,
-            requested_class,
-            flexibility,
-            allow_fallback,
-            passenger_token,
+            route,
+            label,
             best["id"],
             prefer_earlier=outbound,
         )
     else:
         pwarn(f"no valid offer for {label} at {best['time_str']} (exact time only)")
     if alt:
-        return {
-            "found": True,
-            "has_offer": True,
-            **describe_departure(alt["departure"], route),
-            "class": alt["class"],
-            "offer_id": alt["offer_id"],
-            "alternative": True,
-        }
+        return {"found": True, "has_offer": True, **alt}
     return {
         "found": True,
         "has_offer": False,
         **describe_departure(best["departure"], route),
-        "class": best["class"],
+        "comfort_class": best["class"],
         "offer_id": None,
         "alternative": False,
     }
@@ -971,7 +1042,7 @@ def _dry_run_leg(resolved: dict, flexibility: str) -> dict:
         "duration": resolved.get("duration", ""),
         "train": resolved.get("train", ""),
         "route": resolved.get("route", ""),
-        "class": resolved["class"],
+        "class": resolved["comfort_class"],
         "flexibility": flexibility if resolved["has_offer"] else None,
         "has_offer": resolved["has_offer"],
     }
@@ -2792,23 +2863,24 @@ def _rebook_released_leg(
         departures = poll_departures(client, access_token, search_id) if search_id else []
         departure = _match_departure(departures, segment)
 
-    departure_id = (departure or {}).get("departureId")
-    if not departure_id:
+    if not departure or not departure.get("departureId"):
         pwarn("the travel pass search no longer shows this departure")
         return None
 
-    with spinner("checking the travel pass offer"):
-        offer_response = client.get_offers(access_token, departure_id, passenger_token)
-    offer_result = find_offer_id(
-        offer_response,
+    leg = resolve_offer(
+        client,
+        access_token,
+        params,
+        passenger_token,
+        departure,
+        f"{dep_name} → {arr_name}",
         params["comfort_class"],
-        params.get("flexibility", "FULLFLEX"),
-        params.get("allow_class_fallback", True),
+        "the same departure",
     )
-    if not offer_result:
+    if leg is None:
         pwarn("the travel pass has no offer left on this departure")
         return None
-    offer_id, matched_class = offer_result
+    offer_id, matched_class = leg["offer_id"], leg["comfort_class"]
 
     with spinner(f"booking {matched_class}"):
         b_resp = client.create_provisional_booking(access_token, offer_id, passenger_token)
