@@ -13,7 +13,6 @@ from sj_cli.auth import ensure_authenticated, handle_logout
 from sj_cli.booking import (
     booking_date_range,
     cleanup_stale_provisionals,
-    covers,
     describe_run,
     fetch_all_bookings,
     handle_cancel_booking,
@@ -21,7 +20,8 @@ from sj_cli.booking import (
     handle_change_seat,
     handle_list_bookings,
     handle_upgrade_class,
-    is_expired,
+    is_expired_pass,
+    pass_covers,
     pass_validity,
     process_date_range,
 )
@@ -319,7 +319,7 @@ def resolve_travel_pass(
             at, or nothing was chosen.
 
     """
-    valid = [tp for tp in travel_passes if not is_expired(tp)]
+    valid = [tp for tp in travel_passes if not is_expired_pass(tp)]
     if len(valid) < len(travel_passes):
         logger.info(f"ignoring {len(travel_passes) - len(valid)} expired travel pass(es)")
 
@@ -332,7 +332,7 @@ def resolve_travel_pass(
         return valid[0]
 
     if for_dates:
-        covering = [tp for tp in valid if covers(tp, for_dates)]
+        covering = [tp for tp in valid if pass_covers(tp, for_dates)]
         if len(covering) == 1:
             logger.info(f"using the pass that covers {for_dates[0]} – {for_dates[1]}")
             return covering[0]
