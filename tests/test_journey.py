@@ -72,22 +72,51 @@ def test_ask_date_ctrl_d_is_none(monkeypatch):
     assert journey._ask_date("date", TODAY, TODAY, "x", VALID) is None
 
 
+def test_ask_date_default_is_clamped_to_the_pass_start(monkeypatch):
+    valid = (TODAY + timedelta(days=5), TODAY + timedelta(days=300))
+    answers = Answers("")
+    monkeypatch.setattr(journey, "ask_optional", answers)
+    assert journey._ask_date("date", TODAY, TODAY, "date is in the past", valid) == valid[0]
+    assert answers.asked == [f"date [{valid[0].isoformat()}]: "]
+
+
+def test_ask_date_whitespace_reply_keeps_the_default(monkeypatch):
+    answers = Answers("   ")
+    monkeypatch.setattr(journey, "ask_optional", answers)
+    assert journey._ask_date("date", TODAY, TODAY, "date is in the past", VALID) == TODAY
+
+
+def test_ask_date_accepts_both_pass_boundary_days(monkeypatch, capsys):
+    valid = (TODAY, TODAY + timedelta(days=10))
+    answers = Answers(valid[0].isoformat(), valid[1].isoformat())
+    monkeypatch.setattr(journey, "ask_optional", answers)
+    assert journey._ask_date("date", TODAY, TODAY, "date is in the past", valid) == valid[0]
+    assert journey._ask_date("date", TODAY, TODAY, "date is in the past", valid) == valid[1]
+    assert " ! " not in capsys.readouterr().out
+
+
 # --- _ask_station --------------------------------------------------------------
 
 
-def test_ask_station_keeps_the_default_and_refuses_the_other_endpoint(monkeypatch, capsys):
+def test_ask_station_passes_the_default_and_refuses_the_other_endpoint(monkeypatch, capsys):
     idx = index()
     gbg, sth = idx.exact("Göteborg Central"), idx.exact("Stockholm Central")
     picks = iter([sth, gbg])
-    seen = []
+    seen_defaults = []
 
     def fake_select(prompt, default, search, render, **_kw):
-        seen.append((prompt, default, render(default), search("upp")[0]["name"]))
+        seen_defaults.append(default)
+        if default is not None:
+            assert (prompt, render(default), search("upp")[0]["name"]) == (
+                "to",
+                "Stockholm Central",
+                "Uppsala Central",
+            )
         return next(picks)
 
     monkeypatch.setattr(journey, "select_filtered", fake_select)
     assert journey._ask_station("to", sth, idx, other=sth) == gbg
-    assert seen[0] == ("to", sth, "Stockholm Central", "Uppsala Central")
+    assert seen_defaults == [sth, None]
     assert " ! from and to are the same station\n" in capsys.readouterr().out
 
 
@@ -114,6 +143,11 @@ def test_ask_yes_no(monkeypatch, default, reply, expected, shown):
     monkeypatch.setattr(journey, "ask_optional", answers)
     assert journey._ask_yes_no("return?", default) is expected
     assert answers.asked == [f"return? {shown}: "]
+
+
+def test_ask_yes_no_whitespace_reply_keeps_the_default(monkeypatch):
+    monkeypatch.setattr(journey, "ask_optional", Answers("   "))
+    assert journey._ask_yes_no("return?", True) is True
 
 
 def test_default_station_prefers_the_live_list_then_the_map():
