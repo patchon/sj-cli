@@ -2,7 +2,6 @@ from datetime import datetime
 
 from sj_cli.booking import (
     _dry_run_note,
-    _find_departure_by_time,
     _run_outcome,
     _span_label,
     booking_date_range,
@@ -39,18 +38,6 @@ def test_comfort_availability():
     assert not check_comfort_availability(d_b, "2 class calm")
     assert check_comfort_availability(d_calm, "2 class calm")
     assert not check_comfort_availability(d_calm, "business")
-
-
-def test_find_departure_by_time_closest_vs_exact():
-    deps = [
-        dep("a", D, "06:30", "08:00"),
-        dep("b", D, "07:10", "08:40"),
-        dep("c", D, "07:00", "08:30"),
-    ]
-    assert _find_departure_by_time(deps, "06:59", select_closest=True)["departureId"] == "c"
-    assert _find_departure_by_time(deps, "06:59", select_closest=False) is None
-    assert _find_departure_by_time(deps, "07:10", select_closest=False)["departureId"] == "b"
-    assert _find_departure_by_time([], "06:59", select_closest=True) is None
 
 
 def test_resolve_class_fallback_chain():

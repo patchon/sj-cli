@@ -123,6 +123,15 @@ def test_ask_date_default_is_clamped_to_the_pass_start(monkeypatch):
     assert s.prompts == [f"date [{valid[0].isoformat()}]: "]
 
 
+def test_ask_date_default_is_clamped_to_the_pass_end(monkeypatch):
+    valid = (TODAY - timedelta(days=10), TODAY + timedelta(days=5))
+    s = Script("")
+    monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
+    ahead = TODAY + timedelta(days=30)
+    assert journey._ask_date("date", ahead, TODAY, "date is in the past", valid) == valid[1]
+    assert s.prompts == [f"date [{valid[1].isoformat()}]: "]
+
+
 def test_ask_date_whitespace_reply_keeps_the_default(monkeypatch):
     s = Script("   ")
     monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
@@ -562,3 +571,34 @@ def test_a_card_that_cannot_be_rendered_still_reports_the_booking(monkeypatch, c
     out = capsys.readouterr().out
     assert " ! booked as NUM1, but the legs could not be shown (render exploded)\n" in out
     assert out.rstrip().endswith(" ● booked NUM1")
+
+
+def test_ctrl_c_after_the_first_add_names_the_held_provisional(monkeypatch, capsys):
+    class Interrupted(FakeClient):
+        def checkout_booking(self, token, booking_id):
+            self.calls.append(("checkout", booking_id))
+            raise KeyboardInterrupt
+
+    c = Interrupted({"OUT": OUT})
+    s = Script("", "", "", "n", "", True)
+    wire(monkeypatch, s)
+    with pytest.raises(KeyboardInterrupt):
+        run(c, s)
+    assert (
+        " ! booking NUM1 left as a provisional, SJ releases it or cancel it on sj.se\n"
+        in capsys.readouterr().out
+    )
+
+
+def test_ctrl_c_before_anything_is_held_names_nothing(monkeypatch, capsys):
+    class Interrupted(FakeClient):
+        def create_provisional_booking(self, token, offer_id, passenger_token):
+            self.calls.append(("create", offer_id))
+            raise KeyboardInterrupt
+
+    c = Interrupted({"OUT": OUT})
+    s = Script("", "", "", "n", "", True)
+    wire(monkeypatch, s)
+    with pytest.raises(KeyboardInterrupt):
+        run(c, s)
+    assert "left as a provisional" not in capsys.readouterr().out
