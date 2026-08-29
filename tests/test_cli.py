@@ -63,7 +63,7 @@ def test_dry_run_rejected_for_modes_with_nothing_to_preview(capsys):
     assert exc_info.value.code == 1
     err = capsys.readouterr().err
     assert (
-        "● --dry-run only applies to --book, --cancel-date, --cancel-booking, "
+        "● --dry-run only applies to --book, --book-journey, --cancel-date, --cancel-booking, "
         "--change-seat-date, --change-seat-booking and --upgrade-class" in err
     )
 
@@ -781,3 +781,59 @@ def test_failures_close_with_a_status_line(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         cli._run(parse_args(["--list-bookings"]), _StubClient())
     assert "● error: division by zero" in capsys.readouterr().out
+
+
+# --- --book-journey --------------------------------------------------------------
+
+
+def test_book_journey_is_a_mode_flag_with_dry_run_as_modifier():
+    assert parse_args(["--book-journey"]).book_journey is True
+    args = parse_args(["--book-journey", "--dry-run"])
+    assert args.book_journey is True and args.dry_run is True
+    with pytest.raises(SystemExit):
+        parse_args(["--book", "--book-journey"])
+    with pytest.raises(SystemExit):
+        parse_args(["--book-journey", "--seat-details"])
+
+
+@pytest.mark.parametrize(("ok", "code"), [(True, None), (False, 1)])
+def test_book_journey_exit_code_follows_the_outcome(tmp_path, monkeypatch, capsys, ok, code):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake_handle(client, token, cfg, active_pass, tp_product_id, tp_token_id, dry_run=False):
+        seen.update(pass_name=active_pass["name"], tp=tp_product_id, dry_run=dry_run)
+        return ok
+
+    monkeypatch.setattr(cli, "handle_book_journey", fake_handle)
+    if code is None:
+        cli._run(parse_args(["--book-journey", "--dry-run"]), _StubClient())
+    else:
+        with pytest.raises(SystemExit) as exc:
+            cli._run(parse_args(["--book-journey"]), _StubClient())
+        assert exc.value.code == code
+    assert seen == {"pass_name": "Pass", "tp": "TP", "dry_run": code is None}
+    out = capsys.readouterr().out
+    assert ("dry run · booking a journey" in out) is (code is None)
+    assert "booking a journey" in out
+
+
+def test_book_journey_needs_search_parameters_but_not_dates(tmp_path, monkeypatch, capsys):
+    from sj_cli import cli
+    from sj_cli.config import CfgManager
+    from sj_cli.tokens import TokenManager
+
+    (tmp_path / "config.toml").write_text('[auth]\nemail = "a@b.se"\npassword = "x"\n')
+    monkeypatch.setattr(cli, "CfgManager", lambda: CfgManager(tmp_path / "config.toml"))
+    monkeypatch.setattr(cli, "TokenManager", lambda: TokenManager(tmp_path / "token.json"))
+    with pytest.raises(SystemExit) as exc:
+        cli._run(parse_args(["--book-journey"]), _NoCallClient())
+    assert exc.value.code == 1
+    assert "● invalid configuration" in capsys.readouterr().out
+
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    (tmp_path / "config.toml").write_text(
+        (tmp_path / "config.toml").read_text().replace("dates = ", "# dates = ")
+    )
+    monkeypatch.setattr(cli, "handle_book_journey", lambda *_a, **_k: True)
+    cli._run(parse_args(["--book-journey"]), _StubClient())  # no SystemExit: dates not required
