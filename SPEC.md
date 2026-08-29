@@ -17,7 +17,7 @@ Standard src layout declared in `pyproject.toml` (PEP 621, `pip install -e .`). 
 | `cli.py` | Entry point. CLI argument parsing (see §5.8), top-level orchestration. |
 | `auth.py` | Authentication orchestration. B2C login flow, token lifecycle (validate → refresh → full login), SMS input with timeout. |
 | `client.py` | HTTP client. All SJ API communication via `httpx.Client`. Low-level request methods only — no business logic. Includes HTTP retry logic. |
-| `booking.py` | Booking business logic. Search, departure selection, offer matching, provisional booking creation, checkout, seat selection, cancellation, duplicate detection, change-seat modes. |
+| `booking.py` | Booking business logic. The core every write path uses — `search()`, `resolve_offer()` (a departure → a Leg with the pass offer), `Cart` (provisional → add legs → seats → customer → checkout) — plus departure selection, offer matching, cancellation, duplicate detection, change-seat and upgrade-class modes, and the travel-pass validity helpers (`pass_validity`, `is_expired_pass`, `pass_covers`). |
 | `config.py` | Configuration loading and validation (`CfgManager`). |
 | `tokens.py` | Token cache management (`TokenManager`). Load, save, validate expiry, check refresh availability. |
 | `logger.py` | Logging setup with custom TRACE level, color formatter, httpx log filtering. |
@@ -25,6 +25,8 @@ Standard src layout declared in `pyproject.toml` (PEP 621, `pip install -e .`). 
 | `output.py` | User-facing output helpers. `pinfo()`/`pdim()`, ANSI styling, spinner, per-day booking cards, status cards (auth modes), travel-pass cards. |
 | `dates.py` | Swedish red-day calendar (Easter computed, no dependency). `skip_reason()` for weekend/holiday skipping. |
 | `seats.py` | Seat selection: the config vocabulary, the seat-map join and the ranking. Pure logic — no HTTP, no printing. |
+| `stations.py` | Station lookup for `--book-journey`: folds and ranks SJ's public station list (exact › prefix › word prefix › substring › synonym, ties by UIC code). Pure — no HTTP, no printing. |
+| `journey.py` | The interactive journey mode: the questions, the pick lists, one confirmation, then the `Cart`. |
 
 ### Design principles
 
@@ -53,9 +55,10 @@ Mode dispatch:
   --cancel-booking NUMS   → find bookings by number → interactive cancel → exit
   --change-seat-date DATES    → find bookings on route → apply seat_preference → exit
   --change-seat-booking NUMS  → find bookings by number → apply seat_preference → exit
+  --book-journey          → questions (date/from/to/return) → search → pick a departure per leg → confirm → Cart → exit
   --login                 → exit after auth
   --logout                → end B2C session, delete caches → exit (skips config/auth)
-  (--dry-run modifies --book / --cancel-* / --change-seat-*: preview only, nothing mutated)
+  (--dry-run modifies --book / --book-journey / --cancel-* / --change-seat-* / --upgrade-class: preview only, nothing mutated)
   --book                  → booking loop:
                               clean up stale provisionals
                               for each selected date:
@@ -439,8 +442,9 @@ The closing status is green when a ticket was actually bought, red when any leg 
 
 | Flag | Description | Interactive? |
 |---|---|---|
-| `--dry-run` | Modifier for `--book`/`--cancel-date`/`--cancel-booking`/`--change-seat-date`/`--change-seat-booking`/`--upgrade-class`: preview only, nothing booked, cancelled, re-seated or upgraded, no prompts. Usage error alone or with any other flag. | Only SMS on first login. |
+| `--dry-run` | Modifier for `--book`/`--book-journey`/`--cancel-date`/`--cancel-booking`/`--change-seat-date`/`--change-seat-booking`/`--upgrade-class`: preview only, nothing booked, cancelled, re-seated or upgraded, no prompts. Usage error alone or with any other flag. | Only SMS on first login. |
 | `--book` | Book tickets for the configured dates (`dates`, §4.3). | Only SMS on first login; also prompts per leg when `seat_preference = "ask"` (not under `--dry-run`). |
+| `--book-journey` | Book one journey interactively (§5.10): date, from, to and a return are asked (config values are the defaults), each leg's departures are listed to pick from with the class the pass would get, one `book?` confirmation, then the booking. Terminal only, dry run included. | Yes (every prompt; also per leg when `seat_preference = "ask"`). |
 | `--cancel-date DATES` | Cancel bookings on the configured route for one or more dates: a `YYYY-MM-DD` date, an ISO week (`W43`, `2027-W02`; a bare week is this ISO year), a comma-separated list, and/or inclusive `START..END` ranges, mixed freely. Every token is validated up front (the same grammar as the config's `dates` key, §4.3); any problem renders an `● invalid --cancel-date` card echoing each bad value and exits 1 before any API call. Dates are deduplicated and processed in order, one section per date. | Yes (journey choice + confirmation). |
 | `--cancel-booking NUM[,NUM…]` | Cancel booking(s) by booking number, comma-separated, any case (deduplicated, order kept). Validated up front: a value that cannot be a booking number (anything beyond letters and digits) or that looks like a date or week (`2026-09-16`, `W43`, `2027-W02`, a `..` range) renders an `● invalid --cancel-booking` card echoing each bad value — with a `did you mean --cancel-date?` hint for the date/week-shaped ones — and exits 1 before any API call. One output section per booking, blank-line separated. | Yes (journey choice + confirmation). |
 | `--change-seat-date DATES` | Re-seat bookings on the configured route for one or more dates, using `seat_preference` (required, §4.3): same date grammar and up-front validation as `--cancel-date` (§5.4). All given dates are processed in one pass, closing with a single status line. | Only SMS on first login, unless `seat_preference = "ask"` (prompts per leg per day, not under `--dry-run`). |
@@ -480,15 +484,45 @@ Flags are mutually exclusive, and one mode flag is required — there is no impl
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | Any failure: config or auth error; a `--book` run in which any day's checkout failed or errored; a `--cancel-*` run in which any cancellation was refused by the API, declined at a prompt, or (`--cancel-booking`) the number was not found; a `--change-seat-*` run in which (`--change-seat-booking`) a named number was not found; an `--upgrade-class` run in which any leg ended with no ticket, any release failed or was left unconfirmed, a probe raised, the confirmation was declined, or there was no terminal to ask at (§5.6). A day with no offer, a `--cancel-date` date with nothing to cancel, a segment for which `--change-seat-*` found no free seat to choose from or whose write was rejected (kept as SJ assigned, reported with `!`, §5.4), and an `--upgrade-class` leg that was re-booked into a lower class than asked for (a ticket exists) are not failures. |
+| 1 | Any failure: config or auth error; a `--book` run in which any day's checkout failed or errored; a `--cancel-*` run in which any cancellation was refused by the API, declined at a prompt, or (`--cancel-booking`) the number was not found; a `--change-seat-*` run in which (`--change-seat-booking`) a named number was not found; an `--upgrade-class` run in which any leg ended with no ticket, any release failed or was left unconfirmed, a probe raised, the confirmation was declined, or there was no terminal to ask at (§5.6); a `--book-journey` run that was refused (no terminal), aborted at a prompt, declined at `book?`, found no departures, could not fetch the station list, could not create the booking, or whose checkout failed. A day with no offer, a `--cancel-date` date with nothing to cancel, a segment for which `--change-seat-*` found no free seat to choose from or whose write was rejected (kept as SJ assigned, reported with `!`, §5.4), and an `--upgrade-class` leg that was re-booked into a lower class than asked for (a ticket exists) are not failures. |
 
 Every failure that ends a run closes with a red `●` status line naming the cause (`● initialization failed: …`, `● error: …`, `● token refresh failed: …`, `● no valid travel pass found`). Error texts are one line (httpx's "for more information" line is dropped), never empty (an exception without a message shows its type) and never carry an auth code from a URL.
+
+### 5.10 Book-journey mode
+
+```bash
+sj-cli --book-journey             # ask, pick, confirm, book
+sj-cli --book-journey --dry-run   # the same questions and lists, nothing written
+```
+
+One journey, booked the way sj.se's front page does it, on the travel pass. Everything not typed comes from config, so Enter at every prompt books one day of the configured commute:
+
+```
+? date [2026-08-29]: 2026-09-14      today by default (the pass start when that is later);
+                                     never before today, always inside the pass validity
+? from [Göteborg Central]:           Enter keeps the config station; typing filters the live
+? to [Stockholm Central]: upps       station list as you type (↑↓ move, Enter picks, Esc aborts)
+? return? [Y/n]:                     the default is `roundtrip`
+? return date [2026-09-14]:          Enter = the same day; never before the outbound date
+```
+
+Stations come from SJ's public `config/stations` list, matched case- and diacritic-insensitively: an exact name or synonym wins, then a name prefix, a word prefix, a substring, a synonym substring — ties by UIC code, which puts the big stations first. The 6-station map in `client.py` is still what config validation uses (offline); the picked codes go straight into the search. A `to` equal to `from` is refused (`! from and to are the same station`) and asked again, without the default.
+
+One search (with the return date when asked), then per leg a day header and a pick list — `HH:MM → HH:MM   duration   train   class`, the class being what the pass would get on that departure (`comfort_class`, a fallback marked `fallback`, or `—` marked `no seats`, which cannot be picked). The highlighted row is the enabled departure closest to `time_leave` (`time_return` for the return); ↑↓ or a typed row number move it, Enter picks, Esc aborts. The pick's offers are read at once; a departure without a 0-price offer is said (`! no 0-price offer at 05:29 · pick another`), disabled, and the list asked again with the closest enabled row highlighted. Before the first list, every ticket the account already holds on the chosen dates is named (`! you hold booking 3HT2NEIL on 2026-09-14 (Göteborg Central → Stockholm Central 05:29) · departures overlapping it show no seats`) — a pass search reports every class unavailable on a departure that overlaps a held ticket (§5.6), so the list would otherwise look inexplicably empty there; a failed bookings fetch is only a note (`! could not check existing bookings: …`).
+
+Then the chosen leg(s) as day cards (one per date), and:
+
+- `--dry-run`: `● dry run · nothing booked` (dim), exit 0.
+- `? book? [y/N]:` — no: `● booking aborted, nothing was booked` (red), exit 1.
+- yes: the ordinary write path (§6.1 steps 8–12 through the `Cart`: provisional, the return leg added to it, seats when `seat_preference` is set, customer, checkout), the booked card, `● booked 3HT2NEIL` (green). A failed first add closes red (`● could not create the booking (…) · nothing was booked`), exit 1. A checkout failure closes red (`● booking 3HT2NEIL not checked out · provisional left, SJ releases it or cancel it on sj.se`), exit 1 — the `--book` cleanup covers only the configured route, so it is not promised here. A return leg that fails to add books the outbound alone (§8.2).
+
+Config: `[search_parameters]` is required (`comfort_class`, `flexibility`, `allow_class_fallback`, `service_types`, `seat_preference` apply as in `--book`; `station_from`/`station_to`, `time_leave`/`time_return` and `roundtrip` are defaults only), `dates` is not (and is not validated for this mode, as for `--cancel-date`). The pass is the single valid one, or the one chosen at the existing numbered prompt; the typed dates are checked against it. Needs a terminal on stdin and stdout, dry run included: refused before any request otherwise (`● not a terminal · --book-journey asks questions`, exit 1). Ctrl-D at any prompt, or Esc in a pick list, aborts (`● booking aborted, nothing was booked`, exit 1); Ctrl-C exits 130 with the pick-list frame wiped and the terminal restored.
 
 ## 6. Booking Workflow
 
 ### 6.1 Per-date flow
 
-For each selected date (`dates`, §4.3) from today on:
+For each selected date (`dates`, §4.3) from today on. Steps 8–12 are one object, `booking.Cart` (`add` creates the provisional or adds a leg, `finish` does seats → customer → checkout); `--book`, the `--upgrade-class` re-book and `--book-journey` all write through it.
 
 0. **Calendar filter**: if the date is a weekend (`skip_weekends`) or a Swedish red day (`skip_holidays`), print the one-line day note (bold date + dim reason, `sat 19 sep 2026   weekend`) and continue to the next date without any API calls (see §6.4). Dates before today are not walked at all: they are dropped with one note (`! 7 selected day(s) have passed, starting from 2026-10-21`); if every selected day has passed by the time the loop runs, the run ends with `● all selected dates have passed` (exit 1). Unselected days between selected ones print nothing.
 1. **Duplicate check**: fetch existing bookings (from today to the end of the pass, so a selection starting today is covered) and check whether an active booking — not cancelled, not a stale provisional — already has a journey with this route's end points on this Swedish date (a journey with a change matches by its end points, not per segment). If fully booked (both legs for roundtrip, or single leg for one-way), skip with an info message.
@@ -667,12 +701,11 @@ Color-coded by level in terminal.
 
 ## 11. Removed / Out of Scope
 
-- **Ad-hoc trip booking**: different routes per date, multi-stop journeys.
+- **Ad-hoc trips outside `--book-journey`**: multi-stop journeys, several passengers.
 - **Multi-passenger booking**: always single passenger (the pass holder).
-- **Dynamic station lookup**: use hardcoded map for now.
+- **Dynamic station lookup in config**: config stations are validated against the hardcoded map; only `--book-journey` uses the live list.
 - **SMS re-trigger**: user re-runs the tool if the SMS doesn't arrive (a mistyped code *is* retried, §3.2 step 8).
 - **`dry_run` config key**: removed from config. `--dry-run` is a CLI modifier on `--book`/`--cancel-*`; the bare flags act for real.
-- **Interactive confirmation before booking**: the config is the contract. The tool books what's configured.
 
 ## 12. Dependencies
 
