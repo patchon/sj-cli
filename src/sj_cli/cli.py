@@ -35,6 +35,7 @@ from sj_cli.dates import (
     sweden_now,
 )
 from sj_cli.errors import SJAPIError, SJAuthError, SJConfigError, error_text
+from sj_cli.journey import handle_book_journey
 from sj_cli.logger import setup_logging
 from sj_cli.output import (
     DIM,
@@ -155,7 +156,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help=(
-            "Preview modifier for --book, --cancel-date, --cancel-booking, "
+            "Preview modifier for --book, --book-journey, --cancel-date, --cancel-booking, "
             "--change-seat-date, --change-seat-booking and --upgrade-class: show what "
             "would happen without doing any of it."
         ),
@@ -173,6 +174,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--book",
         action="store_true",
         help="Book tickets.",
+    )
+    group.add_argument(
+        "--book-journey",
+        action="store_true",
+        help=(
+            "Book one journey interactively, like sj.se's front page: asks for the date, the "
+            "stations (the configured route by default) and a return, lists each leg's "
+            "departures to pick from, confirms once, then books on the travel pass. "
+            "Terminal only; --dry-run walks through everything and books nothing."
+        ),
     )
     group.add_argument(
         "--cancel-date",
@@ -251,6 +262,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     if args.dry_run and not (
         args.book
+        or args.book_journey
         or args.cancel_date is not None
         or args.cancel_booking is not None
         or args.change_seat_date is not None
@@ -258,7 +270,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         or args.upgrade_class is not None
     ):
         parser.error(
-            "--dry-run only applies to --book, --cancel-date, --cancel-booking, "
+            "--dry-run only applies to --book, --book-journey, --cancel-date, --cancel-booking, "
             "--change-seat-date, --change-seat-booking and --upgrade-class"
         )
 
@@ -628,6 +640,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             cfg,
             require_search=(
                 args.book
+                or args.book_journey
                 or args.cancel_date is not None
                 or args.change_seat_date is not None
                 or args.upgrade_class is not None
@@ -705,11 +718,15 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     # or a choice at the terminal); the other modes only a date range. A real
     # --upgrade-class run buys tickets too, so it names its own window — the
     # dates it was given — and gets the pass that covers them.
+    # --book-journey learns its dates from its prompts, so it takes the
+    # covering-or-chosen pass without a window and validates the dates itself.
     window = booking_window(cfg["search_parameters"]) if args.book else None
     if args.upgrade_class is not None and args.upgrade_class_dates:
         upgrade_days = [date.fromisoformat(d) for d in args.upgrade_class_dates]
         window = (min(upgrade_days), max(upgrade_days))
-    active_pass = resolve_travel_pass(travel_passes, for_dates=window, choose=args.book)
+    active_pass = resolve_travel_pass(
+        travel_passes, for_dates=window, choose=args.book or args.book_journey
+    )
     tp_product_id: str = active_pass.get("travelPassId", "")
 
     # Resolve passenger token
@@ -818,6 +835,22 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 dry_run=args.dry_run,
                 tp_product_id=tp_product_id,
                 tp_token_id=tp_token_id,
+            ):
+                print()
+                sys.exit(1)
+
+        elif args.book_journey:
+            operation = ("dry run · " if args.dry_run else "") + "booking a journey"
+            print_header_box([("operation", operation), *pass_rows])
+            blank()
+            if not handle_book_journey(
+                client,
+                access_token,
+                cfg,
+                active_pass,
+                tp_product_id,
+                tp_token_id,
+                dry_run=args.dry_run,
             ):
                 print()
                 sys.exit(1)
