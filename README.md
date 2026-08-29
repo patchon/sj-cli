@@ -147,7 +147,7 @@ det inte finns någon ledig plats att byta till.
 
 Alla egenskaper kommer från SJ:s platskarta, och SJ varnar själva för att kartan inte alltid
 stämmer med tåget som rullar in: både nya och äldre X 2000 är i trafik, så tre platser per rad
-i 2 class calm kan bli fyra, en fönsterplats kan bli en gångplats, ett bord kan försvinna och
+i `2 class calm` kan bli fyra, en fönsterplats kan bli en gångplats, ett bord kan försvinna och
 färdriktningen kan ändras. `sj-cli` rapporterar vad kartan säger — tåget som kommer har sista
 ordet.
 
@@ -230,13 +230,13 @@ konfigurationen eller det självklara förvalet (dagens datum — eller kortets 
 kortet inte börjat gälla än — `station_from`/`station_to`, `roundtrip`, avgången närmast
 `time_leave`/`time_return` förvald), så Enter rakt igenom bokar en dag av pendlingen; stationerna
 kan vara vilka som helst i SJ:s lista och filtreras medan du skriver. Stationslistan visar
-tågstationer först (busshållplatser bara när ingen station matchar), avgångar som redan gått visas
-inte, och en avgång som överlappar en biljett du redan har säger vilken. Efter en sammanfattning
-frågar den `book?` en gång, och bokar sedan precis som `--book` gör (samma platsval, samma
-utcheckning). Har du redan en biljett den dagen sägs det innan listan, eftersom en sökning med
-kortet döljer platserna på avgångar som överlappar den. Någon dubbelbokningsspärr finns inte —
-varningen är hela skyddet; en dag som `--book` redan bokat kan bokas igen. Kräver en terminal;
-`--dry-run` går igenom alla frågor och listor utan att boka.
+tågstationer först (en busshållplats bara när den matchar bättre, eller när ingen station
+matchar), avgångar som redan gått visas inte, och en avgång som överlappar en biljett du redan har
+säger vilken. Efter en sammanfattning frågar den `book?` en gång, och bokar sedan precis som
+`--book` gör (samma platsval, samma utcheckning). Har du redan en biljett den dagen sägs det innan
+listan, eftersom en sökning med kortet döljer platserna på avgångar som överlappar den. Någon
+dubbelbokningsspärr finns inte — varningen är hela skyddet; en dag som `--book` redan bokat kan
+bokas igen. Kräver en terminal; `--dry-run` går igenom alla frågor och listor utan att boka.
 
 ### Första inloggningen
 
