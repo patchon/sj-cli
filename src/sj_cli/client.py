@@ -1331,6 +1331,34 @@ class SJClient:
         resp = self.client.get(url_api, headers=headers)
         return _json_or_raise(resp)
 
+    def get_stations(self) -> list[dict[str, Any]]:
+        """
+        Fetches SJ's station list (public: no access token needed).
+
+        Returns:
+            The list of station dicts (name, uicStationCode, synonyms, ...).
+
+        Raises:
+            SJAPIError: If the body is not a list.
+
+        """
+        url_api = f"{self.URL_API_BOOKING}/config/stations"
+        headers = {
+            "Accept": self.H_ACCEPT_JSON,
+            "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
+            "x-client-name": "sjse-booking-client",
+            "x-client-version": self.X_CLIENT_VERSION,
+            "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
+            "Referer": f"{self.URL_SJ}/",
+        }
+
+        logger.info(f"fetching the station list from {url_api} ...")
+        resp = self.client.get(url_api, headers=headers)
+        data = _json_or_raise(resp)
+        if not isinstance(data, list):
+            raise SJAPIError(f"unexpected station list shape: {type(data).__name__}")
+        return data
+
     def get_bookings(
         self, access_token: str, start_date: str, end_date: str, page: int = 0
     ) -> dict[str, Any]:
@@ -1385,6 +1413,8 @@ class SJClient:
         """
         # Case insensitive lookup against module-level STATION_MAP
         norm_name = station_name.strip()
+        if norm_name.isdigit():  # already a UIC code (--book-journey picks from the live list)
+            return norm_name
         for k, v in STATION_MAP.items():
             if k.lower() == norm_name.lower():
                 return v

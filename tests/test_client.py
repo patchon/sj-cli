@@ -530,3 +530,25 @@ def test_get_seatmap_raises_on_an_error_response():
     t = RecordingTransport({"errorCode": "E1", "message": "nope"}, status=400)
     with pytest.raises(SJAPIError):
         _client_with(t).get_seatmap("TOKEN", "BID", "SMID")
+
+
+def test_get_stations_is_public_and_returns_the_list():
+    t = RecordingTransport(body=[{"name": "A", "uicStationCode": "1"}])
+    c = _client_with(t)
+    assert c.get_stations() == [{"name": "A", "uicStationCode": "1"}]
+    assert t.request.url.path.endswith("/sales/booking/v3/config/stations")
+    assert "authorization" not in t.request.headers
+    assert t.request.headers["ocp-apim-subscription-key"]
+
+
+def test_get_stations_rejects_a_non_list_body():
+    c = _client_with(RecordingTransport(body={"oops": 1}))
+    with pytest.raises(SJAPIError):
+        c.get_stations()
+
+
+def test_resolve_station_passes_a_uic_code_through(caplog):
+    c = SJClient()
+    assert c.resolve_station("740000002") == "740000002"
+    assert c.resolve_station(" 740000002 ") == "740000002"
+    assert "not found in station map" not in caplog.text
