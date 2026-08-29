@@ -1,7 +1,10 @@
 """The booking core: search parsing, polling, departure facts, offers and the Cart."""
 
-from sj_cli.booking import describe_departure, poll_departures, resolve_offer, search
-from tests.fakes import FakeClient, base_cfg, dep, offers
+import pytest
+
+from sj_cli.booking import Cart, describe_departure, poll_departures, resolve_offer, search
+from sj_cli.errors import SJAPIError, SJError
+from tests.fakes import FakeClient, base_cfg, dep, offers, seatmap
 
 D = "2026-09-01"
 
@@ -228,3 +231,84 @@ def test_resolve_offer_never_asks_for_offers_on_an_id_less_departure():
     params = base_cfg()["search_parameters"]
     assert resolve_offer(c, "tok", params, "PT", {}, "A → B", "2 class calm", "x") is None
     assert c.calls == []
+
+
+# --- Cart ---------------------------------------------------------------------
+
+
+def _leg(offer_id="OFF-calm", time="06:59", alternative=False):
+    return {
+        "departure": time,
+        "arrival": "11:36",
+        "duration": "4h 37m",
+        "train": "X 2000 520",
+        "route": "A → B",
+        "comfort_class": "2 class calm",
+        "offer_id": offer_id,
+        "alternative": alternative,
+    }
+
+
+def test_cart_creates_on_the_first_add_and_adds_on_the_next(capsys):
+    c = FakeClient({"OUT": [dep("o", D, "06:59", "11:36")]})
+    cart = Cart(c, "tok", base_cfg(), "PT")
+    assert cart.held is False
+    cart.add(_leg(), "outbound")
+    assert cart.held is True
+    assert (cart.booking_id, cart.booking_number) == ("UUID-1", "NUM1")
+    cart.add(_leg("OFF-second", "17:22", alternative=True), "return")
+    assert cart.legs == ["outbound", "return"]
+    assert len(cart.booking["journeys"]) == 2
+    assert c.calls == [("create", "OFF-calm"), ("add", "UUID-1", "OFF-second")]
+    out = capsys.readouterr().out
+    assert " ✓ creating booking with outbound at 06:59\n" in out
+    assert " ✓ adding alternative return leg at 17:22\n" in out
+
+
+def test_cart_finish_sends_the_customer_back_and_checks_out():
+    c = FakeClient({"OUT": [dep("o", D, "06:59", "11:36")]})
+    cart = Cart(c, "tok", base_cfg(), "PT")
+    cart.add(_leg(), "outbound")
+    result = cart.finish()
+    assert {k: v for k, v in result.items() if k != "booking"} == {
+        "booking_id": "UUID-1",
+        "booking_number": "NUM1",
+        "legs": ["outbound"],
+        "checked_out": True,
+    }
+    assert result["booking"]["bookingNumber"] == "NUM1"
+    assert c.calls == [("create", "OFF-calm"), ("customer", "UUID-1"), ("checkout", "UUID-1")]
+    assert c.customer_updates == [("UUID-1", "a@b.se", "+46701112233")]
+
+
+def test_cart_finish_chooses_seats_before_checkout_when_preferred():
+    c = FakeClient({"OUT": [dep("o", D, "06:59", "11:36")]})
+    c.seatmaps["SM-OUTBOUND"] = seatmap()
+    cart = Cart(c, "tok", base_cfg(seat_preference=["window"]), "PT")
+    cart.add(_leg(), "outbound")
+    cart.finish()
+    assert [call[0] for call in c.calls] == ["create", "seatmap", "seats", "customer", "checkout"]
+
+
+def test_cart_finish_reports_a_failed_checkout_instead_of_raising(capsys):
+    c = FakeClient({"OUT": [dep("o", D, "06:59", "11:36")]}, checkout_ok=False)
+    cart = Cart(c, "tok", base_cfg(), "PT")
+    cart.add(_leg(), "outbound")
+    result = cart.finish()
+    assert result["checked_out"] is False
+    assert result["booking_id"] == "UUID-1"
+    assert " ! checkout failed: checkout exploded\n" in capsys.readouterr().out
+
+
+def test_cart_refuses_a_provisional_without_an_id_and_an_empty_finish():
+    class NoId(FakeClient):
+        def create_provisional_booking(self, token, offer_id, passenger_token):
+            self.calls.append(("create", offer_id))
+            return {"booking": {}}
+
+    cart = Cart(NoId(), "tok", base_cfg(), "PT")
+    with pytest.raises(SJAPIError):
+        cart.add(_leg(), "outbound")
+    assert cart.held is False
+    with pytest.raises(SJError):
+        cart.finish()
