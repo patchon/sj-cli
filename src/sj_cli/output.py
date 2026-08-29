@@ -1086,8 +1086,8 @@ def departure_choice_lines(rows: list[dict[str, str]]) -> list[str]:
     Pick-list text per departure row, columns aligned across the rows.
 
     Row keys: departure, arrival, duration, train, comfort_class and note
-    ("fallback" / "no seats", shown dim after the class). No arrow and no
-    indent — the picker adds its own marker.
+    ("fallback" / "no seats" / "overlaps …", shown dim after the class). No
+    arrow and no indent — the picker adds its own marker.
     """
     cols = ("duration", "train", "comfort_class")
     widths = {c: max(visible_len(str(r.get(c) or "—")) for r in rows) for c in cols}

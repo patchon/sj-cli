@@ -3,7 +3,7 @@
 import logging
 import sys
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, NamedTuple
 
 from sj_cli.booking import (
@@ -134,7 +134,7 @@ def _default_station(index: StationIndex, client: SJClient, name: str) -> Statio
 
 
 class _Held(NamedTuple):
-    """A booked segment on one of the chosen dates (Swedish wall clock)."""
+    """A booked segment on a chosen date or the evening before (Swedish wall clock)."""
 
     number: str
     day: str
@@ -147,7 +147,14 @@ class _Held(NamedTuple):
 def _held_segments(
     client: SJClient, access_token: str, active_pass: dict, dates: set[str]
 ) -> list[_Held]:
-    """The account's active booked segments on `dates`; a failed fetch is only a note."""
+    """
+    The account's active booked segments on `dates` and on the day before each.
+
+    A night train leaving the evening before still runs into a chosen
+    date's morning, so the day before is collected too; `_Held.day` stays
+    the segment's own departure day, which is what the summary filters on.
+    A failed fetch is only a note.
+    """
     try:
         with spinner("fetching existing bookings", trail=False):
             items = fetch_all_bookings(client, access_token, *booking_date_range(active_pass))
@@ -155,20 +162,21 @@ def _held_segments(
         logger.error(f"could not check existing bookings: {e}")
         pwarn(f"could not check existing bookings: {error_text(e)}")
         return []
+    wanted = dates | {(date.fromisoformat(d) - timedelta(days=1)).isoformat() for d in dates}
     held: list[_Held] = []
     for item in items:
         booking = item.get("booking") or {}
         if not is_active_booking(booking):
             continue
         number = booking.get("bookingNumber") or "—"
-        for journey in booking.get("journeys") or []:
-            for seg in journey.get("segments") or []:
+        for jrny in booking.get("journeys") or []:
+            for seg in jrny.get("segments") or []:
                 try:
                     dep = to_sweden(seg.get("departureDateTime") or "")
                 except (ValueError, TypeError):
                     continue
                 day = dep.date().isoformat()
-                if day not in dates:
+                if day not in wanted:
                     continue
                 try:
                     arr: datetime | None = to_sweden(seg.get("arrivalDateTime") or "")
@@ -187,14 +195,18 @@ def _held_segments(
     return held
 
 
-def _warn_held_bookings(held: list[_Held]) -> None:
+def _warn_held_bookings(held: Sequence[_Held], dates: set[str]) -> None:
     """
     Name every ticket the account holds on the chosen dates.
 
     A pass search reports every class unavailable on a departure that
     overlaps a held ticket, so the list will show "no seats" there: say why.
+    Segments picked up from the evening before are not on a chosen date and
+    stay out of this summary — the row they overlap still names them.
     """
     for h in held:
+        if h.day not in dates:
+            continue
         pwarn(
             f"you hold booking {h.number} on {h.day} ({h.origin} → {h.dest} "
             f"{h.dep.strftime('%H:%M')}) · departures overlapping it show no seats"
@@ -203,20 +215,21 @@ def _warn_held_bookings(held: list[_Held]) -> None:
 
 def _overlap(departure: dict, held: Sequence[_Held]) -> _Held | None:
     """
-    The first held segment whose window intersects this departure's, on its day.
+    The first held segment whose window intersects this departure's.
 
-    Touching edges do not overlap; a held segment without an arrival counts
-    as its departure instant, which must fall inside the window.
+    Compared as instants, never by date, so an overnight ticket overlaps
+    the next morning's departures (and DST needs no thought). Touching
+    edges do not overlap; a held segment without an arrival counts as its
+    departure instant, which must fall inside the window.
     """
+    if not held:
+        return None
     try:
         dep = to_sweden(departure.get("departureDateTime") or "")
         arr = to_sweden(departure.get("arrivalDateTime") or "")
     except (ValueError, TypeError):
         return None
-    day = dep.date().isoformat()
     for h in held:
-        if h.day != day:
-            continue
         hit = dep <= h.dep < arr if h.arr is None else dep < h.arr and h.dep < arr
         if hit:
             return h
@@ -231,8 +244,9 @@ def _departure_rows(
 
     class_ is the class the pass would get on it (the configured one, a
     fallback, or None = no seats); the row is disabled when there is none.
-    A row overlapping a held ticket says which one instead of "no seats",
-    and a class-less overlapping row is disabled with that booking's number.
+    A row overlapping a held ticket says which one (with the held route
+    when it differs from this list's) instead of "no seats", and a
+    class-less overlapping row is disabled with that booking's number.
     """
     wanted = params["comfort_class"]
     allow_fallback = params.get("allow_class_fallback", True)
@@ -249,7 +263,12 @@ def _departure_rows(
         hit = _overlap(dep, held)
         if hit is not None:
             span = f"{hit.dep:%H:%M}–{hit.arr:%H:%M}" if hit.arr else f"{hit.dep:%H:%M}"
-            row["note"] = f"overlaps {hit.number} · {span}"
+            held_route = f"{hit.origin} → {hit.dest}"
+            where = "" if held_route == route else f"{held_route} "
+            # Deliberately in place of a "fallback" note: resolve_offer's
+            # caller says the fallback again after the pick, the overlap is
+            # only ever said here.
+            row["note"] = f"overlaps {hit.number} · {where}{span}"
             if class_ is None:
                 row["disabled"] = f"overlaps booking {hit.number} · pick another"
         rows.append(row)
@@ -478,10 +497,9 @@ def handle_book_journey(
         when = "today" if return_str == today_str else f"on {return_str}"
         pstatus(False, f"no departures {why} for {in_route} {when}")
         return False
-    held = _held_segments(
-        client, access_token, active_pass, {date_str, *([return_str] if return_str else [])}
-    )
-    _warn_held_bookings(held)
+    dates = {date_str, *([return_str] if return_str else [])}
+    held = _held_segments(client, access_token, active_pass, dates)
+    _warn_held_bookings(held, dates)
 
     # The picks
     passenger_token = found["passenger_token"]

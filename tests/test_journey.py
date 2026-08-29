@@ -348,8 +348,17 @@ def test_class_fallback_on_the_offer_is_said(monkeypatch, capsys):
     assert " ! outbound class fallback: 2 class calm → 2 class\n" in capsys.readouterr().out
 
 
-def held(number, day, status="CONFIRMED", dep_time="06:59", arr_time="11:36"):
-    """A bookings-list entry: one segment on `day`, Göteborg → Stockholm."""
+def held(
+    number,
+    day,
+    status="CONFIRMED",
+    dep_time="06:59",
+    arr_time="11:36",
+    arr_day=None,
+    origin="Göteborg Central",
+    dest="Stockholm Central",
+):
+    """A bookings-list entry: one segment leaving `day` at dep_time (arr_day = an overnight)."""
     return {
         "bookingId": f"U-{number}",
         "booking": {
@@ -360,9 +369,9 @@ def held(number, day, status="CONFIRMED", dep_time="06:59", arr_time="11:36"):
                     "segments": [
                         {
                             "departureDateTime": f"{day}T{dep_time}:00+02:00",
-                            "arrivalDateTime": f"{day}T{arr_time}:00+02:00",
-                            "departureStation": {"name": "Göteborg Central"},
-                            "arrivalStation": {"name": "Stockholm Central"},
+                            "arrivalDateTime": f"{arr_day or day}T{arr_time}:00+02:00",
+                            "departureStation": {"name": origin},
+                            "arrivalStation": {"name": dest},
                         }
                     ]
                 }
@@ -673,18 +682,19 @@ def test_the_clock_is_read_after_the_questions(monkeypatch, capsys):
 # --- overlaps ------------------------------------------------------------------------
 
 
-def _held(number, dep_time, arr_time, day=None):
+def _held(number, dep_time, arr_time, day=None, arr_day=None):
+    day = day or D
     return journey._Held(
         number=number,
-        day=day or D,
+        day=day,
         origin="Göteborg Central",
         dest="Stockholm Central",
-        dep=to_sweden(f"{day or D}T{dep_time}:00+02:00"),
-        arr=to_sweden(f"{day or D}T{arr_time}:00+02:00") if arr_time else None,
+        dep=to_sweden(f"{day}T{dep_time}:00+02:00"),
+        arr=to_sweden(f"{arr_day or day}T{arr_time}:00+02:00") if arr_time else None,
     )
 
 
-def test_overlap_needs_an_intersection_on_the_same_day():
+def test_overlap_needs_an_intersection_on_the_same_day_or_across_midnight():
     row = dep("x", D, "06:59", "11:36")
     assert journey._overlap(row, [_held("A", "07:30", "09:10")]).number == "A"
     assert journey._overlap(row, [_held("B", "11:36", "13:00")]) is None  # touching edge
@@ -692,6 +702,13 @@ def test_overlap_needs_an_intersection_on_the_same_day():
     assert journey._overlap(row, [_held("D", "07:00", None)]).number == "D"  # instant inside
     assert journey._overlap(row, [_held("E", "11:36", None)]) is None
     assert journey._overlap({"departureDateTime": "soon"}, [_held("A", "07:30", "09:10")]) is None
+    # a held night train leaving D at 23:50 runs into the D2 morning
+    night = _held("N", "23:50", "06:00", arr_day=D2)
+    assert journey._overlap(dep("x", D2, "00:10", "06:30"), [night]).number == "N"
+    # and the reverse: a candidate over midnight meets a segment held on D2
+    overnight = dep("y", D, "23:00", "06:00")
+    overnight["arrivalDateTime"] = f"{D2}T06:00:00+02:00"
+    assert journey._overlap(overnight, [_held("M", "01:00", "02:00", day=D2)]).number == "M"
 
 
 def test_overlapping_rows_say_which_booking(monkeypatch):
@@ -715,3 +732,53 @@ def test_sj_conflict_at_offer_time_is_said(monkeypatch, capsys):
     assert (
         " ! outbound: SJ reports a conflict with booking HELD1, HELD2\n" in capsys.readouterr().out
     )
+
+
+def test_a_night_train_from_the_evening_before_overlaps_the_morning(monkeypatch, capsys):
+    prev = (FUTURE - timedelta(days=1)).isoformat()
+    c = FakeClient({"OUT": [dep("early", D, "05:00", "07:00")]})
+    c.bookings_list = [held("NIGHT", prev, dep_time="23:50", arr_time="06:00", arr_day=D)]
+    s = Script(D, "", "", "n", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    _, rows, _, _ = s.lists[0]
+    assert re.search(r"2 class calm\s+overlaps NIGHT · 23:50–06:00$", rows[0])
+    # the summary names tickets on the chosen dates; this one is on the day before
+    assert "you hold booking NIGHT" not in capsys.readouterr().out
+
+
+def test_the_note_names_the_held_route_when_it_differs():
+    row = dep("x", D, "06:59", "11:36")
+    other = journey._Held(
+        number="HELD1",
+        day=D,
+        origin="Uppsala Central",
+        dest="Stockholm Central",
+        dep=to_sweden(f"{D}T06:59:00+02:00"),
+        arr=to_sweden(f"{D}T11:36:00+02:00"),
+    )
+    rows = journey._departure_rows(
+        [row], "Göteborg Central → Stockholm Central", base_cfg()["search_parameters"], [other]
+    )
+    assert rows[0]["note"] == "overlaps HELD1 · Uppsala Central → Stockholm Central 06:59–11:36"
+
+
+def test_the_return_list_gets_its_own_overlaps(monkeypatch):
+    in_deps = [dep("i-early", D2, "16:50", "18:30"), dep("i-best", D2, "17:22", "21:53")]
+    c = FakeClient({"OUT": OUT, "IN": in_deps})
+    c.bookings_list = [
+        held("H1", D),
+        held(
+            "H2",
+            D2,
+            dep_time="17:22",
+            arr_time="21:53",
+            origin="Stockholm Central",
+            dest="Göteborg Central",
+        ),
+    ]
+    s = Script(D, "", "", "y", D2, 0, 0, True)
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    assert re.search(r"2 class calm\s+overlaps H1 · 06:59–11:36$", s.lists[0][1][0])
+    assert re.search(r"2 class calm\s+overlaps H2 · 17:22–21:53$", s.lists[1][1][1])
