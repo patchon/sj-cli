@@ -553,7 +553,7 @@ def test_render_failure_after_checkout_does_not_lose_the_booking(monkeypatch, ca
     def explode(*_a, **_k):
         raise TypeError("'NoneType' object has no attribute 'get'")
 
-    monkeypatch.setattr(m, "_booked_rows", explode)
+    monkeypatch.setattr(m, "booked_rows", explode)
     c = FakeClient({"OUT": OUT, "IN": IN})
     assert run_range(c, base_cfg(), dry_run=False) == {"days": 1, "booked": 1}
     out = capsys.readouterr().out

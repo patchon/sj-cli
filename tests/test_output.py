@@ -1,9 +1,10 @@
 from sj_cli.output import (
-    _group_route,
     _reverse_route,
+    confirm,
     day_header,
     format_class_name,
     format_duration,
+    group_route,
     indented,
     leg_lines,
     pad,
@@ -42,8 +43,8 @@ def test_style_is_plain_without_tty():
 def test_routes():
     assert _reverse_route("A → B") == "B → A"
     assert _reverse_route("nonsense") == "nonsense"
-    assert _group_route([{"route": "A → B"}, {"route": "B → A"}]) == "A ⇄ B"
-    assert _group_route([{"route": "A → B"}, {"route": "A → C"}]) == "A → B · A → C"
+    assert group_route([{"route": "A → B"}, {"route": "B → A"}]) == "A ⇄ B"
+    assert group_route([{"route": "A → B"}, {"route": "A → C"}]) == "A → B · A → C"
 
 
 def test_leg_lines_omit_empty_columns_and_put_note_in_flexibility_cell():
@@ -382,3 +383,13 @@ def test_seat_choices_never_truncate_a_seat_with_every_property(capsys):
         assert f"{70 + i} easy access, no animals, solo, table, window, forward" in out
     # too wide for three columns: one entry per line, and no line runs over 80
     assert all(len(line) <= 80 for line in out.splitlines())
+
+
+def test_confirm_uses_question_prompt(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda: "Y")
+    assert confirm("cancel booking ERU0HWB2? [y/n]: ") is True
+    assert capsys.readouterr().out.startswith(" ? cancel booking ERU0HWB2? [y/n]: ")
+    monkeypatch.setattr("builtins.input", lambda: "nope")
+    assert confirm("cancel? [y/n]: ") is False
+    monkeypatch.setattr("builtins.input", lambda: "")
+    assert confirm("book? [y/N]: ") is False

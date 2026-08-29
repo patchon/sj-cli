@@ -3,7 +3,7 @@ no cancellation API calls (the client below forbids every call)."""
 
 import pytest
 
-from sj_cli import booking
+from sj_cli import booking, output
 from sj_cli.booking import handle_cancel_booking
 
 
@@ -70,7 +70,12 @@ class RecordingCancelClient:
 
 def _answers(monkeypatch, *replies):
     it = iter(replies)
-    monkeypatch.setattr(booking, "ask", lambda _t: next(it))
+
+    def _reply(_t):
+        return next(it)
+
+    monkeypatch.setattr(booking, "ask", _reply)
+    monkeypatch.setattr(output, "ask", _reply)
 
 
 def test_cancel_selection_deduplicates_and_is_validated_first(monkeypatch, capsys):
@@ -256,7 +261,12 @@ def test_cancel_date_only_cancels_the_journeys_on_that_date(monkeypatch, capsys)
     monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: _two_day_booking())
     c = RouteCancelClient()
     asked = []
-    monkeypatch.setattr(booking, "ask", lambda text: asked.append(text) or "y")
+
+    def _reply(text):
+        return asked.append(text) or "y"
+
+    monkeypatch.setattr(booking, "ask", _reply)
+    monkeypatch.setattr(output, "ask", _reply)
     assert handle_cancel_mode(c, "tok", base_cfg(), "2099-09-25") is True
     # only the 25th's journey goes to the API, never the 24th's
     assert c.patches == [("U1", [{"serviceIdentifier": "s2", "passengerIds": ["p1"]}])]

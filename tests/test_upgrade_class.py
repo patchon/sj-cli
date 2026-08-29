@@ -13,7 +13,7 @@ from datetime import timedelta
 
 import pytest
 
-from sj_cli import booking
+from sj_cli import booking, output
 from sj_cli.booking import handle_upgrade_class
 from sj_cli.dates import sweden_now
 from tests.fakes import FakeClient, base_cfg, dep, offers
@@ -273,6 +273,7 @@ def _run_upgrade(c, cfg, monkeypatch, *, answer="y", dates=(FUTURE_DATE,)):
         return answer
 
     monkeypatch.setattr(booking, "ask", _ask)
+    monkeypatch.setattr(output, "ask", _ask)
     ok = handle_upgrade_class(
         c,
         "tok",
@@ -457,7 +458,12 @@ def test_a_probe_that_found_no_seats_never_cancels(monkeypatch, capsys):
     c = _upgradeable(FakeClient())
     c.offers_by_dep["520"] = offers(calm_price=None, second_price=0)  # calm not sold at all
     monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(booking, "ask", lambda _t: pytest.fail("prompted with nothing to do"))
+
+    def _refuse(_t):
+        pytest.fail("prompted with nothing to do")
+
+    monkeypatch.setattr(booking, "ask", _refuse)
+    monkeypatch.setattr(output, "ask", _refuse)
 
     cfg = base_cfg(comfort_class="2 class calm")
     ok = handle_upgrade_class(
@@ -486,7 +492,12 @@ def test_without_a_terminal_it_refuses_before_any_request(monkeypatch, capsys):
     # A cron job must not be able to release tickets it cannot ask about.
     c = _upgradeable(FakeClient())
     monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: False)
-    monkeypatch.setattr(booking, "ask", lambda _t: pytest.fail("prompted without a terminal"))
+
+    def _refuse(_t):
+        pytest.fail("prompted without a terminal")
+
+    monkeypatch.setattr(booking, "ask", _refuse)
+    monkeypatch.setattr(output, "ask", _refuse)
 
     cfg = base_cfg(comfort_class="2 class calm")
     ok = handle_upgrade_class(
@@ -505,7 +516,12 @@ def test_a_leg_without_a_service_identifier_is_left_alone(monkeypatch, capsys):
     # is reported and skipped rather than half-attempted.
     c = _upgradeable(FakeClient(), booking=_booking("OLD1", FUTURE_DATE, service_id=""))
     monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(booking, "ask", lambda _t: pytest.fail("prompted with nothing to do"))
+
+    def _refuse(_t):
+        pytest.fail("prompted with nothing to do")
+
+    monkeypatch.setattr(booking, "ask", _refuse)
+    monkeypatch.setattr(output, "ask", _refuse)
 
     cfg = base_cfg(comfort_class="2 class calm")
     ok = handle_upgrade_class(
@@ -534,7 +550,12 @@ def test_the_new_ticket_gets_the_configured_seat_preference(monkeypatch):
 def test_dry_run_still_writes_nothing_even_at_a_terminal(monkeypatch, capsys):
     c = _upgradeable(FakeClient())
     monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(booking, "ask", lambda _t: pytest.fail("a dry run must not prompt"))
+
+    def _refuse(_t):
+        pytest.fail("a dry run must not prompt")
+
+    monkeypatch.setattr(booking, "ask", _refuse)
+    monkeypatch.setattr(output, "ask", _refuse)
 
     cfg = base_cfg(comfort_class="2 class calm")
     ok = handle_upgrade_class(c, "tok", cfg, dates=[FUTURE_DATE], dry_run=True, tp_product_id=TP_ID)
@@ -565,7 +586,12 @@ def test_without_a_travel_pass_product_it_refuses_to_touch_anything(monkeypatch,
     # release could only lose the ticket.
     c = _upgradeable(FakeClient())
     monkeypatch.setattr(booking.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(booking, "ask", lambda _t: pytest.fail("prompted with no pass to book on"))
+
+    def _refuse(_t):
+        pytest.fail("prompted with no pass to book on")
+
+    monkeypatch.setattr(booking, "ask", _refuse)
+    monkeypatch.setattr(output, "ask", _refuse)
 
     cfg = base_cfg(comfort_class="2 class calm")
     ok = handle_upgrade_class(c, "tok", cfg, dates=[FUTURE_DATE], dry_run=False, tp_product_id="")
