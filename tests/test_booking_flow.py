@@ -78,6 +78,7 @@ def test_roundtrip_books_both_legs_in_one_booking():
         "legs": ["outbound", "return"],
         "checked_out": True,
     }
+    assert c.search_tp_ids == ["TP"]
     assert len(result["booking"]["journeys"]) == 2  # final booking object carries both legs
     assert c.calls == [
         ("search", "Göteborg Central", "Stockholm Central", D, D),

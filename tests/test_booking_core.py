@@ -11,7 +11,17 @@ D = "2026-09-01"
 
 def test_search_roundtrip_returns_both_ids_and_the_passenger_token():
     c = FakeClient()
-    found = search(c, "tok", "Göteborg Central", "Stockholm Central", D, D, "TP", "TOK", None)
+    found = search(
+        c,
+        "tok",
+        "Göteborg Central",
+        "Stockholm Central",
+        D,
+        D,
+        tp_product_id="TP",
+        tp_token_id="TOK",
+        service_types=None,
+    )
     assert found == {"out_id": "OUT", "in_id": "IN", "passenger_token": "PT"}
     assert c.calls == [("search", "Göteborg Central", "Stockholm Central", D, D)]
     assert c.search_tp_ids == ["TP"]
@@ -19,8 +29,21 @@ def test_search_roundtrip_returns_both_ids_and_the_passenger_token():
 
 def test_search_one_way_has_no_return_id():
     c = FakeClient()
-    found = search(c, "tok", "Stockholm Central", "Göteborg Central", D, None, "TP", "TOK", None)
+    found = search(
+        c,
+        "tok",
+        "Stockholm Central",
+        "Göteborg Central",
+        D,
+        None,
+        tp_product_id="TP",
+        tp_token_id="TOK",
+        service_types=None,
+    )
+    # "IN" is a FakeClient artefact (it names the search id by direction); what
+    # matters here is that return_date=None reaches the client and no in_id comes back.
     assert found == {"out_id": "IN", "in_id": None, "passenger_token": "PT"}
+    assert c.calls == [("search", "Stockholm Central", "Göteborg Central", D, None)]
 
 
 def test_search_falls_back_to_the_pass_token_and_drops_the_all_filter():
@@ -32,7 +55,9 @@ def test_search_falls_back_to_the_pass_token_and_drops_the_all_filter():
             return {"departureSearchId": "S"}
 
     c = Bare()
-    found = search(c, "tok", "A", "B", D, None, "TP", "TOK", ["ALL"])
+    found = search(
+        c, "tok", "A", "B", D, None, tp_product_id="TP", tp_token_id="TOK", service_types=["ALL"]
+    )
     assert found == {"out_id": "S", "in_id": None, "passenger_token": "TOK"}
     assert c.calls == [("search", None)]
 
@@ -46,7 +71,9 @@ def test_search_passes_a_real_service_filter_and_a_missing_pass_through():
             return {}
 
     c = Bare()
-    found = search(c, "tok", "A", "B", D, None, None, "", ["SJ_HIGH"])
+    found = search(
+        c, "tok", "A", "B", D, None, tp_product_id=None, tp_token_id="", service_types=["SJ_HIGH"]
+    )
     assert found == {"out_id": None, "in_id": None, "passenger_token": ""}
     assert c.calls == [("search", None, ["SJ_HIGH"])]
 
@@ -89,6 +116,14 @@ def test_describe_departure_reads_times_duration_and_train():
         "train": "X 2000 O-BEST",
         "route": "A → B",
     }
+
+
+def test_describe_departure_reads_an_api_null_time_and_the_service_name_fallback():
+    facts = describe_departure(
+        {"departureDateTime": None, "legs": [{"serviceName": "520"}]}, "A → B"
+    )
+    assert facts["departure"] == "—"
+    assert facts["train"] == "520"
 
 
 def test_describe_departure_survives_an_empty_departure():

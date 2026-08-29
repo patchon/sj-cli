@@ -126,6 +126,7 @@ convention = "google"
     "ARG001",   # Unused args in fake client signatures (interface compliance)
     "DTZ001",   # Naive datetimes mirror the production code
     "S105",     # "password": "x" in fixture config
+    "S106",     # fake tp_token_id="TOK" passed by keyword reads as a secret
 ]
 
 # --- pytest ---------------------------------------------------------------
