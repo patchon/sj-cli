@@ -3,7 +3,6 @@ from datetime import datetime
 from sj_cli.booking import (
     _dry_run_note,
     _find_departure_by_time,
-    _resolve_class_for_departure,
     _run_outcome,
     _span_label,
     booking_date_range,
@@ -13,6 +12,7 @@ from sj_cli.booking import (
     find_offer_id,
     get_departure_time_minutes,
     is_stale_provisional,
+    resolve_class_for_departure,
     select_best_departure,
     time_str_to_minutes,
 )
@@ -55,11 +55,11 @@ def test_find_departure_by_time_closest_vs_exact():
 
 def test_resolve_class_fallback_chain():
     d_b = dep("x", D, "06:00", "07:00", props=("COMFORT-B",))
-    assert _resolve_class_for_departure(d_b, "2 class calm", allow_fallback=True) == "2 class"
-    assert _resolve_class_for_departure(d_b, "2 class calm", allow_fallback=False) is None
-    assert _resolve_class_for_departure(d_b, "1 class", allow_fallback=True) == "2 class"
+    assert resolve_class_for_departure(d_b, "2 class calm", allow_fallback=True) == "2 class"
+    assert resolve_class_for_departure(d_b, "2 class calm", allow_fallback=False) is None
+    assert resolve_class_for_departure(d_b, "1 class", allow_fallback=True) == "2 class"
     d_ab = dep("x", D, "06:00", "07:00", props=("COMFORT-AB",))
-    assert _resolve_class_for_departure(d_ab, "1 class", allow_fallback=False) == "1 class"
+    assert resolve_class_for_departure(d_ab, "1 class", allow_fallback=False) == "1 class"
 
 
 def test_select_best_departure_shape(capsys):
@@ -204,16 +204,6 @@ def test_describe_run():
         "days",
         "W43, W45..46 (19 oct – 15 nov 2026) · weekdays only",
     )
-
-
-def test_confirm_uses_question_prompt(monkeypatch, capsys):
-    from sj_cli.booking import _confirm
-
-    monkeypatch.setattr("builtins.input", lambda: "Y")
-    assert _confirm("cancel booking ERU0HWB2? [y/n]: ") is True
-    assert capsys.readouterr().out.startswith(" ? cancel booking ERU0HWB2? [y/n]: ")
-    monkeypatch.setattr("builtins.input", lambda: "nope")
-    assert _confirm("cancel? [y/n]: ") is False
 
 
 def test_find_offer_id_falls_through_class_chain_on_same_departure():

@@ -12,6 +12,7 @@ from sj_cli.client import SJClient
 from sj_cli.config import SERVICE_TYPE_NAMES
 from sj_cli.dates import (
     booking_dates,
+    parse_api_datetime,
     selected_dates,
     skip_reason,
     sweden_now,
@@ -22,6 +23,7 @@ from sj_cli.output import (
     ask,
     ask_optional,
     blank,
+    confirm,
     day_header,
     format_class_name,
     format_duration,
@@ -277,6 +279,47 @@ def booking_date_range(
     return b_start, b_end
 
 
+def pass_validity(travel_pass: dict) -> tuple[date | None, date | None]:
+    """
+    (first valid day, last valid day) of a pass as Swedish calendar dates.
+
+    The API's validity instants are midnight UTC and the end is exclusive
+    (the day after the last valid day). None for an unknown or unparsable
+    bound.
+    """
+
+    def day(key: str, exclusive: bool) -> date | None:
+        raw = travel_pass.get(key)
+        if not raw:
+            return None
+        try:
+            local = to_sweden(raw)
+        except (ValueError, TypeError):
+            return None
+        return (local - timedelta(days=1)).date() if exclusive else local.date()
+
+    return day("startTravelValidityDateTime", False), day("endTravelValidityDateTime", True)
+
+
+def is_expired(travel_pass: dict) -> bool:
+    """True if the pass's validity end lies in the past (unknown end = not expired)."""
+    end = travel_pass.get("endTravelValidityDateTime")
+    if not end:
+        return False
+    try:
+        return parse_api_datetime(end) < sweden_now()
+    except (ValueError, TypeError):
+        return False
+
+
+def covers(travel_pass: dict, window: tuple[date, date]) -> bool:
+    """True if the pass's known validity contains the whole window."""
+    first, last = pass_validity(travel_pass)
+    if first is None or last is None:
+        return False
+    return first <= window[0] and window[1] <= last
+
+
 def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -> dict:
     """
     Transform a raw booking segment into a display row dict.
@@ -428,7 +471,7 @@ def _find_departure_by_time(
     return None
 
 
-def _resolve_class_for_departure(
+def resolve_class_for_departure(
     departure: dict,
     requested_class: str,
     allow_fallback: bool,
@@ -507,7 +550,7 @@ def select_best_departure(
 
     for _, diff, dep in timed:
         time_str = dep.get("departureDateTime", "").split("T")[1][:5]
-        valid_class = _resolve_class_for_departure(dep, requested_class, allow_fallback)
+        valid_class = resolve_class_for_departure(dep, requested_class, allow_fallback)
         if not valid_class:
             pwarn(f"departure at {time_str}: no matching class available")
             continue
@@ -668,7 +711,7 @@ def _try_alternative_departure(
             continue
         if not prefer_earlier and diff < 0:
             continue
-        valid_class = _resolve_class_for_departure(dep, requested_class, allow_fallback)
+        valid_class = resolve_class_for_departure(dep, requested_class, allow_fallback)
         if not valid_class:
             continue
         candidates.append((dep, valid_class, abs(diff)))
@@ -1791,7 +1834,7 @@ def _dry_run_note(leg: dict) -> str:
     return "no 0-price offer"
 
 
-def _dry_run_rows(result: dict, date_str: str) -> list[dict]:
+def dry_run_rows(result: dict, date_str: str) -> list[dict]:
     """Leg rows for the dry-run day card, in outbound/return order."""
     rows = []
     for key, direction in (("outbound", "Outbound"), ("inbound", "Return")):
@@ -1816,7 +1859,7 @@ def _dry_run_rows(result: dict, date_str: str) -> list[dict]:
     return rows
 
 
-def _booked_rows(booking: dict, booking_number: str | None) -> list[dict]:
+def booked_rows(booking: dict, booking_number: str | None) -> list[dict]:
     """Leg rows for a freshly booked day, from the booking object the API returned."""
     now = sweden_now()
     rows = []
@@ -2055,7 +2098,7 @@ def process_date_range(
             if errored:
                 count("error")
             elif dry_run:
-                rows = _dry_run_rows(result or {}, date_str)
+                rows = dry_run_rows(result or {}, date_str)
                 print_leg_lines(rows)
                 offers = sum(r["has_offer"] for r in rows)
                 if rows and offers == len(rows):
@@ -2068,7 +2111,7 @@ def process_date_range(
                 # into a crashed run.
                 number = result.get("booking_number") or result.get("booking_id")
                 try:
-                    booked = _booked_rows(result.get("booking") or {}, result["booking_number"])
+                    booked = booked_rows(result.get("booking") or {}, result["booking_number"])
                     print_leg_lines(booked)
                 except Exception as e:
                     logger.error(f"could not render the legs of booking {number}: {e}")
@@ -2092,11 +2135,6 @@ def process_date_range(
 
     pstatus(_run_outcome(counts, dry_run), _run_summary(counts, dry_run))
     return counts
-
-
-def _confirm(question: str) -> bool:
-    """Ask a yes/no question on stdin; 'y' and 'yes' (any case) mean yes."""
-    return ask(question).strip().lower() in ("y", "yes")
 
 
 def handle_cancel_mode(
@@ -2325,7 +2363,7 @@ def handle_cancel_booking(
             if other_days
             else f"cancel booking {booking_number}? [y/n]: "
         )
-        if not _confirm(question):
+        if not confirm(question):
             blank()
             pstatus(False, "cancellation aborted")
             return False
@@ -2362,7 +2400,7 @@ def handle_cancel_booking(
         with indented():
             print_leg_lines([{**seg["_row"], "booking_number": ""} for seg in selected])
         blank()
-        if not _confirm("cancel selected journey(s)? [y/n]: "):
+        if not confirm("cancel selected journey(s)? [y/n]: "):
             blank()
             pstatus(False, "cancellation aborted")
             return False
@@ -2658,7 +2696,7 @@ def handle_change_seat(
                     )
                     if changed:
                         seats_changed_total += changed
-                        print_leg_lines(_booked_rows(_scoped_to(updated, workable), booking_number))
+                        print_leg_lines(booked_rows(_scoped_to(updated, workable), booking_number))
                     else:
                         pdim("no seats changed")
             except Exception as e:
@@ -3042,7 +3080,7 @@ def _upgrade_one_leg(
     else:
         pwarn(f"fell back to {booked['class']} · new booking {number}")
     try:
-        print_leg_lines(_booked_rows(booked["booking"], number))
+        print_leg_lines(booked_rows(booked["booking"], number))
     except Exception as e:  # a rendering slip must not turn a booked leg into a crash
         logger.error(f"upgrade: could not render booking {number}: {e}")
         pwarn(f"booked as {number}, but the leg could not be shown ({error_text(e)})")
@@ -3256,7 +3294,7 @@ def handle_upgrade_class(
         "each ticket is cancelled before the new one is searched · if the pass gets no offer "
         "after that, the leg ends with no ticket"
     )
-    if not _confirm(
+    if not confirm(
         f"upgrade {len(candidates)} leg(s) to {wanted_class}, cancelling each ticket first? [y/n]: "
     ):
         blank()

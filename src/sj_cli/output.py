@@ -234,6 +234,11 @@ def ask_optional(text: str) -> str | None:
     return reply
 
 
+def confirm(question: str) -> bool:
+    """Ask a yes/no question on stdin; 'y' and 'yes' (any case) mean yes."""
+    return ask(question).strip().lower() in ("y", "yes")
+
+
 def print_header_box(rows: list[tuple[str, str]]) -> None:
     """
     Rounded header banner opening every pass-scoped mode.
@@ -327,7 +332,7 @@ def _reverse_route(route: str) -> str:
     return f"{parts[1]} \u2192 {parts[0]}"
 
 
-def _group_route(legs: list[dict]) -> str:
+def group_route(legs: list[dict]) -> str:
     """Summarise a booking's route: 'A ⇄ B' for a round trip, else the distinct routes."""
     routes = []
     for leg in legs:
@@ -497,7 +502,7 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
         if i:
             lines.append("")
         all_past = all(leg.get("past") == "Y" for leg in legs)
-        header = day_header(date_str, _group_route(legs), dim=all_past)
+        header = day_header(date_str, group_route(legs), dim=all_past)
         if all_past and not color_enabled():
             header += "   past"  # dimming is invisible here, so say it
         lines.append(header)

@@ -4,8 +4,8 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from sj_cli.booking import _segment_to_display_row, booking_date_range
-from sj_cli.cli import _is_expired, validate_dates_against_pass
+from sj_cli.booking import _segment_to_display_row, booking_date_range, is_expired
+from sj_cli.cli import validate_dates_against_pass
 from sj_cli.dates import (
     SWEDEN,
     booking_dates,
@@ -73,12 +73,12 @@ def test_format_tp_date_and_days_remaining():
 
 
 def test_is_expired():
-    assert _is_expired({"endTravelValidityDateTime": "2020-01-01T00:00:00+01:00"})
-    assert not _is_expired(
+    assert is_expired({"endTravelValidityDateTime": "2020-01-01T00:00:00+01:00"})
+    assert not is_expired(
         {"endTravelValidityDateTime": (sweden_now() + timedelta(days=1)).isoformat()}
     )
-    assert not _is_expired({})
-    assert not _is_expired({"endTravelValidityDateTime": "garbage"})
+    assert not is_expired({})
+    assert not is_expired({"endTravelValidityDateTime": "garbage"})
 
 
 def test_booking_date_range_uses_swedish_wall_clock():

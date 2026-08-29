@@ -6,13 +6,14 @@ import logging
 import os
 import re
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import TYPE_CHECKING, NoReturn, override
 
 from sj_cli.auth import ensure_authenticated, handle_logout
 from sj_cli.booking import (
     booking_date_range,
     cleanup_stale_provisionals,
+    covers,
     describe_run,
     fetch_all_bookings,
     handle_cancel_booking,
@@ -20,6 +21,8 @@ from sj_cli.booking import (
     handle_change_seat,
     handle_list_bookings,
     handle_upgrade_class,
+    is_expired,
+    pass_validity,
     process_date_range,
 )
 from sj_cli.client import SJClient
@@ -27,11 +30,9 @@ from sj_cli.config import CfgManager
 from sj_cli.dates import (
     SWEDEN,
     booking_dates,
-    parse_api_datetime,
     parse_date_selection,
     skip_reason,
     sweden_now,
-    to_sweden,
 )
 from sj_cli.errors import SJAPIError, SJAuthError, SJConfigError, error_text
 from sj_cli.logger import setup_logging
@@ -295,47 +296,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def _pass_validity(travel_pass: dict) -> tuple[date | None, date | None]:
-    """
-    (first valid day, last valid day) of a pass as Swedish calendar dates.
-
-    The API's validity instants are midnight UTC and the end is exclusive
-    (the day after the last valid day). None for an unknown or unparsable
-    bound.
-    """
-
-    def day(key: str, exclusive: bool) -> date | None:
-        raw = travel_pass.get(key)
-        if not raw:
-            return None
-        try:
-            local = to_sweden(raw)
-        except (ValueError, TypeError):
-            return None
-        return (local - timedelta(days=1)).date() if exclusive else local.date()
-
-    return day("startTravelValidityDateTime", False), day("endTravelValidityDateTime", True)
-
-
-def _is_expired(travel_pass: dict) -> bool:
-    """True if the pass's validity end lies in the past (unknown end = not expired)."""
-    end = travel_pass.get("endTravelValidityDateTime")
-    if not end:
-        return False
-    try:
-        return parse_api_datetime(end) < sweden_now()
-    except (ValueError, TypeError):
-        return False
-
-
-def _covers(travel_pass: dict, window: tuple[date, date]) -> bool:
-    """True if the pass's known validity contains the whole window."""
-    first, last = _pass_validity(travel_pass)
-    if first is None or last is None:
-        return False
-    return first <= window[0] and window[1] <= last
-
-
 def resolve_travel_pass(
     travel_passes: list,
     for_dates: tuple[date, date] | None = None,
@@ -359,7 +319,7 @@ def resolve_travel_pass(
             at, or nothing was chosen.
 
     """
-    valid = [tp for tp in travel_passes if not _is_expired(tp)]
+    valid = [tp for tp in travel_passes if not is_expired(tp)]
     if len(valid) < len(travel_passes):
         logger.info(f"ignoring {len(travel_passes) - len(valid)} expired travel pass(es)")
 
@@ -372,7 +332,7 @@ def resolve_travel_pass(
         return valid[0]
 
     if for_dates:
-        covering = [tp for tp in valid if _covers(tp, for_dates)]
+        covering = [tp for tp in valid if covers(tp, for_dates)]
         if len(covering) == 1:
             logger.info(f"using the pass that covers {for_dates[0]} – {for_dates[1]}")
             return covering[0]
@@ -390,7 +350,7 @@ def resolve_travel_pass(
     pinfo("available travel passes:")
     for i, tp in enumerate(valid, 1):
         name = tp.get("name", "Unknown")
-        first, last = _pass_validity(tp)
+        first, last = pass_validity(tp)
         pinfo(f"  {i}. {name} ({first or '\u2014'} \u2192 {last or '\u2014'})")
 
     blank()
@@ -435,7 +395,7 @@ def validate_dates_against_pass(cfg: dict, travel_pass: dict, today: date | None
         SystemExit: If dates are outside validity.
 
     """
-    vp_start, vp_end = _pass_validity(travel_pass)
+    vp_start, vp_end = pass_validity(travel_pass)
     if vp_start is None or vp_end is None:
         return
 
