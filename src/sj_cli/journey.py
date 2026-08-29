@@ -61,13 +61,15 @@ def _ask_date(
     (`too_early` is the complaint) and inside the pass validity `valid`
     (an unknown bound is not checked).
 
-    `default` is clamped up to the pass start when it is otherwise outside
-    `valid` — a pass bought ahead starts after today, and an unreachable
-    default would make Enter a dead key.
+    `default` is clamped into the pass validity when it falls outside it —
+    a pass bought ahead starts after today, and an unreachable default
+    would make Enter a dead key.
     """
     first, last = valid
     if first is not None and default < first:
         default = first
+    if last is not None and default > last:
+        default = last
     while True:
         answer = ask_optional(f"{label} [{default.isoformat()}]: ")
         if answer is None:
@@ -207,6 +209,8 @@ def _choose_leg(
         )
         if leg is not None:
             if leg["comfort_class"] != class_:
+                # Said here, not in resolve_offer: --book words the same
+                # fallback per day and _rebook_released_leg per released leg.
                 pwarn(f"{label} class fallback: {class_} → {leg['comfort_class']}")
             return leg
         complaint = f"no 0-price offer at {picked['departure']} · pick another"
@@ -442,22 +446,33 @@ def handle_book_journey(
     # The write
     cart = Cart(client, access_token, cfg, passenger_token)
     try:
-        cart.add(outbound, "outbound")
-    except Exception as e:
-        # The offer was resolved while the user browsed the lists, so it may
-        # have gone stale; a failed first add leaves the cart empty (nothing
-        # is held), which is a plain end to the run, not a crash.
-        logger.error(f"outbound leg failed: {e}")
-        pstatus(False, f"could not create the booking ({error_text(e)}) · nothing was booked")
-        return False
-    if inbound is not None:
         try:
-            cart.add(inbound, "return")
+            cart.add(outbound, "outbound")
         except Exception as e:
-            # SPEC §8.2: the outbound is held — keep it rather than lose both.
-            logger.error(f"return leg failed: {e}")
-            pwarn(f"return leg failed ({error_text(e)}), booking outbound only")
-    result = cart.finish()
+            # The offer was resolved while the user browsed the lists, so it
+            # may have gone stale; a failed first add leaves the cart empty
+            # (nothing is held), which is a plain end to the run, not a crash.
+            logger.error(f"outbound leg failed: {e}")
+            pstatus(False, f"could not create the booking ({error_text(e)}) · nothing was booked")
+            return False
+        if inbound is not None:
+            try:
+                cart.add(inbound, "return")
+            except Exception as e:
+                # SPEC §8.2: the outbound is held — keep it rather than lose both.
+                logger.error(f"return leg failed: {e}")
+                pwarn(f"return leg failed ({error_text(e)}), booking outbound only")
+        result = cart.finish()
+    except KeyboardInterrupt:
+        # main() prints "interrupted by user" and exits 130, which would say
+        # nothing about the provisional SJ is now holding — and --book's
+        # cleanup only sweeps the configured route, which this mode leaves.
+        if cart.held:
+            pwarn(
+                f"booking {cart.booking_number or cart.booking_id} left as a provisional, "
+                "SJ releases it or cancel it on sj.se"
+            )
+        raise
     number = result["booking_number"] or result["booking_id"]
     try:
         _print_cards(booked_rows(result["booking"], result["booking_number"]))

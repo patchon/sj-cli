@@ -429,48 +429,6 @@ def check_comfort_availability(departure: dict, requested_class: str) -> bool:
     return False
 
 
-def _find_departure_by_time(
-    departures: list,
-    target_time_str: str,
-    select_closest: bool,
-) -> dict | None:
-    """
-    Find a departure matching the target time.
-
-    Args:
-        departures: List of departure dicts from the API.
-        target_time_str: Target time as HH:MM.
-        select_closest: If True, pick closest time. If False, exact match only.
-
-    Returns:
-        The matching departure dict or None.
-
-    """
-    target_minutes = time_str_to_minutes(target_time_str)
-    timed = []
-
-    for dep in departures:
-        dep_minutes = get_departure_time_minutes(dep)
-        if dep_minutes == -1:
-            continue
-        timed.append((dep, dep_minutes - target_minutes))
-
-    if not timed:
-        return None
-
-    if select_closest:
-        timed.sort(key=lambda x: abs(x[1]))
-        return timed[0][0]
-
-    # Exact match only
-    for dep, diff in timed:
-        if diff == 0:
-            return dep
-
-    logger.info(f"no exact match found for {target_time_str}")
-    return None
-
-
 def resolve_class_for_departure(
     departure: dict,
     requested_class: str,
@@ -2051,7 +2009,7 @@ def process_date_range(
         except SJAuthError as e:
             print_day_header(date_str, "")
             with indented():
-                pinfo(f"error: {e}")
+                pinfo(f"error: {error_text(e)}")
                 pwarn("stopping: no valid session for the remaining dates")
             count("error")
             blank()

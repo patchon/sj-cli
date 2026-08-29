@@ -193,6 +193,20 @@ def test_resolve_offer_falls_through_the_class_chain_silently():
     assert (leg["comfort_class"], leg["offer_id"]) == ("2 class", "OFF-second")
 
 
+def test_resolve_offer_starts_from_the_given_class_not_the_configured_one():
+    # The picked row's class wins: --book-journey passes the class the chosen
+    # departure carries, which need not be the config's. Both are 0-price
+    # here, so only the argument decides which offer comes back.
+    c = FakeClient({"OUT": [dep("o", D, "06:59", "11:36")]}, {"o": offers()})
+    params = base_cfg()["search_parameters"]
+    assert params["comfort_class"] == "2 class calm"
+    leg = resolve_offer(
+        c, "tok", params, "PT", c.departures["OUT"][0], "A → B", "2 class", "outbound"
+    )
+    assert leg is not None
+    assert (leg["comfort_class"], leg["offer_id"]) == ("2 class", "OFF-second")
+
+
 def test_resolve_offer_is_none_without_a_zero_price_offer(capsys):
     c = FakeClient(
         {"OUT": [dep("o", D, "06:59", "11:36")]}, {"o": offers(calm_price=295, second_price=195)}
