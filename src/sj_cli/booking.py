@@ -5,7 +5,7 @@ import sys
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, TypedDict
 
 from sj_cli.auth import ensure_valid_token
 from sj_cli.client import SJClient
@@ -63,6 +63,76 @@ logger = logging.getLogger(__name__)
 # tool between its create and checkout calls. Provisionals expire server-side
 # after ~30 minutes anyway.
 STALE_PROVISIONAL_GRACE = timedelta(minutes=10)
+
+
+class Search(TypedDict):
+    """The ids a journey search hands back (see search())."""
+
+    out_id: str | None
+    in_id: str | None
+    passenger_token: str
+
+
+def search(
+    client: SJClient,
+    access_token: str,
+    origin: str,
+    dest: str,
+    date_str: str,
+    return_date: str | None,
+    tp_product_id: str | None,
+    tp_token_id: str,
+    service_types: list[str] | None,
+) -> Search:
+    """
+    Run one journey search and pull out its ids.
+
+    origin/dest are whatever client.resolve_station accepts: a config station
+    name or a UIC code. A roundtrip search (return_date given) yields both
+    ids; a one-way search only out_id, even for a return leg searched on its
+    own (the API sees any one-way as "outbound"). service_types ["ALL"]
+    means no filter. The passenger token falls back to tp_token_id when the
+    response carries none. This is the only place search_journey is called.
+    """
+    if service_types == ["ALL"]:
+        service_types = None
+    resp = client.search_journey(
+        access_token, origin, dest, date_str, return_date, tp_product_id, service_types
+    )
+    return {
+        "out_id": resp.get("departureSearchId"),
+        "in_id": resp.get("returnDepartureSearchId"),
+        "passenger_token": resp.get("passengerListId") or tp_token_id,
+    }
+
+
+def _departure_time(departure: dict) -> str:
+    """Departure time (HH:MM, Swedish wall-clock as the API writes it) of a departure dict."""
+    try:
+        return departure.get("departureDateTime", "").split("T")[1][:5]
+    except (IndexError, AttributeError):
+        return "—"
+
+
+def describe_departure(dep: dict, route: str) -> dict:
+    """
+    The display facts of a departure.
+
+    Returns {"departure": "05:29", "arrival": "09:04", "duration": "3h 35m",
+    "train": "X 2000 420", "route": route} — the one shape the dry-run rows,
+    the journey picker and the log lines share. The train is brand + public
+    number from the first leg; the route is the caller's "A → B".
+    """
+    legs = dep.get("legs") or [{}]
+    brand = legs[0].get("serviceBrandNameDescription") or ""
+    number = legs[0].get("publicServiceName") or legs[0].get("serviceName") or ""
+    return {
+        "departure": _departure_time(dep),
+        "arrival": _get_arrival_time(dep),
+        "duration": format_duration(dep.get("duration", "")),
+        "train": " ".join(x for x in (brand, number) if x),
+        "route": route,
+    }
 
 
 def booking_date_range(
@@ -536,17 +606,7 @@ def poll_and_select(
 
     Polls up to 5 times, 1 second apart, until departures appear.
     """
-    departures: list[dict[str, Any]] = []
-    for attempt in range(5):
-        if attempt:
-            time.sleep(1.0)
-        results = client.get_search_results(access_token, search_id)
-        travels = results.get("travels") or []
-        if travels:
-            departures = travels[0].get("departures") or []
-            if departures:
-                break
-
+    departures = poll_departures(client, access_token, search_id)
     if not departures:
         logger.warning(f"no departures found for search {search_id}")
         return None
@@ -806,16 +866,6 @@ def _resolve_leg(
     flexibility = params.get("flexibility", "FULLFLEX")
     allow_fallback = params.get("allow_class_fallback", True)
 
-    def describe(dep: dict) -> dict:
-        legs = dep.get("legs") or [{}]
-        brand = legs[0].get("serviceBrandNameDescription") or ""
-        number = legs[0].get("publicServiceName") or legs[0].get("serviceName") or ""
-        return {
-            "duration": format_duration(dep.get("duration", "")),
-            "train": " ".join(x for x in (brand, number) if x),
-            "route": route,
-        }
-
     with spinner(f"searching {label} at {target_time}"):
         best = poll_and_select(
             client,
@@ -845,9 +895,7 @@ def _resolve_leg(
         return {
             "found": True,
             "has_offer": True,
-            "departure": best["time_str"],
-            "arrival": _get_arrival_time(best["departure"]),
-            **describe(best["departure"]),
+            **describe_departure(best["departure"], route),
             "class": matched_class,
             "offer_id": offer_id,
             "alternative": False,
@@ -876,9 +924,7 @@ def _resolve_leg(
         return {
             "found": True,
             "has_offer": True,
-            "departure": alt["time_str"],
-            "arrival": alt["arrival"],
-            **describe(alt["departure"]),
+            **describe_departure(alt["departure"], route),
             "class": alt["class"],
             "offer_id": alt["offer_id"],
             "alternative": True,
@@ -886,9 +932,7 @@ def _resolve_leg(
     return {
         "found": True,
         "has_offer": False,
-        "departure": best["time_str"],
-        "arrival": _get_arrival_time(best["departure"]),
-        **describe(best["departure"]),
+        **describe_departure(best["departure"], route),
         "class": best["class"],
         "offer_id": None,
         "alternative": False,
@@ -1381,17 +1425,19 @@ def _search_and_book_one_way(
     direction = "outbound" if is_outbound else "inbound"
     logger.info(f"searching {direction} one-way: {from_station} → {to_station}")
 
-    search_resp = client.search_journey(
+    found = search(
+        client,
         access_token,
         from_station,
         to_station,
         date_str,
         None,
         tp_product_id,
+        tp_token_id,
         service_types,
     )
-    passenger_token = search_resp.get("passengerListId") or tp_token_id
-    search_id = search_resp.get("departureSearchId")
+    passenger_token = found["passenger_token"]
+    search_id = found["out_id"]
 
     if not search_id:
         logger.warning(f"no search ID returned for {direction}")
@@ -1472,8 +1518,6 @@ def process_booking_flow(
         return None
 
     service_types = params.get("service_types")
-    if service_types and service_types == ["ALL"]:
-        service_types = None
 
     book_partial = params.get("book_partial", False)
 
@@ -1484,18 +1528,19 @@ def process_booking_flow(
         # search (the API needs an outbound offer to create a booking), so
         # with book_partial we fall back to a standalone one-way return leg.
         logger.info("booking roundtrip (both legs missing)")
-        search_resp = client.search_journey(
+        found = search(
+            client,
             access_token,
             origin_name,
             dest_name,
             date_str,
             date_str,
             tp_product_id,
+            tp_token_id,
             service_types,
         )
-        passenger_token = search_resp.get("passengerListId") or tp_token_id
-        out_id = search_resp.get("departureSearchId")
-        in_id = search_resp.get("returnDepartureSearchId")
+        passenger_token = found["passenger_token"]
+        out_id, in_id = found["out_id"], found["in_id"]
 
         if not (out_id and in_id):
             logger.error("failed to get both outbound and inbound search IDs")
@@ -2554,7 +2599,7 @@ def _class_has_seats(offer_response: dict, class_code: str) -> bool:
     return any(flex.get("available") for flex in flexibilities.values())
 
 
-def _poll_departures(client: SJClient, access_token: str, search_id: str) -> list[dict]:
+def poll_departures(client: SJClient, access_token: str, search_id: str) -> list[dict]:
     """Poll a departure search until departures appear, up to 5 tries 1s apart."""
     for attempt in range(5):
         if attempt:
@@ -2595,18 +2640,17 @@ def _probe_upgrade(
     if not (dep_name and arr_name and date_str):
         return None
 
-    # Positional, like every other search_journey call site: deliberately no
-    # travel pass id (return_date=None, travel_pass_id=None) — see the module
-    # note above for why this is the one search that must go without it.
-    search_resp = client.search_journey(
-        access_token, dep_name, arr_name, date_str, None, None, service_types
+    # Deliberately no travel pass id: see the module note on why this is
+    # the one search that must go without it.
+    found = search(
+        client, access_token, dep_name, arr_name, date_str, None, None, "", service_types
     )
-    search_id = search_resp.get("departureSearchId")
+    search_id = found["out_id"]
     if not search_id:
         return None
-    passenger_token = search_resp.get("passengerListId") or ""
+    passenger_token = found["passenger_token"]
 
-    departures = _poll_departures(client, access_token, search_id)
+    departures = poll_departures(client, access_token, search_id)
     departure = _match_departure(departures, segment)
     if departure is None:
         return None
@@ -2722,12 +2766,20 @@ def _rebook_released_leg(
     date_str = _segment_date(segment.get("departureDateTime", ""))
 
     with spinner("searching the same departure with the travel pass"):
-        search_resp = client.search_journey(
-            access_token, dep_name, arr_name, date_str, None, tp_product_id, service_types
+        found = search(
+            client,
+            access_token,
+            dep_name,
+            arr_name,
+            date_str,
+            None,
+            tp_product_id,
+            tp_token_id,
+            service_types,
         )
-        search_id = search_resp.get("departureSearchId")
-        passenger_token = search_resp.get("passengerListId") or tp_token_id
-        departures = _poll_departures(client, access_token, search_id) if search_id else []
+        search_id = found["out_id"]
+        passenger_token = found["passenger_token"]
+        departures = poll_departures(client, access_token, search_id) if search_id else []
         departure = _match_departure(departures, segment)
 
     departure_id = (departure or {}).get("departureId")
@@ -2932,8 +2984,6 @@ def handle_upgrade_class(
     origin_id = client.resolve_station(origin_name)
     dest_id = client.resolve_station(dest_name)
     service_types = params.get("service_types")
-    if service_types == ["ALL"]:
-        service_types = None
 
     now = sweden_now()
     ok = True
