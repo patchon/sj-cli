@@ -126,6 +126,10 @@ def test_describe_departure_reads_an_api_null_time_and_the_service_name_fallback
     assert facts["train"] == "520"
 
 
+def test_describe_departure_never_leads_with_the_changes_separator():
+    assert describe_departure({"numberOfChanges": 1}, "A → B")["train"] == "1 change"
+
+
 def test_describe_departure_survives_an_empty_departure():
     assert describe_departure({}, "A → B") == {
         "departure": "—",
@@ -200,7 +204,8 @@ def test_resolve_offer_is_none_without_a_zero_price_offer(capsys):
     assert "checking offers for return at 06:59" in capsys.readouterr().out
 
 
-def test_resolve_offer_honours_flexibility_and_no_fallback():
+def test_resolve_offer_honours_no_fallback_and_flexibility():
+    # allow_class_fallback=False: the 0-price 2 class offer below is not taken.
     c = FakeClient(
         {"OUT": [dep("o", D, "06:59", "11:36")]}, {"o": offers(calm_price=295, second_price=0)}
     )
@@ -209,3 +214,17 @@ def test_resolve_offer_honours_flexibility_and_no_fallback():
         resolve_offer(c, "tok", params, "PT", c.departures["OUT"][0], "A → B", "2 class calm", "x")
         is None
     )
+    # Right class, wrong flexibility: the config asks for FULLFLEX.
+    c = FakeClient({"OUT": [dep("o", D, "06:59", "11:36")]}, {"o": offers(flex="SEMIFLEX")})
+    params = base_cfg()["search_parameters"]
+    assert (
+        resolve_offer(c, "tok", params, "PT", c.departures["OUT"][0], "A → B", "2 class calm", "x")
+        is None
+    )
+
+
+def test_resolve_offer_never_asks_for_offers_on_an_id_less_departure():
+    c = FakeClient()
+    params = base_cfg()["search_parameters"]
+    assert resolve_offer(c, "tok", params, "PT", {}, "A → B", "2 class calm", "x") is None
+    assert c.calls == []
