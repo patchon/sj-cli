@@ -863,4 +863,4 @@ def test_same_day_book_skips_a_departed_train(monkeypatch, capsys):
         c, "tok", FakeTokenManager(), cfg, "TP", "TOK", [], dry_run=True, today=date(2026, 9, 1)
     )
     assert [call for call in c.calls if call[0] == "offers"] == [("offers", "next")]
-    assert "07:30" in capsys.readouterr().out
+    assert "→ 07:30 – 09:10" in capsys.readouterr().out  # the day-card line, not the "!" note

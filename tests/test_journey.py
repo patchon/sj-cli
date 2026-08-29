@@ -613,7 +613,7 @@ def _shift(minutes):
     return (NOW + timedelta(minutes=minutes)).strftime("%H:%M")
 
 
-def _dep_at(dep_id, minutes, duration=95):
+def _dep_at(dep_id, minutes, duration=277):  # 277 min = dep()'s "PT4H37M"
     """dep() at NOW + minutes, timestamped in NOW's own offset (not dep()'s fixed +02:00)."""
     start = NOW + timedelta(minutes=minutes)
     end = start + timedelta(minutes=duration)
@@ -652,3 +652,18 @@ def test_all_departed_ends_the_run(monkeypatch, capsys):
         " ● no departures left for Göteborg Central → Stockholm Central today"
         in capsys.readouterr().out
     )
+
+
+def test_the_clock_is_read_after_the_questions(monkeypatch, capsys):
+    # A user who takes minutes over the prompts must not be shown a train
+    # that left while they answered: the filter reads the clock afterwards.
+    c = FakeClient({"OUT": [_dep_at("gone-while-asking", 10), _dep_at("next", 45)]})
+    s = Script(T, "", "", "n", "", True)
+    wire(monkeypatch, s)
+    clock = iter([NOW])
+    monkeypatch.setattr(journey, "sweden_now", lambda: next(clock, NOW + timedelta(minutes=30)))
+    assert run(c, s, base_cfg(roundtrip=False)) is True
+    _, rows, _, _ = s.lists[0]
+    assert len(rows) == 1 and rows[0].startswith(_shift(45))
+    assert "  1 already departed\n" in capsys.readouterr().out
+    assert [call for call in c.calls if call[0] == "offers"] == [("offers", "next")]
