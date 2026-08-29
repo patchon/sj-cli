@@ -200,15 +200,18 @@ and the re-booking always takes the same departure, never the one closest to `ti
 `--dry-run` does the probing and reports what it would attempt, touching nothing.
 
 `--book-journey` books a single journey the way sj.se's front page does: it asks for the date,
-from, to and whether you want a return (and when), searches, then lists each leg's departures for
-you to pick from with the arrow keys — showing the class the pass would get on that departure, or
-`no seats` where there is none. Everything you don't type comes from config (today's date,
+from, to and whether you want a return (and when), searches, then lists the outbound and the
+return departures for you to pick from with the arrow keys — showing the class the pass would
+get on that departure, or `no seats` where there is none. Everything you don't type comes from
+config or the obvious default (today — or the pass start if the pass has not begun —
 `station_from`/`station_to`, `roundtrip`, the departure closest to `time_leave`/`time_return`
-highlighted), so Enter all the way through books one day of the commute; the stations can be any
-in SJ's list and filter as you type. After a summary it asks `book?` once, then books exactly as
-`--book` does (same seat choice, same checkout). If you already hold a ticket that day it says so
-before the list, since a search made with the pass hides the seats on departures overlapping it.
-Needs a terminal; `--dry-run` walks through every question and list without booking.
+highlighted), so Enter all the way through books one day of the commute; the stations can be
+any in SJ's list and filter as you type. After a summary it asks `book?` once, then books
+exactly as `--book` does (same seat choice, same checkout). If you already hold a ticket that
+day it says so before the list, since a search made with the pass hides the seats on departures
+overlapping it. There is no duplicate check, though — that warning is the whole guard, and a
+day `--book` has already covered can be booked again. Needs a terminal; `--dry-run` walks
+through every question and list without booking.
 
 ### First login
 

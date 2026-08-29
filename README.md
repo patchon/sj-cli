@@ -223,16 +223,18 @@ sin andra resa — och ombokningen tar alltid samma avgång, aldrig den närmast
 `--dry-run` gör provningen och rapporterar vad den skulle försöka, utan att röra någonting.
 
 `--book-journey` bokar en enda resa som på sj.se:s förstasida: den frågar efter datum, från,
-till och om du vill ha en retur (med datum), söker, och visar sedan dagens avgångar för varje
-delresa i en lista där du väljer med piltangenterna — med den klass periodkortet skulle få på
+till och om du vill ha en retur (med datum), söker, och visar sedan avgångarna för ut- och
+hemresan i en lista där du väljer med piltangenterna — med den klass periodkortet skulle få på
 just den avgången, eller `no seats` där det inte finns någon. Allt du inte skriver kommer från
-konfigurationen (dagens datum, `station_from`/`station_to`, `roundtrip`, avgången närmast
+konfigurationen eller det självklara förvalet (dagens datum — eller kortets första giltiga dag
+om kortet inte börjat gälla än — `station_from`/`station_to`, `roundtrip`, avgången närmast
 `time_leave`/`time_return` förvald), så Enter rakt igenom bokar en dag av pendlingen;
 stationerna kan vara vilka som helst i SJ:s lista och filtreras medan du skriver. Efter en
 sammanfattning frågar den `book?` en gång, och bokar sedan precis som `--book` gör (samma
-platsval, samma utcheckning). Har du redan en biljett den dagen sägs det innan listan,
-eftersom en sökning med kortet döljer platserna på avgångar som överlappar den. Kräver en
-terminal; `--dry-run` går igenom alla frågor och listor utan att boka.
+platsval, samma utcheckning). Har du redan en biljett den dagen sägs det innan listan, eftersom
+en sökning med kortet döljer platserna på avgångar som överlappar den. Någon
+dubbelbokningsspärr finns inte — varningen är hela skyddet; en dag som `--book` redan bokat kan
+bokas igen. Kräver en terminal; `--dry-run` går igenom alla frågor och listor utan att boka.
 
 ### Första inloggningen
 
