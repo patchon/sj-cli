@@ -4,17 +4,26 @@ from datetime import timedelta
 
 import pytest
 
+from sj_cli import booking
 from sj_cli.booking import handle_change_seat
-from sj_cli.dates import sweden_now
+from sj_cli.dates import to_sweden
 from tests.fakes import FakeClient, base_cfg, seatmap
 
-# Computed from the real clock at test-run time (not hardcoded) so these
-# dates are never accidentally in the past — a booking dated in the past
-# would be reported as "already departed" and every test below would pass
-# vacuously (no seat map read, no PATCH, for the wrong reason).
-FUTURE_DATE = (sweden_now() + timedelta(days=30)).date().isoformat()
-FUTURE_DATE_2 = (sweden_now() + timedelta(days=31)).date().isoformat()
-PAST_DATE = (sweden_now() - timedelta(days=2)).date().isoformat()
+# One fixed instant the whole file shares: the dates below are relative to it,
+# so a "future" booking is never accidentally in the past (a past one is
+# reported "already departed" and every test would pass vacuously), and the
+# autouse fixture makes the code read the same clock — so the card times stay
+# put whatever the real date is, in summer time like the fixtures' +02:00.
+NOW = to_sweden("2026-09-15T12:00:00+02:00")
+FUTURE_DATE = (NOW + timedelta(days=30)).date().isoformat()
+FUTURE_DATE_2 = (NOW + timedelta(days=31)).date().isoformat()
+PAST_DATE = (NOW - timedelta(days=2)).date().isoformat()
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    """The departed check reads sweden_now(); freeze it where the fixtures live."""
+    monkeypatch.setattr(booking, "sweden_now", lambda: NOW)
 
 
 def _segment(date, tag, dep_time, origin="740000002"):

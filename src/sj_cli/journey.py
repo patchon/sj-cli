@@ -153,7 +153,11 @@ def _held_segments(
     A night train leaving the evening before still runs into a chosen
     date's morning, so the day before is collected too; `_Held.day` stays
     the segment's own departure day, which is what the summary filters on.
-    A failed fetch is only a note.
+    Deliberately one-sided: the day *after* is not collected, so a chosen
+    departure that runs past midnight cannot see a ticket held the next
+    morning — a candidate list is drawn for its own day, and widening this
+    would name bookings on a date the user never asked about. A failed
+    fetch is only a note.
     """
     try:
         with spinner("fetching existing bookings", trail=False):
@@ -228,6 +232,9 @@ def _overlap(departure: dict, held: Sequence[_Held]) -> _Held | None:
         dep = to_sweden(departure.get("departureDateTime") or "")
         arr = to_sweden(departure.get("arrivalDateTime") or "")
     except (ValueError, TypeError):
+        # Search rows always carry both, so this is a shape change worth
+        # seeing in a log: the row simply gets no overlap note.
+        logger.debug(f"no overlap check for {departure.get('departureId')}: unreadable times")
         return None
     for h in held:
         hit = dep <= h.dep < arr if h.arr is None else dep < h.arr and h.dep < arr
