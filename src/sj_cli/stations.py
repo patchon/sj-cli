@@ -5,7 +5,7 @@ Pure — no HTTP, no printing.
 """
 
 import unicodedata
-from typing import Any, TypedDict
+from typing import Any, NamedTuple, TypedDict
 
 
 class Station(TypedDict):
@@ -53,15 +53,15 @@ def _words(folded: str) -> list[str]:
 def _code_order(station: Station) -> int:
     """Sort key: the big stations have the lowest UIC codes (740000001 Stockholm Central)."""
     code = station["code"]
-    return int(code) if code.isdigit() else 10**12
+    return int(code) if code.isdecimal() else 10**12
 
 
-def _rank(wanted: str, folded: str, synonyms: list[str]) -> int | None:
+def _rank(wanted: str, folded: str, words: list[str], synonyms: list[str]) -> int | None:
     if folded == wanted or wanted in synonyms:
         return 0
     if folded.startswith(wanted):
         return 1
-    if any(word.startswith(wanted) for word in _words(folded)):
+    if any(word.startswith(wanted) for word in words):
         return 2
     if wanted in folded:
         return 3
@@ -70,22 +70,40 @@ def _rank(wanted: str, folded: str, synonyms: list[str]) -> int | None:
     return None
 
 
+class _Entry(NamedTuple):
+    """A station plus everything `match`/`exact` need, computed once in `__init__`."""
+
+    station: Station
+    folded: str
+    words: list[str]
+    synonyms: list[str]
+    code_order: int
+
+
 class StationIndex:
     """The station list folded once, ranked per query (see match)."""
 
     def __init__(self, stations: list[Station]) -> None:
-        self._entries = [
-            (station, fold(station["name"]), [fold(s) for s in station["synonyms"]])
-            for station in stations
-        ]
+        self._entries = []
+        for station in stations:
+            folded = fold(station["name"])
+            self._entries.append(
+                _Entry(
+                    station=station,
+                    folded=folded,
+                    words=_words(folded),
+                    synonyms=[fold(s) for s in station["synonyms"]],
+                    code_order=_code_order(station),
+                )
+            )
 
     def exact(self, name: str) -> Station | None:
         """The station whose name or synonym equals `name` (folded); the major one on a tie."""
         wanted = fold(name)
         if not wanted:
             return None
-        hits = [s for s, folded, syns in self._entries if folded == wanted or wanted in syns]
-        return min(hits, key=_code_order) if hits else None
+        hits = [e for e in self._entries if e.folded == wanted or wanted in e.synonyms]
+        return min(hits, key=lambda e: e.code_order).station if hits else None
 
     def match(self, query: str) -> list[Station]:
         """
@@ -100,9 +118,9 @@ class StationIndex:
         if not wanted:
             return []
         ranked = []
-        for station, folded, synonyms in self._entries:
-            rank = _rank(wanted, folded, synonyms)
+        for entry in self._entries:
+            rank = _rank(wanted, entry.folded, entry.words, entry.synonyms)
             if rank is not None:
-                ranked.append((rank, _code_order(station), station))
+                ranked.append((rank, entry.code_order, entry.station))
         ranked.sort(key=lambda entry: (entry[0], entry[1]))
         return [station for _, _, station in ranked]
