@@ -408,11 +408,11 @@ def test_book_mode_prints_day_cards_notes_and_summary(capsys):
     assert "  ✓ searching outbound at 06:59\n" in out
     assert "  ✓ checking out booking NUM1\n" in out
     assert (
-        "  → 06:59 – 11:36   4h 37m   X 2000 520   carriage 3 seat 17   2 klass Lugn   NUM1\n"
+        "  → 06:59 – 11:36   4h 37m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   NUM1\n"
         in out
     )
     assert (
-        "  ← 17:22 – 21:53   4h 37m   X 2000 543   carriage 3 seat 17   2 klass Lugn   NUM1\n"
+        "  ← 17:22 – 21:53   4h 37m   X 2000 543   carriage 3 seat 17   2 class calm   FULLFLEX   NUM1\n"
         in out
     )
     # one-line days

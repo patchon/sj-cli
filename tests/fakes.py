@@ -241,7 +241,11 @@ class FakeClient:
             "duration": dep.get("duration", "PT4H37M"),
             "departureStation": {"name": a[0], "uicStationCode": a[1]},
             "arrivalStation": {"name": b[0], "uicStationCode": b[1]},
-            "productFamily": {"name": "2 klass Lugn, Kan återbetalas"},
+            "productFamily": {
+                "name": "2 klass Lugn, Kan återbetalas",
+                "salesCategoryComfort": "SECOND_CALM",
+                "salesCategoryFlexibility": "FULLFLEX",
+            },
             "serviceBrandNameDescription": "X 2000",
             "publicServiceName": "520" if direction == "OUTBOUND" else "543",
             "requiredProducts": [{"seat": {"carriageNumber": "3", "number": "17"}}],

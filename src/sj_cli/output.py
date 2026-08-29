@@ -312,11 +312,34 @@ def format_duration(iso_duration: str) -> str:
     return " ".join(parts) if parts else iso_duration
 
 
-def format_class_name(raw_name: str) -> str:
-    """Clean up class name by stripping refund/flexibility suffix."""
+# SJ's product-family name is "<class>, <flexibility>" in Swedish; the codes
+# on the segment are the source of truth, this is the fallback for a segment
+# without them. Words outside these maps pass through untranslated.
+_CLASS_WORDS = {"klass": "class", "lugn": "calm"}
+_FLEX_NAMES = {
+    "kan \u00e5terbetalas": "FULLFLEX",
+    "kan ombokas": "SEMIFLEX",
+    "kan ej ombokas": "NOFLEX",
+}
+
+
+def split_product_name(raw_name: str) -> tuple[str, str | None]:
+    """
+    (class, flexibility) from a product-family name, in the config vocabulary.
+
+    "2 klass Lugn, Kan \u00e5terbetalas" \u2192 ("2 class calm", "FULLFLEX"); a name
+    without a suffix \u2192 (class, None); an empty name \u2192 ("\u2014", None). A
+    flexibility SJ's three names do not cover is returned as written.
+    """
     if not raw_name or raw_name == "\u2014":
-        return raw_name or "\u2014"
-    return raw_name.split(",", maxsplit=1)[0].strip()
+        return "\u2014", None
+    head, _, tail = raw_name.partition(",")
+    words = [_CLASS_WORDS.get(word.casefold(), word) for word in head.split()]
+    class_name = " ".join(words)
+    tail = tail.strip()
+    if not tail:
+        return class_name, None
+    return class_name, _FLEX_NAMES.get(tail.casefold(), tail)
 
 
 def _format_date_label(date_str: str) -> str:
