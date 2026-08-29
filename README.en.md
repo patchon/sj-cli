@@ -9,9 +9,9 @@ authenticate, search, pick the right departure, find the 0-price pass-holder off
 day after day, skipping weekends and Swedish red days and never double-booking a day that is
 already covered.
 
-Nothing real happens with `--dry-run` present: it previews `--book`, `--book-journey`, both cancel flags, both
-change-seat flags and `--upgrade-class`. A mode flag is always required — running the tool bare
-just prints the help.
+Nothing real happens with `--dry-run` present: it previews `--book`, `--book-journey`, both
+cancel flags, both change-seat flags and `--upgrade-class`. A mode flag is always required —
+running the tool bare just prints the help.
 
 ```
 $ sj-cli --book

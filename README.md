@@ -24,9 +24,9 @@ så det kan logga in, söka, välja rätt avgång, hitta kortinnehavarens erbjud
 slutföra bokningen, dag efter dag — helger och svenska röda dagar hoppas över, och en dag som
 redan är bokad dubbelbokas aldrig.
 
-Med `--dry-run` händer ingenting på riktigt: flaggan förhandsvisar `--book`, `--book-journey`, båda
-avbokningsflaggorna, båda platsbytesflaggorna och `--upgrade-class`. En lägesflagga krävs alltid —
-kör du verktyget utan flaggor skrivs bara hjälptexten ut.
+Med `--dry-run` händer ingenting på riktigt: flaggan förhandsvisar `--book`, `--book-journey`,
+båda avbokningsflaggorna, båda platsbytesflaggorna och `--upgrade-class`. En lägesflagga krävs
+alltid — kör du verktyget utan flaggor skrivs bara hjälptexten ut.
 
 ```
 $ sj-cli --book
