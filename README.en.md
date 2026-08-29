@@ -35,8 +35,8 @@ tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
   ✓ checking offers for return at 17:22
   ✓ adding return leg at 17:22
   ✓ checking out booking ERU0HWB2
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   ERU0HWB2
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 class calm   FULLFLEX   ERU0HWB2
 
 wed 16 sep 2026   tickets already booked
 
@@ -126,7 +126,7 @@ wish it missed. The seat SJ picked is kept only when no seat is free to move to.
 
 Every characteristic comes from SJ's seat map, and SJ warns that the map may not match the
 train that actually arrives: refurbished and older X 2000 units are both in service, so three
-seats per row in 2 klass Lugn can become four, a window seat can become an aisle seat, a table
+seats per row in 2 class calm can become four, a window seat can become an aisle seat, a table
 can disappear and the direction can flip. `sj-cli` reports what the map says — the train that
 rolls in has the last word.
 
@@ -206,12 +206,14 @@ get on that departure, or `no seats` where there is none. Everything you don't t
 config or the obvious default (today — or the pass start if the pass has not begun —
 `station_from`/`station_to`, `roundtrip`, the departure closest to `time_leave`/`time_return`
 highlighted), so Enter all the way through books one day of the commute; the stations can be
-any in SJ's list and filter as you type. After a summary it asks `book?` once, then books
-exactly as `--book` does (same seat choice, same checkout). If you already hold a ticket that
-day it says so before the list, since a search made with the pass hides the seats on departures
-overlapping it. There is no duplicate check, though — that warning is the whole guard, and a
-day `--book` has already covered can be booked again. Needs a terminal; `--dry-run` walks
-through every question and list without booking.
+any in SJ's list and filter as you type. The station list shows train stations first (bus stops
+only when no station matches), departures that have already left are not shown, and a departure
+overlapping a ticket you already hold says which one. After a summary it asks `book?` once,
+then books exactly as `--book` does (same seat choice, same checkout). If you already hold a
+ticket that day it says so before the list, since a search made with the pass hides the seats
+on departures overlapping it. There is no duplicate check, though — that warning is the whole
+guard, and a day `--book` has already covered can be booked again. Needs a terminal;
+`--dry-run` walks through every question and list without booking.
 
 ### First login
 

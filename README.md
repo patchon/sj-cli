@@ -50,8 +50,8 @@ tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
   ✓ checking offers for return at 17:22
   ✓ adding return leg at 17:22
   ✓ checking out booking ERU0HWB2
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   ERU0HWB2
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 class calm   FULLFLEX   ERU0HWB2
 
 wed 16 sep 2026   tickets already booked
 
@@ -147,7 +147,7 @@ det inte finns någon ledig plats att byta till.
 
 Alla egenskaper kommer från SJ:s platskarta, och SJ varnar själva för att kartan inte alltid
 stämmer med tåget som rullar in: både nya och äldre X 2000 är i trafik, så tre platser per rad
-i 2 klass Lugn kan bli fyra, en fönsterplats kan bli en gångplats, ett bord kan försvinna och
+i 2 class calm kan bli fyra, en fönsterplats kan bli en gångplats, ett bord kan försvinna och
 färdriktningen kan ändras. `sj-cli` rapporterar vad kartan säger — tåget som kommer har sista
 ordet.
 
@@ -222,19 +222,21 @@ en biljett. Bara den resa som uppgraderas avbokas — en tur och retur bokad som
 sin andra resa — och ombokningen tar alltid samma avgång, aldrig den närmast `time_leave`.
 `--dry-run` gör provningen och rapporterar vad den skulle försöka, utan att röra någonting.
 
-`--book-journey` bokar en enda resa som på sj.se:s förstasida: den frågar efter datum, från,
-till och om du vill ha en retur (med datum), söker, och visar sedan avgångarna för ut- och
-hemresan i en lista där du väljer med piltangenterna — med den klass periodkortet skulle få på
-just den avgången, eller `no seats` där det inte finns någon. Allt du inte skriver kommer från
-konfigurationen eller det självklara förvalet (dagens datum — eller kortets första giltiga dag
-om kortet inte börjat gälla än — `station_from`/`station_to`, `roundtrip`, avgången närmast
-`time_leave`/`time_return` förvald), så Enter rakt igenom bokar en dag av pendlingen;
-stationerna kan vara vilka som helst i SJ:s lista och filtreras medan du skriver. Efter en
-sammanfattning frågar den `book?` en gång, och bokar sedan precis som `--book` gör (samma
-platsval, samma utcheckning). Har du redan en biljett den dagen sägs det innan listan, eftersom
-en sökning med kortet döljer platserna på avgångar som överlappar den. Någon
-dubbelbokningsspärr finns inte — varningen är hela skyddet; en dag som `--book` redan bokat kan
-bokas igen. Kräver en terminal; `--dry-run` går igenom alla frågor och listor utan att boka.
+`--book-journey` bokar en enda resa som på sj.se:s förstasida: den frågar efter datum, från, till
+och om du vill ha en retur (med datum), söker, och visar sedan avgångarna för ut- och hemresan i
+en lista där du väljer med piltangenterna — med den klass periodkortet skulle få på just den
+avgången, eller `no seats` där det inte finns någon. Allt du inte skriver kommer från
+konfigurationen eller det självklara förvalet (dagens datum — eller kortets första giltiga dag om
+kortet inte börjat gälla än — `station_from`/`station_to`, `roundtrip`, avgången närmast
+`time_leave`/`time_return` förvald), så Enter rakt igenom bokar en dag av pendlingen; stationerna
+kan vara vilka som helst i SJ:s lista och filtreras medan du skriver. Stationslistan visar
+tågstationer först (busshållplatser bara när ingen station matchar), avgångar som redan gått visas
+inte, och en avgång som överlappar en biljett du redan har säger vilken. Efter en sammanfattning
+frågar den `book?` en gång, och bokar sedan precis som `--book` gör (samma platsval, samma
+utcheckning). Har du redan en biljett den dagen sägs det innan listan, eftersom en sökning med
+kortet döljer platserna på avgångar som överlappar den. Någon dubbelbokningsspärr finns inte —
+varningen är hela skyddet; en dag som `--book` redan bokat kan bokas igen. Kräver en terminal;
+`--dry-run` går igenom alla frågor och listor utan att boka.
 
 ### Första inloggningen
 
