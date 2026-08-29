@@ -7,11 +7,16 @@ import pytest
 
 from sj_cli import booking, journey
 from sj_cli.booking import booking_date_range
-from sj_cli.dates import sweden_now, to_sweden
+from sj_cli.dates import to_sweden
 from sj_cli.stations import StationIndex, parse_stations
 from tests.fakes import FakeClient, base_cfg, dep, offers
 
-NOW = sweden_now()
+# A fixed summer noon, not the real clock: wire() freezes both modules to it,
+# so every date below (and every wall-clock time asserted on a card) is the
+# same whenever the suite runs. Noon, so a run near midnight cannot wrap
+# _shift()'s time_leave into the previous day; summer, because the fixtures
+# write their timestamps in +02:00 and a date in CET would render an hour off.
+NOW = to_sweden("2026-06-15T12:00:00+02:00")
 TODAY = NOW.date()
 FUTURE = TODAY + timedelta(days=30)
 VALID = (TODAY - timedelta(days=10), TODAY + timedelta(days=300))
@@ -231,8 +236,8 @@ NO_OFFER = offers(calm_price=295, second_price=195)
 PASS = {
     "name": "Pass",
     "travelPassId": "TP",
-    "startTravelValidityDateTime": (sweden_now() - timedelta(days=10)).isoformat(),
-    "endTravelValidityDateTime": (sweden_now() + timedelta(days=300)).isoformat(),
+    "startTravelValidityDateTime": (NOW - timedelta(days=10)).isoformat(),
+    "endTravelValidityDateTime": (NOW + timedelta(days=300)).isoformat(),
 }
 WRITES = {"create", "add", "seats", "customer", "checkout"}
 
@@ -701,6 +706,7 @@ def test_overlap_needs_an_intersection_on_the_same_day_or_across_midnight():
     assert journey._overlap(row, [_held("C", "07:00", "08:00", day=D2)]) is None
     assert journey._overlap(row, [_held("D", "07:00", None)]).number == "D"  # instant inside
     assert journey._overlap(row, [_held("E", "11:36", None)]) is None
+    assert journey._overlap(row, [_held("F", "06:59", None)]).number == "F"  # same instant
     assert journey._overlap({"departureDateTime": "soon"}, [_held("A", "07:30", "09:10")]) is None
     # a held night train leaving D at 23:50 runs into the D2 morning
     night = _held("N", "23:50", "06:00", arr_day=D2)

@@ -115,8 +115,11 @@ def test_service_type_names_cover_validation_set():
 
 
 def test_config_error_carries_error_list():
+    # future_cfg, not base_cfg: the list must hold this one error only, and
+    # base_cfg's fixed 2026-09 dates add "all selected dates have passed"
+    # once that window is behind us.
     with pytest.raises(SJConfigError) as exc:
-        verify(base_cfg(time_leave="25:00"))
+        verify(future_cfg(time_leave="25:00"))
     assert exc.value.errors == ["time_leave '25:00' is not a real time of day (HH:MM, 24-hour)"]
 
 

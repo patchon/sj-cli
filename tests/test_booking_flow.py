@@ -7,6 +7,9 @@ and the user-facing messages, so the flow can be refactored safely.
 
 from datetime import datetime
 
+import pytest
+
+from sj_cli import booking
 from sj_cli.booking import (
     day_route,
     handle_booking_process,
@@ -19,6 +22,22 @@ from sj_cli.errors import SJAPIError
 from tests.fakes import FakeClient, FakeTokenManager, base_cfg, dep, offers, seatmap
 
 D = "2026-09-01"
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    """
+    Freeze the flow's clock a month before the fixtures, which live in 2026-09.
+
+    poll_and_select drops the departures already gone at search time, so
+    without this every fixture departure would count as departed once the
+    real clock passed 2026-09-01. The instant matches the today= that
+    run_range hands process_date_range; a test needing another one (the
+    same-day run) sets its own, which wins.
+    """
+    monkeypatch.setattr(booking, "sweden_now", lambda: to_sweden("2026-08-01T12:00:00+02:00"))
+
+
 OUT = [
     dep("o-early", D, "06:30", "08:10"),
     dep("o-best", D, "06:59", "11:36"),

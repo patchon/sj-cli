@@ -353,7 +353,8 @@ def test_booked_row_takes_class_and_flexibility_from_the_codes():
     row = _segment_to_display_row(
         _segment(
             {
-                "name": "2 klass Lugn, Kan återbetalas",
+                # the name deliberately disagrees with the codes: the codes win
+                "name": "1 klass, Kan ej ombokas",
                 "salesCategoryComfort": "SECOND_CALM",
                 "salesCategoryFlexibility": "SEMIFLEX",
             }
