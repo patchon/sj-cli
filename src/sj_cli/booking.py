@@ -80,6 +80,7 @@ def search(
     dest: str,
     date_str: str,
     return_date: str | None,
+    *,
     tp_product_id: str | None,
     tp_token_id: str,
     service_types: list[str] | None,
@@ -104,6 +105,20 @@ def search(
         "in_id": resp.get("returnDepartureSearchId"),
         "passenger_token": resp.get("passengerListId") or tp_token_id,
     }
+
+
+def poll_departures(client: SJClient, access_token: str, search_id: str) -> list[dict]:
+    """Poll a departure search until departures appear, up to 5 tries 1s apart."""
+    for attempt in range(5):
+        if attempt:
+            time.sleep(1.0)
+        results = client.get_search_results(access_token, search_id)
+        travels = results.get("travels") or []
+        if travels:
+            departures = travels[0].get("departures") or []
+            if departures:
+                return departures
+    return []
 
 
 def _departure_time(departure: dict) -> str:
@@ -604,7 +619,8 @@ def poll_and_select(
     """
     Poll for search results and select the best departure.
 
-    Polls up to 5 times, 1 second apart, until departures appear.
+    Polls via poll_departures, then picks the best departure
+    (select_best_departure).
     """
     departures = poll_departures(client, access_token, search_id)
     if not departures:
@@ -1432,9 +1448,9 @@ def _search_and_book_one_way(
         to_station,
         date_str,
         None,
-        tp_product_id,
-        tp_token_id,
-        service_types,
+        tp_product_id=tp_product_id,
+        tp_token_id=tp_token_id,
+        service_types=service_types,
     )
     passenger_token = found["passenger_token"]
     search_id = found["out_id"]
@@ -1535,9 +1551,9 @@ def process_booking_flow(
             dest_name,
             date_str,
             date_str,
-            tp_product_id,
-            tp_token_id,
-            service_types,
+            tp_product_id=tp_product_id,
+            tp_token_id=tp_token_id,
+            service_types=service_types,
         )
         passenger_token = found["passenger_token"]
         out_id, in_id = found["out_id"], found["in_id"]
@@ -2599,20 +2615,6 @@ def _class_has_seats(offer_response: dict, class_code: str) -> bool:
     return any(flex.get("available") for flex in flexibilities.values())
 
 
-def poll_departures(client: SJClient, access_token: str, search_id: str) -> list[dict]:
-    """Poll a departure search until departures appear, up to 5 tries 1s apart."""
-    for attempt in range(5):
-        if attempt:
-            time.sleep(1.0)
-        results = client.get_search_results(access_token, search_id)
-        travels = results.get("travels") or []
-        if travels:
-            departures = travels[0].get("departures") or []
-            if departures:
-                return departures
-    return []
-
-
 def _probe_upgrade(
     client: SJClient,
     access_token: str,
@@ -2643,7 +2645,15 @@ def _probe_upgrade(
     # Deliberately no travel pass id: see the module note on why this is
     # the one search that must go without it.
     found = search(
-        client, access_token, dep_name, arr_name, date_str, None, None, "", service_types
+        client,
+        access_token,
+        dep_name,
+        arr_name,
+        date_str,
+        None,
+        tp_product_id=None,
+        tp_token_id="",
+        service_types=service_types,
     )
     search_id = found["out_id"]
     if not search_id:
@@ -2773,9 +2783,9 @@ def _rebook_released_leg(
             arr_name,
             date_str,
             None,
-            tp_product_id,
-            tp_token_id,
-            service_types,
+            tp_product_id=tp_product_id,
+            tp_token_id=tp_token_id,
+            service_types=service_types,
         )
         search_id = found["out_id"]
         passenger_token = found["passenger_token"]
