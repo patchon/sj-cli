@@ -796,25 +796,32 @@ def test_book_journey_is_a_mode_flag_with_dry_run_as_modifier():
         parse_args(["--book-journey", "--seat-details"])
 
 
-@pytest.mark.parametrize(("ok", "code"), [(True, None), (False, 1)])
-def test_book_journey_exit_code_follows_the_outcome(tmp_path, monkeypatch, capsys, ok, code):
+@pytest.mark.parametrize("dry_run", [True, False])
+@pytest.mark.parametrize("ok", [True, False])
+def test_book_journey_exit_code_follows_the_outcome(tmp_path, monkeypatch, capsys, ok, dry_run):
     cli = _logged_in_with_config(tmp_path, monkeypatch)
     seen = {}
 
     def fake_handle(client, token, cfg, active_pass, tp_product_id, tp_token_id, dry_run=False):
-        seen.update(pass_name=active_pass["name"], tp=tp_product_id, dry_run=dry_run)
+        seen.update(
+            pass_name=active_pass["name"],
+            tp=tp_product_id,
+            tp_token_id=tp_token_id,
+            dry_run=dry_run,
+        )
         return ok
 
     monkeypatch.setattr(cli, "handle_book_journey", fake_handle)
-    if code is None:
-        cli._run(parse_args(["--book-journey", "--dry-run"]), _StubClient())
+    argv = ["--book-journey", "--dry-run"] if dry_run else ["--book-journey"]
+    if ok:
+        cli._run(parse_args(argv), _StubClient())
     else:
         with pytest.raises(SystemExit) as exc:
-            cli._run(parse_args(["--book-journey"]), _StubClient())
-        assert exc.value.code == code
-    assert seen == {"pass_name": "Pass", "tp": "TP", "dry_run": code is None}
+            cli._run(parse_args(argv), _StubClient())
+        assert exc.value.code == 1
+    assert seen == {"pass_name": "Pass", "tp": "TP", "tp_token_id": "TP", "dry_run": dry_run}
     out = capsys.readouterr().out
-    assert ("dry run · booking a journey" in out) is (code is None)
+    assert ("dry run · booking a journey" in out) is dry_run
     assert "booking a journey" in out
 
 
@@ -837,3 +844,15 @@ def test_book_journey_needs_search_parameters_but_not_dates(tmp_path, monkeypatc
     )
     monkeypatch.setattr(cli, "handle_book_journey", lambda *_a, **_k: True)
     cli._run(parse_args(["--book-journey"]), _StubClient())  # no SystemExit: dates not required
+
+    # An invalid dates value is ignored too: _validate_dates only runs under
+    # require_dates, same as --cancel-date.
+    lines = [
+        'dates = "not-a-date"' if "dates" in line else line
+        for line in (tmp_path / "config.toml").read_text().splitlines()
+    ]
+    (tmp_path / "config.toml").write_text("\n".join(lines) + "\n")
+    seen = {}
+    monkeypatch.setattr(cli, "handle_book_journey", lambda *_a, **_k: seen.setdefault("ran", True))
+    cli._run(parse_args(["--book-journey"]), _StubClient())  # no SystemExit: dates not validated
+    assert seen == {"ran": True}
