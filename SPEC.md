@@ -417,7 +417,7 @@ tue 15 sep 2026   Göteborg Central → Stockholm Central
   X 2000 520 · ERU0HWB2 · holds 2 class
     ✓ releasing this journey from booking ERU0HWB2
     ✓ searching the same departure with the travel pass
-    ✓ checking the travel pass offer
+    ✓ checking offers for the same departure at 06:59
     ✓ booking 2 class calm
     ✓ checking out booking ZSVV7EML
     upgraded to 2 class calm · new booking ZSVV7EML

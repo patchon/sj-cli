@@ -129,6 +129,30 @@ def _departure_time(departure: dict) -> str:
         return "—"
 
 
+def _get_arrival_time(departure: dict) -> str:
+    """Extract arrival time string from a departure dict."""
+    try:
+        arr_dt = departure.get("arrivalDateTime", "")
+        return arr_dt.split("T")[1][:5]
+    except (IndexError, AttributeError):
+        return "—"
+
+
+def _train_name(node: dict) -> str:
+    """
+    Brand + public number of a search leg or a booked segment ("X 2000 520").
+
+    The serviceType name stands in for a null brand — half the departures on
+    an unfiltered search have one. Empty when the node names no train at all;
+    the callers decide what to show instead.
+    """
+    brand = node.get("serviceBrandNameDescription") or (
+        (node.get("serviceType") or {}).get("name") or ""
+    )
+    number = node.get("publicServiceName") or node.get("serviceName") or ""
+    return " ".join(part for part in (brand, number) if part)
+
+
 class DepartureFacts(TypedDict):
     """What describe_departure says about a departure (see there)."""
 
@@ -152,17 +176,14 @@ def describe_departure(dep: dict, route: str) -> DepartureFacts:
     "A → B".
     """
     legs = dep.get("legs") or [{}]
-    first = legs[0]
-    brand = first.get("serviceBrandNameDescription") or (
-        (first.get("serviceType") or {}).get("name") or ""
-    )
-    number = first.get("publicServiceName") or first.get("serviceName") or ""
-    train = " ".join(x for x in (brand, number) if x)
+    train = _train_name(legs[0])
     changes = dep.get("numberOfChanges")
     if changes is None:
         changes = max(len(legs) - 1, 0)
-    if changes:
-        train = f"{train} · {changes} change{'' if changes == 1 else 's'}"
+    # Joined rather than appended: a departure that names no train must not
+    # come out as " · 1 change", which would lead with the separator.
+    changes_label = f"{changes} change{'' if changes == 1 else 's'}" if changes else ""
+    train = " · ".join(part for part in (train, changes_label) if part)
     return {
         "departure": _departure_time(dep),
         "arrival": _get_arrival_time(dep),
@@ -202,11 +223,14 @@ def resolve_offer(
     Returns:
         The Leg (describe_departure facts + comfort_class + offer_id,
         alternative False), or None when the pass has no 0-price offer on
-        this departure at all.
+        this departure at all — or when the departure carries no id, which
+        is never worth an offers request.
 
     """
+    departure_id = dep.get("departureId")
+    if not departure_id:
+        return None
     facts = describe_departure(dep, route)
-    departure_id: Any = dep.get("departureId")
     with spinner(f"checking offers for {label} at {facts['departure']}"):
         response = client.get_offers(access_token, departure_id, passenger_token)
     found = find_offer_id(
@@ -218,6 +242,8 @@ def resolve_offer(
     if not found:
         return None
     offer_id, matched_class = found
+    # Listed field by field: mypy rejects ** into a TypedDict, so a new
+    # DepartureFacts key must be added here too.
     return Leg(
         departure=facts["departure"],
         arrival=facts["arrival"],
@@ -286,11 +312,7 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
     arr_station = (segment.get("arrivalStation") or {}).get("name") or "—"
 
     # Train: brand + public service number, e.g. "X 2000 537"
-    brand = segment.get("serviceBrandNameDescription") or (
-        (segment.get("serviceType") or {}).get("name") or ""
-    )
-    number = segment.get("publicServiceName") or segment.get("serviceName") or ""
-    train = " ".join(part for part in (brand, number) if part) or "—"
+    train = _train_name(segment) or "—"
 
     # Seat: carriage + seat number from the first required product
     seat = "—"
@@ -3460,12 +3482,3 @@ def handle_list_bookings(
     display_rows.sort(key=lambda r: r.pop("_sort_key", ""))
 
     print_bookings_table(display_rows)
-
-
-def _get_arrival_time(departure: dict) -> str:
-    """Extract arrival time string from a departure dict."""
-    try:
-        arr_dt = departure.get("arrivalDateTime", "")
-        return arr_dt.split("T")[1][:5]
-    except (IndexError, AttributeError):
-        return "—"

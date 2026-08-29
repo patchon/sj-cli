@@ -102,6 +102,23 @@ def test_outbound_no_offer_uses_closest_earlier_alternative(capsys):
     out = capsys.readouterr().out
     assert "! no valid offer for outbound at 06:59, trying closest alternative" in out
     assert "found offer at alternative departure 06:30" in out
+    # The alternative flag reaches the provisional, not just the message above.
+    assert "creating booking with alternative outbound at 06:30" in out
+
+
+def test_outbound_alternative_falls_back_a_class(capsys):
+    # The alternative path has its own class-chain step: o-early sells no calm
+    # seat at 0, so the leg lands on 2 class and says so.
+    c = FakeClient(
+        {"OUT": OUT, "IN": IN},
+        {"o-best": NO_OFFER, "o-early": offers(calm_price=295, second_price=0)},
+    )
+    result = flow(c)
+    assert result["legs"] == ["outbound", "return"]
+    assert ("create", "OFF-second") in c.calls
+    out = capsys.readouterr().out
+    assert "found offer at alternative departure 06:30" in out
+    assert "class fallback: 2 class calm → 2 class" in out
 
 
 def test_outbound_no_offer_no_earlier_alternative_books_nothing(capsys):
