@@ -18,7 +18,15 @@ def dep(dep_id: str, date: str, dep_time: str, arr_time: str, props=("COMFORT-B"
     }
 
 
-def offers(*, calm_price=0, second_price=0, first_price=None, flex="FULLFLEX", available=True):
+def offers(
+    *,
+    calm_price=0,
+    second_price=0,
+    first_price=None,
+    flex="FULLFLEX",
+    available=True,
+    conflicts=(),
+):
     """Build a minimal offers response. Prices None = class absent."""
 
     def entry(offer_id, price):
@@ -39,7 +47,10 @@ def offers(*, calm_price=0, second_price=0, first_price=None, flex="FULLFLEX", a
         out["SECOND_CALM"] = entry("OFF-calm", calm_price)
     if first_price is not None:
         out["FIRST"] = entry("OFF-first", first_price)
-    return {"seatOffers": {"offers": out}}
+    return {
+        "seatOffers": {"offers": out},
+        "bookingsInConflictForDoubleBooking": [{"bookingNumber": n} for n in conflicts],
+    }
 
 
 def seatmap(

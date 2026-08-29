@@ -2,7 +2,14 @@
 
 import pytest
 
-from sj_cli.booking import Cart, describe_departure, poll_departures, resolve_offer, search
+from sj_cli.booking import (
+    Cart,
+    describe_departure,
+    offer_conflicts,
+    poll_departures,
+    resolve_offer,
+    search,
+)
 from sj_cli.errors import SJAPIError, SJError
 from tests.fakes import FakeClient, base_cfg, dep, offers, seatmap
 
@@ -382,3 +389,19 @@ def test_cart_names_a_failed_customer_patch_and_never_checks_out(capsys):
     assert result["checked_out"] is False
     assert ("checkout", "UUID-1") not in c.calls
     assert " ! customer details failed: customer exploded\n" in capsys.readouterr().out
+
+
+def test_offer_conflicts_reads_every_shape_defensively():
+    assert offer_conflicts({}) == []
+    assert offer_conflicts({"bookingsInConflictForDoubleBooking": None}) == []
+    assert offer_conflicts(
+        {
+            "bookingsInConflictForDoubleBooking": [
+                {"bookingNumber": "A1"},
+                {"bookingId": "uuid-2"},
+                "B3",
+                {"other": 1},
+                7,
+            ]
+        }
+    ) == ["A1", "uuid-2", "B3"]

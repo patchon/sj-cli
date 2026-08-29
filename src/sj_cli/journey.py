@@ -2,8 +2,9 @@
 
 import logging
 import sys
-from datetime import date
-from typing import Any
+from collections.abc import Sequence
+from datetime import date, datetime
+from typing import Any, NamedTuple
 
 from sj_cli.booking import (
     Cart,
@@ -132,12 +133,106 @@ def _default_station(index: StationIndex, client: SJClient, name: str) -> Statio
 # --- the lists --------------------------------------------------------------------
 
 
-def _departure_rows(departures: list[dict], route: str, params: dict) -> list[dict[str, Any]]:
+class _Held(NamedTuple):
+    """A booked segment on one of the chosen dates (Swedish wall clock)."""
+
+    number: str
+    day: str
+    origin: str
+    dest: str
+    dep: datetime
+    arr: datetime | None
+
+
+def _held_segments(
+    client: SJClient, access_token: str, active_pass: dict, dates: set[str]
+) -> list[_Held]:
+    """The account's active booked segments on `dates`; a failed fetch is only a note."""
+    try:
+        with spinner("fetching existing bookings", trail=False):
+            items = fetch_all_bookings(client, access_token, *booking_date_range(active_pass))
+    except Exception as e:
+        logger.error(f"could not check existing bookings: {e}")
+        pwarn(f"could not check existing bookings: {error_text(e)}")
+        return []
+    held: list[_Held] = []
+    for item in items:
+        booking = item.get("booking") or {}
+        if not is_active_booking(booking):
+            continue
+        number = booking.get("bookingNumber") or "—"
+        for journey in booking.get("journeys") or []:
+            for seg in journey.get("segments") or []:
+                try:
+                    dep = to_sweden(seg.get("departureDateTime") or "")
+                except (ValueError, TypeError):
+                    continue
+                day = dep.date().isoformat()
+                if day not in dates:
+                    continue
+                try:
+                    arr: datetime | None = to_sweden(seg.get("arrivalDateTime") or "")
+                except (ValueError, TypeError):
+                    arr = None
+                held.append(
+                    _Held(
+                        number=number,
+                        day=day,
+                        origin=(seg.get("departureStation") or {}).get("name") or "—",
+                        dest=(seg.get("arrivalStation") or {}).get("name") or "—",
+                        dep=dep,
+                        arr=arr,
+                    )
+                )
+    return held
+
+
+def _warn_held_bookings(held: list[_Held]) -> None:
+    """
+    Name every ticket the account holds on the chosen dates.
+
+    A pass search reports every class unavailable on a departure that
+    overlaps a held ticket, so the list will show "no seats" there: say why.
+    """
+    for h in held:
+        pwarn(
+            f"you hold booking {h.number} on {h.day} ({h.origin} → {h.dest} "
+            f"{h.dep.strftime('%H:%M')}) · departures overlapping it show no seats"
+        )
+
+
+def _overlap(departure: dict, held: Sequence[_Held]) -> _Held | None:
+    """
+    The first held segment whose window intersects this departure's, on its day.
+
+    Touching edges do not overlap; a held segment without an arrival counts
+    as its departure instant, which must fall inside the window.
+    """
+    try:
+        dep = to_sweden(departure.get("departureDateTime") or "")
+        arr = to_sweden(departure.get("arrivalDateTime") or "")
+    except (ValueError, TypeError):
+        return None
+    day = dep.date().isoformat()
+    for h in held:
+        if h.day != day:
+            continue
+        hit = dep <= h.dep < arr if h.arr is None else dep < h.arr and h.dep < arr
+        if hit:
+            return h
+    return None
+
+
+def _departure_rows(
+    departures: list[dict], route: str, params: dict, held: Sequence[_Held] = ()
+) -> list[dict[str, Any]]:
     """
     One pick-list row per departure: describe_departure plus the class column.
 
     class_ is the class the pass would get on it (the configured one, a
     fallback, or None = no seats); the row is disabled when there is none.
+    A row overlapping a held ticket says which one instead of "no seats",
+    and a class-less overlapping row is disabled with that booking's number.
     """
     wanted = params["comfort_class"]
     allow_fallback = params.get("allow_class_fallback", True)
@@ -151,6 +246,12 @@ def _departure_rows(departures: list[dict], route: str, params: dict) -> list[di
         row["note"] = "" if class_ == wanted else ("fallback" if class_ else "no seats")
         row["minutes"] = get_departure_time_minutes(dep)
         row["disabled"] = "" if class_ else f"no seats at {row['departure']} · pick another"
+        hit = _overlap(dep, held)
+        if hit is not None:
+            span = f"{hit.dep:%H:%M}–{hit.arr:%H:%M}" if hit.arr else f"{hit.dep:%H:%M}"
+            row["note"] = f"overlaps {hit.number} · {span}"
+            if class_ is None:
+                row["disabled"] = f"overlaps booking {hit.number} · pick another"
         rows.append(row)
     return rows
 
@@ -177,6 +278,7 @@ def _choose_leg(
     label: str,
     target_time: str,
     departed: int = 0,
+    held: Sequence[_Held] = (),
 ) -> Leg | None:
     """
     Let the user pick a departure and resolve its offer; None when they abort.
@@ -184,9 +286,11 @@ def _choose_leg(
     A pick without a 0-price offer is said, disabled, and the list opened
     again — the frame is redrawn, the day header is not repeated. `departed`
     is how many of the day's departures were already gone: said under the
-    day header, so a short list on a same-day run explains itself.
+    day header, so a short list on a same-day run explains itself. `held`
+    are the tickets the account already holds: a row overlapping one names
+    it, and is disabled when it has no class either.
     """
-    rows = _departure_rows(departures, route, params)
+    rows = _departure_rows(departures, route, params, held)
     for row, text in zip(rows, departure_choice_lines(rows), strict=True):
         row["text"] = text
     default = _closest_enabled(rows, target_time)
@@ -227,45 +331,6 @@ def _choose_leg(
         # Not rows.index(picked): highlighting the row just disabled would
         # make Enter a dead key on the re-opened list.
         default = _closest_enabled(rows, target_time)
-
-
-def _warn_held_bookings(
-    client: SJClient, access_token: str, active_pass: dict, dates: set[str]
-) -> None:
-    """
-    Name every ticket the account holds on the chosen dates.
-
-    A pass search reports every class unavailable on a departure that
-    overlaps a held ticket, so the list will show "no seats" there: say why.
-    A failed fetch is only a note — the wizard goes on.
-    """
-    try:
-        with spinner("fetching existing bookings", trail=False):
-            items = fetch_all_bookings(client, access_token, *booking_date_range(active_pass))
-    except Exception as e:
-        logger.error(f"could not check existing bookings: {e}")
-        pwarn(f"could not check existing bookings: {error_text(e)}")
-        return
-    for item in items:
-        booking = item.get("booking") or {}
-        if not is_active_booking(booking):
-            continue
-        number = booking.get("bookingNumber") or "—"
-        for journey in booking.get("journeys") or []:
-            for seg in journey.get("segments") or []:
-                try:
-                    local = to_sweden(seg.get("departureDateTime") or "")
-                except (ValueError, TypeError):
-                    continue
-                day = local.date().isoformat()
-                if day not in dates:
-                    continue
-                origin = (seg.get("departureStation") or {}).get("name") or "—"
-                dest = (seg.get("arrivalStation") or {}).get("name") or "—"
-                pwarn(
-                    f"you hold booking {number} on {day} ({origin} → {dest} "
-                    f"{local.strftime('%H:%M')}) · departures overlapping it show no seats"
-                )
 
 
 # --- the cards ----------------------------------------------------------------------
@@ -413,9 +478,10 @@ def handle_book_journey(
         when = "today" if return_str == today_str else f"on {return_str}"
         pstatus(False, f"no departures {why} for {in_route} {when}")
         return False
-    _warn_held_bookings(
+    held = _held_segments(
         client, access_token, active_pass, {date_str, *([return_str] if return_str else [])}
     )
+    _warn_held_bookings(held)
 
     # The picks
     passenger_token = found["passenger_token"]
@@ -430,6 +496,7 @@ def handle_book_journey(
         "outbound",
         params["time_leave"],
         departed=out_gone,
+        held=held,
     )
     if outbound is None:
         return _aborted()
@@ -446,6 +513,7 @@ def handle_book_journey(
             "return",
             params.get("time_return", "17:00"),
             departed=in_gone,
+            held=held,
         )
         if inbound is None:
             return _aborted()
