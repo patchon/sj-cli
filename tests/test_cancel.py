@@ -263,7 +263,8 @@ def test_cancel_date_only_cancels_the_journeys_on_that_date(monkeypatch, capsys)
     asked = []
 
     def _reply(text):
-        return asked.append(text) or "y"
+        asked.append(text)
+        return "y"
 
     monkeypatch.setattr(booking, "ask", _reply)
     monkeypatch.setattr(output, "ask", _reply)

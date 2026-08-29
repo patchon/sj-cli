@@ -301,7 +301,7 @@ def pass_validity(travel_pass: dict) -> tuple[date | None, date | None]:
     return day("startTravelValidityDateTime", False), day("endTravelValidityDateTime", True)
 
 
-def is_expired(travel_pass: dict) -> bool:
+def is_expired_pass(travel_pass: dict) -> bool:
     """True if the pass's validity end lies in the past (unknown end = not expired)."""
     end = travel_pass.get("endTravelValidityDateTime")
     if not end:
@@ -312,7 +312,7 @@ def is_expired(travel_pass: dict) -> bool:
         return False
 
 
-def covers(travel_pass: dict, window: tuple[date, date]) -> bool:
+def pass_covers(travel_pass: dict, window: tuple[date, date]) -> bool:
     """True if the pass's known validity contains the whole window."""
     first, last = pass_validity(travel_pass)
     if first is None or last is None:
