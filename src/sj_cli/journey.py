@@ -1,11 +1,45 @@
 """The interactive journey mode (--book-journey): questions, pick lists, then the Cart."""
 
 import logging
+import sys
 from datetime import date
+from typing import Any
 
+from sj_cli.booking import (
+    Cart,
+    Leg,
+    booked_rows,
+    booking_date_range,
+    describe_departure,
+    fetch_all_bookings,
+    get_departure_time_minutes,
+    is_active_booking,
+    pass_validity,
+    poll_departures,
+    resolve_class_for_departure,
+    resolve_offer,
+    search,
+    time_str_to_minutes,
+)
 from sj_cli.client import SJClient
-from sj_cli.output import ask_optional, pwarn, select_filtered
-from sj_cli.stations import Station, StationIndex
+from sj_cli.dates import sweden_now, to_sweden
+from sj_cli.errors import error_text
+from sj_cli.output import (
+    ask_optional,
+    blank,
+    confirm,
+    departure_choice_lines,
+    group_route,
+    indented,
+    print_day_header,
+    print_leg_lines,
+    pstatus,
+    pwarn,
+    select_filtered,
+    select_list,
+    spinner,
+)
+from sj_cli.stations import Station, StationIndex, parse_stations
 
 logger = logging.getLogger(__name__)
 
@@ -89,3 +123,341 @@ def _default_station(index: StationIndex, client: SJClient, name: str) -> Statio
         return station
     # a name the live list lacks: the search resolves it, as --book does
     return {"name": name, "code": client.resolve_station(name), "synonyms": []}
+
+
+# --- the lists --------------------------------------------------------------------
+
+
+def _departure_rows(departures: list[dict], route: str, params: dict) -> list[dict[str, Any]]:
+    """
+    One pick-list row per departure: describe_departure plus the class column.
+
+    class_ is the class the pass would get on it (the configured one, a
+    fallback, or None = no seats); the row is disabled when there is none.
+    """
+    wanted = params["comfort_class"]
+    allow_fallback = params.get("allow_class_fallback", True)
+    rows: list[dict[str, Any]] = []
+    for dep in departures:
+        row: dict[str, Any] = dict(describe_departure(dep, route))
+        class_ = resolve_class_for_departure(dep, wanted, allow_fallback)
+        row["dep"] = dep
+        row["class_"] = class_
+        row["comfort_class"] = class_ or "—"
+        row["note"] = "" if class_ == wanted else ("fallback" if class_ else "no seats")
+        row["minutes"] = get_departure_time_minutes(dep)
+        row["disabled"] = "" if class_ else f"no seats at {row['departure']} · pick another"
+        rows.append(row)
+    return rows
+
+
+def _closest_enabled(rows: list[dict[str, Any]], hhmm: str) -> int:
+    """Index of the enabled row closest to hhmm (first row when none is enabled)."""
+    target = time_str_to_minutes(hhmm)
+    candidates = [
+        (abs(row["minutes"] - target), i)
+        for i, row in enumerate(rows)
+        if not row["disabled"] and row["minutes"] != -1
+    ]
+    return min(candidates)[1] if candidates else 0
+
+
+def _choose_leg(
+    client: SJClient,
+    access_token: str,
+    params: dict,
+    passenger_token: str,
+    departures: list[dict],
+    route: str,
+    date_str: str,
+    label: str,
+    target_time: str,
+) -> Leg | None:
+    """
+    Let the user pick a departure and resolve its offer; None when they abort.
+
+    A pick without a 0-price offer is said, disabled, and the list opened
+    again — the frame is redrawn, the day header is not repeated.
+    """
+    rows = _departure_rows(departures, route, params)
+    for row, text in zip(rows, departure_choice_lines(rows), strict=True):
+        row["text"] = text
+    default = _closest_enabled(rows, target_time)
+    print_day_header(date_str, route)
+    while True:
+        picked = select_list(
+            label,
+            rows,
+            lambda r: r["text"],
+            default_index=default,
+            reject=lambda r: r["disabled"] or None,
+        )
+        if picked is None:
+            return None
+        leg = resolve_offer(
+            client,
+            access_token,
+            params,
+            passenger_token,
+            picked["dep"],
+            route,
+            picked["class_"],
+            label,
+        )
+        if leg is not None:
+            if leg["comfort_class"] != picked["class_"]:
+                pwarn(f"{label} class fallback: {picked['class_']} → {leg['comfort_class']}")
+            return leg
+        complaint = f"no 0-price offer at {picked['departure']} · pick another"
+        pwarn(complaint)
+        picked["disabled"] = complaint
+        default = rows.index(picked)
+
+
+def _warn_held_bookings(
+    client: SJClient, access_token: str, active_pass: dict, dates: set[str]
+) -> None:
+    """
+    Name every ticket the account holds on the chosen dates.
+
+    A pass search reports every class unavailable on a departure that
+    overlaps a held ticket, so the list will show "no seats" there: say why.
+    A failed fetch is only a note — the wizard goes on.
+    """
+    try:
+        with spinner("fetching existing bookings", trail=False):
+            items = fetch_all_bookings(client, access_token, *booking_date_range(active_pass))
+    except Exception as e:
+        logger.error(f"could not check existing bookings: {e}")
+        pwarn(f"could not check existing bookings: {error_text(e)}")
+        return
+    for item in items:
+        booking = item.get("booking") or {}
+        if not is_active_booking(booking):
+            continue
+        number = booking.get("bookingNumber") or "—"
+        for journey in booking.get("journeys") or []:
+            for seg in journey.get("segments") or []:
+                try:
+                    local = to_sweden(seg.get("departureDateTime") or "")
+                except (ValueError, TypeError):
+                    continue
+                day = local.date().isoformat()
+                if day not in dates:
+                    continue
+                origin = (seg.get("departureStation") or {}).get("name") or "—"
+                dest = (seg.get("arrivalStation") or {}).get("name") or "—"
+                pwarn(
+                    f"you hold booking {number} on {day} ({origin} → {dest} "
+                    f"{local.strftime('%H:%M')}) · departures overlapping it show no seats"
+                )
+
+
+# --- the cards ----------------------------------------------------------------------
+
+
+def _summary_rows(chosen: list[tuple[str, str, Leg]], flexibility: str) -> list[dict]:
+    """Card rows for the picked legs: (direction, date, leg) → the leg_lines shape."""
+    return [
+        {
+            "date": day,
+            "direction": direction,
+            "departure": leg["departure"],
+            "arrival": leg["arrival"],
+            "duration": leg["duration"],
+            "train": leg["train"],
+            "route": leg["route"],
+            "comfort_class": leg["comfort_class"],
+            "flexibility": flexibility,
+            "note": "",
+            "has_offer": True,
+        }
+        for direction, day, leg in chosen
+    ]
+
+
+def _print_cards(rows: list[dict]) -> None:
+    """One day card per date in the rows, in date order."""
+    days: dict[str, list[dict]] = {}
+    for row in rows:
+        days.setdefault(row.get("date") or "—", []).append(row)
+    for day in sorted(days):
+        print_day_header(day, group_route(days[day]))
+        with indented():
+            print_leg_lines(days[day])
+
+
+def _aborted() -> bool:
+    pstatus(False, "booking aborted, nothing was booked")
+    return False
+
+
+# --- the mode -----------------------------------------------------------------------
+
+
+def handle_book_journey(
+    client: SJClient,
+    access_token: str,
+    cfg: dict,
+    active_pass: dict,
+    tp_product_id: str,
+    tp_token_id: str,
+    dry_run: bool = False,
+) -> bool:
+    """
+    Book one journey interactively: questions, pick lists, one confirmation, the Cart.
+
+    Needs a terminal on both ends (the pick lists draw). Everything not
+    typed comes from config: the date defaults to today, the stations to
+    station_from/station_to, the return question to roundtrip, the
+    highlighted row to the departure closest to time_leave/time_return.
+    Class, flexibility, service types and seat preference apply as in
+    --book. A dry run stops after the summary and writes nothing.
+
+    Returns:
+        True when a booking was checked out (or a dry run completed); False
+        when refused, aborted, declined, nothing was found, or the checkout
+        failed (the provisional is left for the next --book run's cleanup).
+
+    """
+    params = cfg["search_parameters"]
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        pstatus(False, "not a terminal · --book-journey asks questions")
+        return False
+
+    try:
+        with spinner("fetching stations", trail=False):
+            index = StationIndex(parse_stations(client.get_stations()))
+    except Exception as e:
+        logger.error(f"station list: {e}")
+        pstatus(False, f"could not fetch the station list: {error_text(e)}")
+        return False
+
+    # The questions
+    today = sweden_now().date()
+    valid = pass_validity(active_pass)
+    day = _ask_date("date", today, today, "date is in the past", valid)
+    if day is None:
+        return _aborted()
+    from_default = _default_station(index, client, params["station_from"])
+    origin = _ask_station("from", from_default, index, None)
+    if origin is None:
+        return _aborted()
+    dest = _ask_station("to", _default_station(index, client, params["station_to"]), index, origin)
+    if dest is None:
+        return _aborted()
+    wants_return = _ask_yes_no("return?", bool(params.get("roundtrip", False)))
+    if wants_return is None:
+        return _aborted()
+    return_day = None
+    if wants_return:
+        return_day = _ask_date(
+            "return date", day, day, "return date is before the outbound date", valid
+        )
+        if return_day is None:
+            return _aborted()
+    blank()
+
+    # The search
+    date_str = day.isoformat()
+    return_str = return_day.isoformat() if return_day else None
+    out_route = f"{origin['name']} → {dest['name']}"
+    in_route = f"{dest['name']} → {origin['name']}"
+    with spinner(f"searching {out_route} on {date_str}"):
+        found = search(
+            client,
+            access_token,
+            origin["code"],
+            dest["code"],
+            date_str,
+            return_str,
+            tp_product_id=tp_product_id,
+            tp_token_id=tp_token_id,
+            service_types=params.get("service_types"),
+        )
+        out_deps = poll_departures(client, access_token, found["out_id"]) if found["out_id"] else []
+        in_deps = (
+            poll_departures(client, access_token, found["in_id"])
+            if return_str and found["in_id"]
+            else []
+        )
+    if not out_deps:
+        pstatus(False, f"no departures found for {out_route} on {date_str}")
+        return False
+    if return_str and not in_deps:
+        pstatus(False, f"no departures found for {in_route} on {return_str}")
+        return False
+    _warn_held_bookings(
+        client, access_token, active_pass, {date_str, *([return_str] if return_str else [])}
+    )
+
+    # The picks
+    passenger_token = found["passenger_token"]
+    outbound = _choose_leg(
+        client,
+        access_token,
+        params,
+        passenger_token,
+        out_deps,
+        out_route,
+        date_str,
+        "outbound",
+        params["time_leave"],
+    )
+    if outbound is None:
+        return _aborted()
+    inbound = None
+    if return_str:
+        inbound = _choose_leg(
+            client,
+            access_token,
+            params,
+            passenger_token,
+            in_deps,
+            in_route,
+            return_str,
+            "return",
+            params.get("time_return", "17:00"),
+        )
+        if inbound is None:
+            return _aborted()
+
+    # The summary and the consent
+    blank()
+    chosen = [("Outbound", date_str, outbound)]
+    if inbound is not None and return_str:
+        chosen.append(("Return", return_str, inbound))
+    _print_cards(_summary_rows(chosen, params.get("flexibility", "FULLFLEX")))
+    blank()
+    if dry_run:
+        pstatus(None, "dry run · nothing booked")
+        return True
+    if not confirm("book? [y/N]: "):
+        return _aborted()
+
+    # The write
+    cart = Cart(client, access_token, cfg, passenger_token)
+    cart.add(outbound, "outbound")
+    if inbound is not None:
+        try:
+            cart.add(inbound, "return")
+        except Exception as e:
+            # SPEC §8.2: the outbound is held — keep it rather than lose both.
+            logger.error(f"return leg failed: {e}")
+            pwarn(f"return leg failed ({error_text(e)}), booking outbound only")
+    result = cart.finish()
+    number = result["booking_number"] or result["booking_id"]
+    try:
+        _print_cards(booked_rows(result["booking"], result["booking_number"]))
+    except Exception as e:  # a rendering slip must not hide a booked ticket
+        logger.error(f"could not render booking {number}: {e}")
+        pwarn(f"booked as {number}, but the legs could not be shown ({error_text(e)})")
+    blank()
+    if not result["checked_out"]:
+        pstatus(
+            False,
+            f"booking {number} not checked out · provisional left (cleaned up on next --book run)",
+        )
+        return False
+    pstatus(True, f"booked {number}")
+    return True

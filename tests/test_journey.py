@@ -1,5 +1,6 @@
 """--book-journey: the prompts, the pick lists and the write path through the Cart."""
 
+import re
 from datetime import timedelta
 
 import pytest
@@ -7,23 +8,55 @@ import pytest
 from sj_cli import journey
 from sj_cli.dates import sweden_now
 from sj_cli.stations import StationIndex, parse_stations
-from tests.fakes import FakeClient
+from tests.fakes import FakeClient, base_cfg, dep, offers
 
-TODAY = sweden_now().date()
+NOW = sweden_now()
+TODAY = NOW.date()
 FUTURE = TODAY + timedelta(days=30)
 VALID = (TODAY - timedelta(days=10), TODAY + timedelta(days=300))
 
 
-class Answers:
-    """Scripted replies for ask_optional; records the prompts it was asked."""
+class Script:
+    """
+    Answers the wizard's prompts in order.
+
+    Text prompts (ask_optional, confirm) take strings/bools/None; a station
+    pick takes "" (default), a query string (first match) or None (abort);
+    a departure pick takes "" (default row), an int row index or None.
+    """
 
     def __init__(self, *replies):
         self.replies = list(replies)
-        self.asked = []
+        self.prompts = []
+        self.lists = []  # (prompt, rendered rows, default_index, rejected rows)
 
-    def __call__(self, text):
-        self.asked.append(text)
+    def _next(self, prompt):
+        self.prompts.append(prompt)
         return self.replies.pop(0)
+
+    def ask_optional(self, text):
+        return self._next(text)
+
+    def confirm(self, question):
+        return self._next(question)
+
+    def select_filtered(self, prompt, default, search, render, **_kw):
+        reply = self._next(prompt)
+        if reply is None:
+            return None
+        if reply == "":
+            return default
+        hits = search(reply)
+        return hits[0] if hits else None
+
+    def select_list(self, prompt, items, render, default_index=0, reject=None, **_kw):
+        rows = [render(i) for i in items]
+        rejected = [reject(i) for i in items if reject and reject(i)]  # the complaints
+        self.lists.append((prompt, rows, default_index, rejected))
+        reply = self._next(prompt)
+        if reply is None:
+            return None
+        return items[default_index] if reply == "" else items[reply]
 
 
 def index():
@@ -34,20 +67,20 @@ def index():
 
 
 def test_ask_date_enter_keeps_the_default(monkeypatch):
-    answers = Answers("")
-    monkeypatch.setattr(journey, "ask_optional", answers)
+    s = Script("")
+    monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
     assert journey._ask_date("date", TODAY, TODAY, "date is in the past", VALID) == TODAY
-    assert answers.asked == [f"date [{TODAY.isoformat()}]: "]
+    assert s.prompts == [f"date [{TODAY.isoformat()}]: "]
 
 
 def test_ask_date_reasks_on_garbage_past_and_outside_the_pass(monkeypatch, capsys):
-    answers = Answers(
+    s = Script(
         "soon",
         (TODAY - timedelta(days=1)).isoformat(),
         (TODAY + timedelta(days=400)).isoformat(),
         FUTURE.isoformat(),
     )
-    monkeypatch.setattr(journey, "ask_optional", answers)
+    monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
     assert journey._ask_date("date", TODAY, TODAY, "date is in the past", VALID) == FUTURE
     out = capsys.readouterr().out
     assert " ! not a date, use YYYY-MM-DD\n" in out
@@ -56,8 +89,8 @@ def test_ask_date_reasks_on_garbage_past_and_outside_the_pass(monkeypatch, capsy
 
 
 def test_ask_date_uses_the_callers_too_early_text_and_skips_unknown_bounds(monkeypatch, capsys):
-    answers = Answers((FUTURE - timedelta(days=1)).isoformat(), FUTURE.isoformat())
-    monkeypatch.setattr(journey, "ask_optional", answers)
+    s = Script((FUTURE - timedelta(days=1)).isoformat(), FUTURE.isoformat())
+    monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
     assert (
         journey._ask_date(
             "return date", FUTURE, FUTURE, "return date is before the outbound date", (None, None)
@@ -68,28 +101,28 @@ def test_ask_date_uses_the_callers_too_early_text_and_skips_unknown_bounds(monke
 
 
 def test_ask_date_ctrl_d_is_none(monkeypatch):
-    monkeypatch.setattr(journey, "ask_optional", Answers(None))
+    monkeypatch.setattr(journey, "ask_optional", Script(None).ask_optional)
     assert journey._ask_date("date", TODAY, TODAY, "x", VALID) is None
 
 
 def test_ask_date_default_is_clamped_to_the_pass_start(monkeypatch):
     valid = (TODAY + timedelta(days=5), TODAY + timedelta(days=300))
-    answers = Answers("")
-    monkeypatch.setattr(journey, "ask_optional", answers)
+    s = Script("")
+    monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
     assert journey._ask_date("date", TODAY, TODAY, "date is in the past", valid) == valid[0]
-    assert answers.asked == [f"date [{valid[0].isoformat()}]: "]
+    assert s.prompts == [f"date [{valid[0].isoformat()}]: "]
 
 
 def test_ask_date_whitespace_reply_keeps_the_default(monkeypatch):
-    answers = Answers("   ")
-    monkeypatch.setattr(journey, "ask_optional", answers)
+    s = Script("   ")
+    monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
     assert journey._ask_date("date", TODAY, TODAY, "date is in the past", VALID) == TODAY
 
 
 def test_ask_date_accepts_both_pass_boundary_days(monkeypatch, capsys):
     valid = (TODAY, TODAY + timedelta(days=10))
-    answers = Answers(valid[0].isoformat(), valid[1].isoformat())
-    monkeypatch.setattr(journey, "ask_optional", answers)
+    s = Script(valid[0].isoformat(), valid[1].isoformat())
+    monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
     assert journey._ask_date("date", TODAY, TODAY, "date is in the past", valid) == valid[0]
     assert journey._ask_date("date", TODAY, TODAY, "date is in the past", valid) == valid[1]
     assert " ! " not in capsys.readouterr().out
@@ -139,14 +172,14 @@ def test_ask_station_abort_is_none(monkeypatch):
     ],
 )
 def test_ask_yes_no(monkeypatch, default, reply, expected, shown):
-    answers = Answers(reply)
-    monkeypatch.setattr(journey, "ask_optional", answers)
+    s = Script(reply)
+    monkeypatch.setattr(journey, "ask_optional", s.ask_optional)
     assert journey._ask_yes_no("return?", default) is expected
-    assert answers.asked == [f"return? {shown}: "]
+    assert s.prompts == [f"return? {shown}: "]
 
 
 def test_ask_yes_no_whitespace_reply_keeps_the_default(monkeypatch):
-    monkeypatch.setattr(journey, "ask_optional", Answers("   "))
+    monkeypatch.setattr(journey, "ask_optional", Script("   ").ask_optional)
     assert journey._ask_yes_no("return?", True) is True
 
 
@@ -158,3 +191,280 @@ def test_default_station_prefers_the_live_list_then_the_map():
         "code": "Linköping Central",
         "synonyms": [],
     }
+
+
+# --- the flow -------------------------------------------------------------------
+
+D = FUTURE.isoformat()
+D2 = (FUTURE + timedelta(days=1)).isoformat()
+OUT = [
+    dep("o-early", D, "06:30", "08:10"),
+    dep("o-best", D, "06:59", "11:36"),
+    dep("o-late", D, "07:30", "09:10"),
+]
+IN = [
+    dep("i-early", D, "16:50", "18:30"),
+    dep("i-best", D, "17:22", "21:53"),
+    dep("i-late", D, "18:00", "19:40"),
+]
+NO_CLASS = dep("o-bus", D, "07:00", "09:30", props=())
+NO_OFFER = offers(calm_price=295, second_price=195)
+PASS = {
+    "name": "Pass",
+    "travelPassId": "TP",
+    "startTravelValidityDateTime": (sweden_now() - timedelta(days=10)).isoformat(),
+    "endTravelValidityDateTime": (sweden_now() + timedelta(days=300)).isoformat(),
+}
+WRITES = {"create", "add", "seats", "customer", "checkout"}
+
+
+def wire(monkeypatch, script, tty=True):
+    for name in ("ask_optional", "confirm", "select_filtered", "select_list"):
+        monkeypatch.setattr(journey, name, getattr(script, name))
+    monkeypatch.setattr(journey, "sweden_now", lambda: NOW)
+    monkeypatch.setattr(journey.sys.stdin, "isatty", lambda: tty)
+    monkeypatch.setattr(journey.sys.stdout, "isatty", lambda: tty)
+
+
+def run(client, script, cfg=None, dry_run=False):
+    return journey.handle_book_journey(
+        client, "tok", cfg or base_cfg(), PASS, "TP", "TOK", dry_run=dry_run
+    )
+
+
+def test_roundtrip_with_every_default_reproduces_the_commute(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    s = Script(
+        "", "", "", "", "", "", "", True
+    )  # date, from, to, return?, return date, outbound, return, book?
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    assert c.calls == [
+        ("stations",),
+        ("search", "740000002", "740000001", TODAY.isoformat(), TODAY.isoformat()),
+        ("results", "OUT"),
+        ("results", "IN"),
+        ("bookings", TODAY.isoformat(), c.calls[4][2]),
+        ("offers", "o-best"),
+        ("offers", "i-best"),
+        ("create", "OFF-calm"),
+        ("add", "UUID-1", "OFF-calm"),
+        ("customer", "UUID-1"),
+        ("checkout", "UUID-1"),
+    ]
+    assert s.prompts == [
+        f"date [{TODAY.isoformat()}]: ",
+        "from",
+        "to",
+        "return? [Y/n]: ",
+        f"return date [{TODAY.isoformat()}]: ",
+        "outbound",
+        "return",
+        "book? [y/N]: ",
+    ]
+    assert s.lists[0][2] == 1 and s.lists[1][2] == 1  # closest to 06:59 / 17:22
+    out = capsys.readouterr().out
+    assert "✓ checking offers for outbound at 06:59" in out
+    assert "✓ creating booking with outbound at 06:59" in out
+    assert "✓ adding return leg at 17:22" in out
+    assert "NUM1" in out
+    assert out.rstrip().endswith(" ● booked NUM1")
+
+
+def test_one_way_on_another_route_and_date(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT})
+    s = Script(D, "", "upp", "n", 0, True)
+    wire(monkeypatch, s)
+    assert run(c, s, base_cfg(roundtrip=False)) is True
+    assert c.calls[1] == ("search", "740000002", "740000005", D, None)
+    assert [call[0] for call in c.calls[2:]] == [
+        "results",
+        "bookings",
+        "offers",
+        "create",
+        "customer",
+        "checkout",
+    ]
+    assert s.prompts[3] == "return? [y/N]: "
+    assert "Göteborg Central → Uppsala Central" in capsys.readouterr().out
+
+
+def test_lists_show_class_fallback_and_no_seats_and_reject_the_latter(monkeypatch):
+    c = FakeClient(
+        {"OUT": [OUT[0], NO_CLASS, dep("o-second", D, "08:00", "09:40", props=("COMFORT-B",))]}
+    )
+    s = Script("", "", "", "n", 2, True)
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    _, rows, default_index, rejected = s.lists[0]
+    assert rows[0].endswith("2 class calm")
+    assert "—" in rows[1] and "no seats" in rows[1]
+    assert re.search(r"2 class\s+fallback$", rows[2])
+    assert rejected == ["no seats at 07:00 · pick another"]
+    assert default_index == 0  # 06:30 is the closest enabled row to 06:59 (07:00 has no seats)
+
+
+def test_offerless_pick_reopens_the_list_with_that_row_disabled(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT}, {"o-best": NO_OFFER})
+    s = Script("", "", "", "n", "", 0, True)  # default row (o-best) has no offer → pick row 0
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    assert [call for call in c.calls if call[0] == "offers"] == [
+        ("offers", "o-best"),
+        ("offers", "o-early"),
+    ]
+    assert len(s.lists) == 2
+    assert any("no 0-price offer at 06:59" in r for r in s.lists[1][3])
+    assert " ! no 0-price offer at 06:59 · pick another\n" in capsys.readouterr().out
+
+
+def test_class_fallback_on_the_offer_is_said(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT}, {"o-best": offers(calm_price=295, second_price=0)})
+    s = Script("", "", "", "n", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    assert " ! outbound class fallback: 2 class calm → 2 class\n" in capsys.readouterr().out
+
+
+def test_held_booking_on_the_date_is_pointed_out(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT})
+    c.bookings_list = [
+        {
+            "bookingId": "U",
+            "booking": {
+                "bookingNumber": "HELD1",
+                "bookingStatus": "CONFIRMED",
+                "journeys": [
+                    {
+                        "segments": [
+                            {
+                                "departureDateTime": f"{D}T06:59:00+02:00",
+                                "departureStation": {"name": "Göteborg Central"},
+                                "arrivalStation": {"name": "Stockholm Central"},
+                            }
+                        ]
+                    }
+                ],
+            },
+        }
+    ]
+    s = Script(D, "", "", "n", "", False)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert (
+        f" ! you hold booking HELD1 on {D} (Göteborg Central → Stockholm Central 06:59)"
+        " · departures overlapping it show no seats\n"
+    ) in capsys.readouterr().out
+
+
+def test_return_on_another_date_prints_two_cards(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT, "IN": [dep("i-best", D2, "17:22", "21:53")]})
+    s = Script(D, "", "", "y", D2, "", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    assert c.calls[1] == ("search", "740000002", "740000001", D, D2)
+    out = capsys.readouterr().out
+    assert out.count("Göteborg Central → Stockholm Central") >= 1
+    assert out.count("Stockholm Central → Göteborg Central") >= 1
+
+
+def test_decline_and_dry_run_write_nothing(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    s = Script("", "", "", "", "", "", "", False)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert not any(call[0] in WRITES for call in c.calls)
+    assert capsys.readouterr().out.rstrip().endswith(" ● booking aborted, nothing was booked")
+
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    s = Script("", "", "", "", "", "", "")
+    wire(monkeypatch, s)
+    assert run(c, s, dry_run=True) is True
+    assert not any(call[0] in WRITES for call in c.calls)
+    assert "book?" not in s.prompts
+    assert capsys.readouterr().out.rstrip().endswith(" ● dry run · nothing booked")
+
+
+@pytest.mark.parametrize("at", range(7))
+def test_abort_at_any_prompt_writes_nothing(monkeypatch, capsys, at):
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    replies = ["", "", "", "", "", "", ""]
+    replies[at] = None
+    s = Script(*replies[: at + 1])
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert not any(call[0] in WRITES for call in c.calls)
+    assert capsys.readouterr().out.rstrip().endswith(" ● booking aborted, nothing was booked")
+
+
+def test_not_a_terminal_is_refused_before_any_request(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT})
+    s = Script()
+    wire(monkeypatch, s, tty=False)
+    assert run(c, s, dry_run=True) is False
+    assert c.calls == []
+    assert " ● not a terminal · --book-journey asks questions" in capsys.readouterr().out
+
+
+def test_station_list_failure_ends_the_run(monkeypatch, capsys):
+    class NoStations(FakeClient):
+        def get_stations(self):
+            raise RuntimeError("boom")
+
+    s = Script()
+    wire(monkeypatch, s)
+    assert run(NoStations(), s) is False
+    assert s.prompts == []
+    assert " ● could not fetch the station list: boom" in capsys.readouterr().out
+
+
+def test_no_departures_ends_the_run(monkeypatch, capsys):
+    c = FakeClient({"OUT": []})
+    s = Script(D, "", "", "n")
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert not any(call[0] == "offers" for call in c.calls)
+    assert (
+        f" ● no departures found for Göteborg Central → Stockholm Central on {D}"
+        in capsys.readouterr().out
+    )
+
+
+def test_failed_return_add_books_the_outbound_alone(monkeypatch, capsys):
+    class NoAdd(FakeClient):
+        def add_offer_to_booking(self, token, booking_id, offer_id, passenger_token):
+            self.calls.append(("add", booking_id, offer_id))
+            raise RuntimeError("add exploded")
+
+    c = NoAdd({"OUT": OUT, "IN": IN})
+    s = Script("", "", "", "", "", "", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    assert [call[0] for call in c.calls[-3:]] == ["add", "customer", "checkout"]
+    out = capsys.readouterr().out
+    assert " ! return leg failed (add exploded), booking outbound only\n" in out
+    assert out.rstrip().endswith(" ● booked NUM1")
+
+
+def test_failed_checkout_is_red(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT}, checkout_ok=False)
+    s = Script("", "", "", "n", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    out = capsys.readouterr().out
+    assert " ! checkout failed: checkout exploded\n" in out
+    assert "● booking NUM1 not checked out" in out
+
+
+def test_seat_preference_is_applied_on_the_cart(monkeypatch):
+    c = FakeClient({"OUT": OUT})
+    s = Script("", "", "", "n", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s, base_cfg(roundtrip=False, seat_preference=["window"])) is True
+    assert [call[0] for call in c.calls[-5:]] == [
+        "create",
+        "seatmap",
+        "seats",
+        "customer",
+        "checkout",
+    ]
