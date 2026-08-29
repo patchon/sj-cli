@@ -1,7 +1,7 @@
 """The booking core: search parsing, polling, departure facts, offers and the Cart."""
 
-from sj_cli.booking import describe_departure, poll_departures, search
-from tests.fakes import FakeClient, dep
+from sj_cli.booking import describe_departure, poll_departures, resolve_offer, search
+from tests.fakes import FakeClient, base_cfg, dep, offers
 
 D = "2026-09-01"
 
@@ -134,3 +134,78 @@ def test_describe_departure_survives_an_empty_departure():
         "train": "",
         "route": "A → B",
     }
+
+
+def test_describe_departure_falls_back_to_the_service_type_name_and_counts_changes():
+    d = dep("262", D, "05:29", "07:25")
+    d["legs"][0]["serviceBrandNameDescription"] = None
+    d["legs"][0]["serviceType"] = {"code": "SJIC", "name": "SJ InterCity"}
+    assert describe_departure(d, "A → B")["train"] == "SJ InterCity 262"
+    d["numberOfChanges"] = 1
+    assert describe_departure(d, "A → B")["train"] == "SJ InterCity 262 · 1 change"
+    d["numberOfChanges"] = 2
+    assert describe_departure(d, "A → B")["train"] == "SJ InterCity 262 · 2 changes"
+    d["numberOfChanges"] = None
+    d["legs"].append({})
+    assert describe_departure(d, "A → B")["train"] == "SJ InterCity 262 · 1 change"
+
+
+# --- resolve_offer() ----------------------------------------------------------
+
+
+def test_resolve_offer_returns_a_leg_with_the_zero_price_offer(capsys):
+    c = FakeClient({"OUT": [dep("o-best", D, "06:59", "11:36")]})
+    params = base_cfg()["search_parameters"]
+    leg = resolve_offer(
+        c, "tok", params, "PT", c.departures["OUT"][0], "A → B", "2 class calm", "outbound"
+    )
+    assert leg == {
+        "departure": "06:59",
+        "arrival": "11:36",
+        "duration": "4h 37m",
+        "train": "X 2000 O-BEST",
+        "route": "A → B",
+        "comfort_class": "2 class calm",
+        "offer_id": "OFF-calm",
+        "alternative": False,
+    }
+    assert c.calls == [("offers", "o-best")]
+    assert capsys.readouterr().out == " ✓ checking offers for outbound at 06:59\n"
+
+
+def test_resolve_offer_falls_through_the_class_chain_silently():
+    # The caller decides whether a fallback is worth a line; the core only reports it.
+    c = FakeClient(
+        {"OUT": [dep("o", D, "06:59", "11:36")]}, {"o": offers(calm_price=295, second_price=0)}
+    )
+    params = base_cfg()["search_parameters"]
+    leg = resolve_offer(
+        c, "tok", params, "PT", c.departures["OUT"][0], "A → B", "2 class calm", "outbound"
+    )
+    assert leg is not None
+    assert (leg["comfort_class"], leg["offer_id"]) == ("2 class", "OFF-second")
+
+
+def test_resolve_offer_is_none_without_a_zero_price_offer(capsys):
+    c = FakeClient(
+        {"OUT": [dep("o", D, "06:59", "11:36")]}, {"o": offers(calm_price=295, second_price=195)}
+    )
+    params = base_cfg()["search_parameters"]
+    assert (
+        resolve_offer(
+            c, "tok", params, "PT", c.departures["OUT"][0], "A → B", "2 class calm", "return"
+        )
+        is None
+    )
+    assert "checking offers for return at 06:59" in capsys.readouterr().out
+
+
+def test_resolve_offer_honours_flexibility_and_no_fallback():
+    c = FakeClient(
+        {"OUT": [dep("o", D, "06:59", "11:36")]}, {"o": offers(calm_price=295, second_price=0)}
+    )
+    params = base_cfg(allow_class_fallback=False)["search_parameters"]
+    assert (
+        resolve_offer(c, "tok", params, "PT", c.departures["OUT"][0], "A → B", "2 class calm", "x")
+        is None
+    )
