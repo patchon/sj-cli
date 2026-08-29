@@ -350,8 +350,7 @@ def handle_book_journey(
         return False
 
     # The questions
-    now = sweden_now()
-    today = now.date()
+    today = sweden_now().date()
     valid = pass_validity(active_pass)
     day = _ask_date("date", today, today, "date is in the past", valid)
     if day is None:
@@ -398,16 +397,20 @@ def handle_book_journey(
             if return_str and found["in_id"]
             else []
         )
+    # Read the clock here, not before the questions: the user may have spent
+    # minutes on them, and a train that left meanwhile must not stay listed.
+    now = sweden_now()
+    today_str = now.date().isoformat()
     out_deps, out_gone = drop_departed(out_deps, now)
     in_deps, in_gone = drop_departed(in_deps, now)
     if not out_deps:
         why = "left" if out_gone else "found"
-        when = "today" if out_gone else f"on {date_str}"
+        when = "today" if date_str == today_str else f"on {date_str}"
         pstatus(False, f"no departures {why} for {out_route} {when}")
         return False
     if return_str and not in_deps:
         why = "left" if in_gone else "found"
-        when = "today" if in_gone else f"on {return_str}"
+        when = "today" if return_str == today_str else f"on {return_str}"
         pstatus(False, f"no departures {why} for {in_route} {when}")
         return False
     _warn_held_bookings(

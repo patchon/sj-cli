@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from sj_cli.booking import (
     _dry_run_note,
     _run_outcome,
@@ -381,3 +383,5 @@ def test_drop_departed_keeps_now_and_the_unparsable():
     assert [d.get("departureId") for d in kept] == ["now", "later", "odd", None]
     assert dropped == 1
     assert drop_departed([], now) == ([], 0)
+    with pytest.raises(TypeError):  # a naive now must raise, not disable the filter
+        drop_departed([later], datetime(2026, 9, 1, 9, 0))

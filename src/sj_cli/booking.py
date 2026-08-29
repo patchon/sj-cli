@@ -130,15 +130,22 @@ def drop_departed(departures: list[dict], now: datetime) -> tuple[list[dict], in
     A departure timed exactly at `now` is kept (SJ decides at the offers
     step), and so is one whose time cannot be parsed — never hide a train on
     a parse slip. `now` is aware (sweden_now()); the API timestamps are too.
+    Only the parse is guarded: a naive `now` raises here rather than
+    silently comparing false and keeping every departed train.
+
+    Raises:
+        TypeError: If `now` is naive (aware/naive comparison).
+
     """
     kept: list[dict] = []
     dropped = 0
     for departure in departures:
         try:
-            departed = parse_api_datetime(departure.get("departureDateTime") or "") < now
+            when = parse_api_datetime(departure.get("departureDateTime") or "")
         except (ValueError, TypeError):
-            departed = False
-        if departed:
+            kept.append(departure)
+            continue
+        if when < now:
             dropped += 1
         else:
             kept.append(departure)
@@ -752,7 +759,10 @@ def poll_and_select(
     if dropped:
         logger.debug(f"{dropped} departure(s) already gone at search time, skipped")
     if not departures:
-        logger.warning(f"no departures found for search {search_id}")
+        if dropped:
+            logger.warning(f"no departures left for search {search_id} ({dropped} already gone)")
+        else:
+            logger.warning(f"no departures found for search {search_id}")
         return None
 
     return select_best_departure(
