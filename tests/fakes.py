@@ -121,7 +121,12 @@ class FakeClient:
     Records every call in .calls as (method, *key args). Booking responses use
     the real API shape: {"bookingId": ..., "booking": {"bookingNumber": ...,
     "journeys": [{"segments": [...]}]}}, with one segment per booked leg built
-    from the departure whose offer was used.
+    from the departure whose offer was used: get_offers queues each departure
+    under every 0-price offer id it hands out (the only ids a flow can book),
+    and create/add pop the queue, so a flow that resolves both legs before
+    writing (--book-journey) gets each leg's own times, not the last one
+    searched. The segments' stations come from the first search's
+    origin/dest — a name or a UIC code, as the caller passed it.
     """
 
     STATIONS = {"Göteborg Central": "740000002", "Stockholm Central": "740000001"}
@@ -140,6 +145,10 @@ class FakeClient:
             "returnDepartureSearchId": "IN",
         }
         self.calls: list[tuple] = []
+        # (name, code) of the first search, so a booked segment says where
+        # the journey actually went; departures queued per 0-price offer id.
+        self._route: tuple[str, str] | None = None
+        self._offer_deps: dict[str, list[dict]] = {}
         self.customer_updates: list[tuple] = []
         self._booking_counter = 0
         self._last_dep: dict | None = None
@@ -164,10 +173,19 @@ class FakeClient:
         self.calls.append(("stations",))
         return [{**s, "synonyms": list(s["synonyms"])} for s in self.STATION_LIST]
 
+    def _station(self, value):
+        """(display name, UIC code) for a search endpoint given as either."""
+        for entry in self.STATION_LIST:
+            if value in (entry["name"], entry["uicStationCode"]):
+                return entry["name"], entry["uicStationCode"]
+        return value, self.STATIONS.get(value, value)
+
     def search_journey(
         self, token, origin, dest, date, return_date=None, tp_id=None, service_types=None
     ):
         self.calls.append(("search", origin, dest, date, return_date))
+        if self._route is None:
+            self._route = (origin, dest)
         self.search_tp_ids.append(tp_id)
         if return_date:
             return {"passengerListId": "PT", **self.search_ids}
@@ -191,11 +209,29 @@ class FakeClient:
             (d for deps in self.departures.values() for d in deps if d["departureId"] == dep_id),
             None,
         )
-        return self.offers_by_dep.get(dep_id, offers())
+        response = self.offers_by_dep.get(dep_id, offers())
+        self._queue_offers(response)
+        return response
 
-    def _segment(self, direction):
-        dep = self._last_dep or {}
-        a, b = ("Göteborg Central", "Stockholm Central")
+    def _queue_offers(self, response):
+        """Remember this departure under every 0-price offer id in the response."""
+        if self._last_dep is None:
+            return
+        for offer in ((response.get("seatOffers") or {}).get("offers") or {}).values():
+            for flex in (offer.get("flexibilities") or {}).values():
+                price = ((flex.get("journeyPrices") or {}).get("price") or {}).get("amount")
+                if flex.get("available") and price == 0 and flex.get("offerId"):
+                    self._offer_deps.setdefault(flex["offerId"], []).append(self._last_dep)
+
+    def _dep_for(self, offer_id):
+        """The departure whose offer this is (the last one searched as a fallback)."""
+        queued = self._offer_deps.get(offer_id) or []
+        return queued.pop(0) if queued else (self._last_dep or {})
+
+    def _segment(self, direction, dep=None):
+        dep = dep if dep is not None else (self._last_dep or {})
+        raw = self._route or ("Göteborg Central", "Stockholm Central")
+        a, b = (self._station(raw[0]), self._station(raw[1]))
         if direction == "INBOUND":
             a, b = b, a
         return {
@@ -203,8 +239,8 @@ class FakeClient:
             "departureDateTime": dep.get("departureDateTime", "2026-09-01T00:00:00+02:00"),
             "arrivalDateTime": dep.get("arrivalDateTime", "2026-09-01T00:00:00+02:00"),
             "duration": dep.get("duration", "PT4H37M"),
-            "departureStation": {"name": a, "uicStationCode": self.STATIONS[a]},
-            "arrivalStation": {"name": b, "uicStationCode": self.STATIONS[b]},
+            "departureStation": {"name": a[0], "uicStationCode": a[1]},
+            "arrivalStation": {"name": b[0], "uicStationCode": b[1]},
             "productFamily": {"name": "2 klass Lugn, Kan återbetalas"},
             "serviceBrandNameDescription": "X 2000",
             "publicServiceName": "520" if direction == "OUTBOUND" else "543",
@@ -225,13 +261,15 @@ class FakeClient:
             "bookingNumber": f"NUM{self._booking_counter}",
             "bookingStatus": "NEW",
             "customer": {"email": "a@b.se", "phoneNumber": "+46701112233"},
-            "journeys": [{"segments": [self._segment("OUTBOUND")]}],
+            "journeys": [{"segments": [self._segment("OUTBOUND", self._dep_for(offer_id))]}],
         }
         return self._response(booking_id)
 
     def add_offer_to_booking(self, token, booking_id, offer_id, passenger_token):
         self.calls.append(("add", booking_id, offer_id))
-        self._bookings[booking_id]["journeys"].append({"segments": [self._segment("INBOUND")]})
+        self._bookings[booking_id]["journeys"].append(
+            {"segments": [self._segment("INBOUND", self._dep_for(offer_id))]}
+        )
         return self._response(booking_id)
 
     def update_booking_customer(self, token, booking_id, email, phone=None):

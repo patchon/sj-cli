@@ -5,7 +5,8 @@ from datetime import timedelta
 
 import pytest
 
-from sj_cli import journey
+from sj_cli import booking, journey
+from sj_cli.booking import booking_date_range
 from sj_cli.dates import sweden_now
 from sj_cli.stations import StationIndex, parse_stations
 from tests.fakes import FakeClient, base_cfg, dep, offers
@@ -22,7 +23,8 @@ class Script:
 
     Text prompts (ask_optional, confirm) take strings/bools/None; a station
     pick takes "" (default), a query string (first match) or None (abort);
-    a departure pick takes "" (default row), an int row index or None.
+    a departure pick takes "" (default row), a 0-based row index or None
+    (the real widget types 1-based numbers; the tests script by index).
     """
 
     def __init__(self, *replies):
@@ -52,11 +54,19 @@ class Script:
     def select_list(self, prompt, items, render, default_index=0, reject=None, **_kw):
         rows = [render(i) for i in items]
         rejected = [reject(i) for i in items if reject and reject(i)]  # the complaints
+        if not 0 <= default_index < len(items):
+            default_index = 0  # the widget highlights row 1 for an out-of-range default
         self.lists.append((prompt, rows, default_index, rejected))
         reply = self._next(prompt)
         if reply is None:
             return None
-        return items[default_index] if reply == "" else items[reply]
+        chosen = items[default_index] if reply == "" else items[reply]
+        complaint = reject(chosen) if reject else None
+        if complaint:
+            # The widget keeps the prompt open on a rejected row, so a script
+            # that picks one is testing something that cannot happen.
+            pytest.fail(f"picked a rejected row: {complaint}")
+        return chosen
 
 
 def index():
@@ -222,6 +232,7 @@ def wire(monkeypatch, script, tty=True):
     for name in ("ask_optional", "confirm", "select_filtered", "select_list"):
         monkeypatch.setattr(journey, name, getattr(script, name))
     monkeypatch.setattr(journey, "sweden_now", lambda: NOW)
+    monkeypatch.setattr(booking, "sweden_now", lambda: NOW)  # booking_date_range reads it
     monkeypatch.setattr(journey.sys.stdin, "isatty", lambda: tty)
     monkeypatch.setattr(journey.sys.stdout, "isatty", lambda: tty)
 
@@ -244,7 +255,7 @@ def test_roundtrip_with_every_default_reproduces_the_commute(monkeypatch, capsys
         ("search", "740000002", "740000001", TODAY.isoformat(), TODAY.isoformat()),
         ("results", "OUT"),
         ("results", "IN"),
-        ("bookings", TODAY.isoformat(), c.calls[4][2]),
+        ("bookings", *booking_date_range(PASS)),
         ("offers", "o-best"),
         ("offers", "i-best"),
         ("create", "OFF-calm"),
@@ -286,7 +297,8 @@ def test_one_way_on_another_route_and_date(monkeypatch, capsys):
         "checkout",
     ]
     assert s.prompts[3] == "return? [y/N]: "
-    assert "Göteborg Central → Uppsala Central" in capsys.readouterr().out
+    # once on the summary card, once on the booked card
+    assert capsys.readouterr().out.count("Göteborg Central → Uppsala Central") >= 2
 
 
 def test_lists_show_class_fallback_and_no_seats_and_reject_the_latter(monkeypatch):
@@ -314,6 +326,7 @@ def test_offerless_pick_reopens_the_list_with_that_row_disabled(monkeypatch, cap
         ("offers", "o-early"),
     ]
     assert len(s.lists) == 2
+    assert s.lists[1][2] == 0  # the re-opened list highlights the closest still-enabled row
     assert any("no 0-price offer at 06:59" in r for r in s.lists[1][3])
     assert " ! no 0-price offer at 06:59 · pick another\n" in capsys.readouterr().out
 
@@ -326,28 +339,31 @@ def test_class_fallback_on_the_offer_is_said(monkeypatch, capsys):
     assert " ! outbound class fallback: 2 class calm → 2 class\n" in capsys.readouterr().out
 
 
+def held(number, day, status="CONFIRMED"):
+    """A bookings-list entry: one segment at 06:59 on `day`, Göteborg → Stockholm."""
+    return {
+        "bookingId": f"U-{number}",
+        "booking": {
+            "bookingNumber": number,
+            "bookingStatus": status,
+            "journeys": [
+                {
+                    "segments": [
+                        {
+                            "departureDateTime": f"{day}T06:59:00+02:00",
+                            "departureStation": {"name": "Göteborg Central"},
+                            "arrivalStation": {"name": "Stockholm Central"},
+                        }
+                    ]
+                }
+            ],
+        },
+    }
+
+
 def test_held_booking_on_the_date_is_pointed_out(monkeypatch, capsys):
     c = FakeClient({"OUT": OUT})
-    c.bookings_list = [
-        {
-            "bookingId": "U",
-            "booking": {
-                "bookingNumber": "HELD1",
-                "bookingStatus": "CONFIRMED",
-                "journeys": [
-                    {
-                        "segments": [
-                            {
-                                "departureDateTime": f"{D}T06:59:00+02:00",
-                                "departureStation": {"name": "Göteborg Central"},
-                                "arrivalStation": {"name": "Stockholm Central"},
-                            }
-                        ]
-                    }
-                ],
-            },
-        }
-    ]
+    c.bookings_list = [held("HELD1", D)]
     s = Script(D, "", "", "n", "", False)
     wire(monkeypatch, s)
     assert run(c, s) is False
@@ -454,6 +470,7 @@ def test_failed_checkout_is_red(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert " ! checkout failed: checkout exploded\n" in out
     assert "● booking NUM1 not checked out" in out
+    assert out.rstrip().endswith("provisional left, SJ releases it or cancel it on sj.se")
 
 
 def test_seat_preference_is_applied_on_the_cart(monkeypatch):
@@ -468,3 +485,80 @@ def test_seat_preference_is_applied_on_the_cart(monkeypatch):
         "customer",
         "checkout",
     ]
+
+
+def test_a_cancelled_booking_and_another_day_are_not_named(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT})
+    c.bookings_list = [held("GONE1", D, status="CANCELLED"), held("OTHER1", D2)]
+    s = Script(D, "", "", "n", "", False)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert "you hold booking" not in capsys.readouterr().out
+
+
+def test_a_failed_bookings_fetch_is_only_a_note(monkeypatch, capsys):
+    class NoBookings(FakeClient):
+        def get_bookings(self, token, start_date, end_date, page=0):
+            self.calls.append(("bookings", start_date, end_date))
+            raise RuntimeError("bookings exploded")
+
+    c = NoBookings({"OUT": OUT})
+    s = Script(D, "", "", "n", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    assert " ! could not check existing bookings: bookings exploded\n" in capsys.readouterr().out
+    assert len(s.lists) == 1  # the wizard went on to the pick list
+
+
+def test_no_return_departures_ends_the_run(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT, "IN": []})
+    s = Script(D, "", "", "y", "")
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert not any(call[0] == "offers" for call in c.calls)
+    assert (
+        f" ● no departures found for Stockholm Central → Göteborg Central on {D}"
+        in capsys.readouterr().out
+    )
+
+
+def test_abort_on_the_reopened_list_writes_nothing(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT}, {"o-best": NO_OFFER})
+    s = Script("", "", "", "n", "", None)  # the default row has no offer, then Esc
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert not any(call[0] in WRITES for call in c.calls)
+    assert capsys.readouterr().out.rstrip().endswith(" ● booking aborted, nothing was booked")
+
+
+def test_a_failed_first_add_ends_the_run(monkeypatch, capsys):
+    class NoCreate(FakeClient):
+        def create_provisional_booking(self, token, offer_id, passenger_token):
+            self.calls.append(("create", offer_id))
+            raise RuntimeError("create exploded")
+
+    c = NoCreate({"OUT": OUT})
+    s = Script("", "", "", "n", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert not any(call[0] in ("customer", "checkout") for call in c.calls)
+    assert (
+        capsys.readouterr()
+        .out.rstrip()
+        .endswith(" ● could not create the booking (create exploded) · nothing was booked")
+    )
+
+
+def test_a_card_that_cannot_be_rendered_still_reports_the_booking(monkeypatch, capsys):
+    c = FakeClient({"OUT": OUT})
+    s = Script("", "", "", "n", "", True)
+    wire(monkeypatch, s)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("render exploded")
+
+    monkeypatch.setattr(journey, "booked_rows", boom)
+    assert run(c, s) is True
+    out = capsys.readouterr().out
+    assert " ! booked as NUM1, but the legs could not be shown (render exploded)\n" in out
+    assert out.rstrip().endswith(" ● booked NUM1")
