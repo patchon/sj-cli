@@ -3,7 +3,7 @@
 import logging
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any, TypedDict
 
@@ -17,7 +17,7 @@ from sj_cli.dates import (
     sweden_now,
     to_sweden,
 )
-from sj_cli.errors import SJAuthError, SJConfigError, error_text
+from sj_cli.errors import SJAPIError, SJAuthError, SJConfigError, SJError, error_text
 from sj_cli.output import (
     ask,
     ask_optional,
@@ -218,7 +218,8 @@ def resolve_offer(
     in, or the configured one); find_offer_id still falls down the class
     chain when the config allows it, so the returned leg's comfort_class can
     differ from class_ — the caller decides whether that is worth a line.
-    Prints only the spinner ("checking offers for {label} at {time}").
+    Prints only the spinner (nothing at all for an id-less departure, which
+    is logged).
 
     Returns:
         The Leg (describe_departure facts + comfort_class + offer_id,
@@ -229,6 +230,7 @@ def resolve_offer(
     """
     departure_id = dep.get("departureId")
     if not departure_id:
+        logger.warning("departure has no departureId, skipping its offers")
         return None
     facts = describe_departure(dep, route)
     with spinner(f"checking offers for {label} at {facts['departure']}"):
@@ -242,18 +244,7 @@ def resolve_offer(
     if not found:
         return None
     offer_id, matched_class = found
-    # Listed field by field: mypy rejects ** into a TypedDict, so a new
-    # DepartureFacts key must be added here too.
-    return Leg(
-        departure=facts["departure"],
-        arrival=facts["arrival"],
-        duration=facts["duration"],
-        train=facts["train"],
-        route=route,
-        comfort_class=matched_class,
-        offer_id=offer_id,
-        alternative=False,
-    )
+    return Leg(**facts, comfort_class=matched_class, offer_id=offer_id, alternative=False)
 
 
 def booking_date_range(
@@ -1084,16 +1075,120 @@ def _booking_from_response(resp: dict) -> tuple[str | None, str | None, dict]:
     return booking_id, number, booking
 
 
-def _create_provisional(
-    client: SJClient, access_token: str, passenger_token: str, resolved: dict, leg: str
-) -> tuple[str | None, str | None, dict]:
-    """Create a provisional booking from a resolved leg. Returns (id, number, booking)."""
-    alt = "alternative " if resolved["alternative"] else ""
-    with spinner(f"creating booking with {alt}{leg} at {resolved['departure']}"):
-        b_resp = client.create_provisional_booking(
-            access_token, resolved["offer_id"], passenger_token
-        )
-    return _booking_from_response(b_resp)
+class Cart:
+    """
+    The provisional booking every write path fills and checks out.
+
+    add() puts a leg in — the first call creates the provisional booking,
+    later ones add an offer to it; finish() chooses seats (when
+    seat_preference is set), sends the customer details back and checks
+    out. --book, the --upgrade-class re-book and --book-journey all go
+    through it, so there is exactly one place a ticket is written.
+    """
+
+    def __init__(
+        self, client: SJClient, access_token: str, cfg: dict, passenger_token: str
+    ) -> None:
+        self._client = client
+        self._token = access_token
+        self._cfg = cfg
+        self._passenger_token = passenger_token
+        self.booking_id: str | None = None
+        self.booking_number: str | None = None
+        self.booking: dict = {}
+        self.legs: list[str] = []
+
+    @property
+    def held(self) -> bool:
+        """Whether a provisional booking exists yet."""
+        return self.booking_id is not None
+
+    def add(self, leg: Mapping[str, Any], label: str) -> None:
+        """
+        Put one leg (a Leg, or a dict with its keys) in the cart under `label`.
+
+        Raises whatever the API raises. A first add that yields no booking id
+        raises SJAPIError, and the cart stays empty (held is False).
+        """
+        alt = "alternative " if leg.get("alternative") else ""
+        if self.booking_id is None:
+            with spinner(f"creating booking with {alt}{label} at {leg['departure']}"):
+                resp = self._client.create_provisional_booking(
+                    self._token, leg["offer_id"], self._passenger_token
+                )
+            booking_id, self.booking_number, self.booking = _booking_from_response(resp)
+            if not booking_id:
+                logger.error("the API returned no booking id for the new provisional")
+                raise SJAPIError("the API returned no booking id for the new provisional")
+            self.booking_id = booking_id
+        else:
+            with spinner(f"adding {alt}{label} leg at {leg['departure']}"):
+                resp = self._client.add_offer_to_booking(
+                    self._token, self.booking_id, leg["offer_id"], self._passenger_token
+                )
+            _, _, updated = _booking_from_response(resp or {})
+            if updated.get("journeys"):
+                self.booking = updated
+        self.legs.append(label)
+
+    def finish(self) -> dict:
+        """
+        Seats, customer details and checkout for the held booking.
+
+        Never raises past the checkout: a failed checkout is reported with a
+        "!" line and checked_out=False — the provisional stays, and the next
+        --book run cleans it up (SPEC §6.2).
+
+        Returns:
+            {"booking_id", "booking_number", "legs", "checked_out", "booking"}
+            — the booking object is the API's, with journeys, for the card.
+
+        """
+        if self.booking_id is None:
+            raise SJError("nothing in the cart to check out")
+        # Seats before checkout: a seat is chosen on the still-provisional
+        # cart, never worth losing the booking over — _apply_seat_preference
+        # never raises. Kept out of the checkout spinner (spinner() isn't
+        # reentrant).
+        preference = self._cfg["search_parameters"].get("seat_preference")
+        if preference:
+            self.booking, _ = _apply_seat_preference(
+                self._client,
+                self._token,
+                self.booking_id,
+                self.booking,
+                preference,
+                provisional=True,
+            )
+        checked_out = True
+        try:
+            # The API already put the holder's contact details on the
+            # provisional; send those back rather than invent a number.
+            # None = leave it as is.
+            phone = (self.booking.get("customer") or {}).get("phoneNumber") or next(
+                (
+                    p.get("phoneNumber")
+                    for p in self.booking.get("passengers") or []
+                    if p.get("phoneNumber")
+                ),
+                None,
+            )
+            with spinner(f"checking out booking {self.booking_number or self.booking_id}"):
+                self._client.update_booking_customer(
+                    self._token, self.booking_id, self._cfg["auth"]["email"], phone
+                )
+                self._client.checkout_booking(self._token, self.booking_id)
+        except Exception as e:
+            logger.error(f"checkout failed for booking {self.booking_id}: {e}")
+            pwarn(f"checkout failed: {error_text(e)}")
+            checked_out = False
+        return {
+            "booking_id": self.booking_id,
+            "booking_number": self.booking_number,
+            "legs": list(self.legs),
+            "checked_out": checked_out,
+            "booking": self.booking,
+        }
 
 
 def _segment_label(segment: dict, segments: list[dict]) -> str:
@@ -1370,11 +1465,7 @@ def handle_booking_process(
     """
     params = cfg["search_parameters"]
     flexibility = params.get("flexibility", "FULLFLEX")
-
-    booking_id = None
-    booking_number = None
-    booking: dict = {}
-    legs: list[str] = []
+    cart = Cart(client, access_token, cfg, passenger_token)
     dry_run_result = {}
 
     # 1. Outbound
@@ -1390,10 +1481,7 @@ def handle_booking_process(
             # handles the partial (return-leg-only) fallback.
             return None
         else:
-            booking_id, booking_number, booking = _create_provisional(
-                client, access_token, passenger_token, out, "outbound"
-            )
-            legs.append("outbound")
+            cart.add(out, "outbound")
 
     # 2. Inbound
     if in_search_id:
@@ -1416,31 +1504,21 @@ def handle_booking_process(
                     row.update(has_offer=False, flexibility=None, blocked="needs book_partial")
                 dry_run_result["inbound"] = row
             elif not inb["found"]:
-                if not booking_id:
+                if not cart.held:
                     pwarn("no departure found for inbound")
                     return None
                 pwarn("no departure found for inbound, booking outbound only")
             elif not inb["has_offer"]:
-                if not booking_id:
+                if not cart.held:
                     return None
                 pinfo("no alternative found, booking outbound only")
-            elif booking_id:
-                alt = "alternative " if inb["alternative"] else ""
-                with spinner(f"adding {alt}return leg at {inb['departure']}"):
-                    resp = client.add_offer_to_booking(
-                        access_token, booking_id, inb["offer_id"], passenger_token
-                    )
-                _, _, updated = _booking_from_response(resp or {})
-                if updated.get("journeys"):
-                    booking = updated
-                legs.append("return")
             else:
-                booking_id, booking_number, booking = _create_provisional(
-                    client, access_token, passenger_token, inb, "return"
-                )
-                legs.append("return")
+                # With an outbound held this adds the return leg to it (one
+                # booking number); alone, it is the booking (the API sees a
+                # one-way search as "outbound").
+                cart.add(inb, "return")
         except Exception as e:
-            if dry_run or not booking_id:
+            if dry_run or not cart.held:
                 raise
             # SPEC §8.2: the outbound provisional is already held — keep it
             # and check it out alone rather than leave it to the cleanup.
@@ -1451,46 +1529,10 @@ def handle_booking_process(
         return dry_run_result
 
     # 3. Checkout
-    if not booking_id:
+    if not cart.held:
         logger.error("failed to create booking")
         return None
-
-    # Seats before checkout: a seat is chosen on the still-provisional cart,
-    # never worth losing the booking over — _apply_seat_preference never
-    # raises. Kept out of the checkout spinner below (spinner() isn't
-    # reentrant: nesting would stomp its single "is a spinner active" flag).
-    preference = params.get("seat_preference")
-    if preference:
-        booking, _ = _apply_seat_preference(
-            client, access_token, booking_id, booking, preference, provisional=True
-        )
-
-    checked_out = True
-    try:
-        email = cfg["auth"]["email"]
-        # The API already put the holder's contact details on the provisional;
-        # send those back rather than invent a number. None = leave it as is.
-        phone = (booking.get("customer") or {}).get("phoneNumber") or next(
-            (p.get("phoneNumber") for p in booking.get("passengers") or [] if p.get("phoneNumber")),
-            None,
-        )
-        with spinner(f"checking out booking {booking_number or booking_id}"):
-            client.update_booking_customer(access_token, booking_id, email, phone)
-            client.checkout_booking(access_token, booking_id)
-    except Exception as e:
-        # The provisional booking stays; it is cleaned up as stale on the next
-        # --book run (SPEC §6.2).
-        logger.error(f"checkout failed for booking {booking_id}: {e}")
-        pinfo(f"checkout failed: {error_text(e)}")
-        checked_out = False
-
-    return {
-        "booking_id": booking_id,
-        "booking_number": booking_number,
-        "legs": legs,
-        "checked_out": checked_out,
-        "booking": booking,
-    }
+    return cart.finish()
 
 
 def _search_and_book_one_way(
@@ -2860,7 +2902,9 @@ def _rebook_released_leg(
         {"booking_id", "booking_number", "class", "booking", "checked_out"}
         when a provisional was created (checked_out says whether it became
         a real ticket); None when there was nothing to book — no search id,
-        the departure was gone, no 0-price offer, or no booking came back.
+        the departure was gone, or no 0-price offer; a provisional that
+        comes back without an id raises (SJAPIError), which _upgrade_one_leg
+        reports.
 
     """
     params = cfg["search_parameters"]
@@ -2902,47 +2946,10 @@ def _rebook_released_leg(
     if leg is None:
         pwarn("the travel pass has no offer left on this departure")
         return None
-    offer_id, matched_class = leg["offer_id"], leg["comfort_class"]
 
-    with spinner(f"booking {matched_class}"):
-        b_resp = client.create_provisional_booking(access_token, offer_id, passenger_token)
-    booking_id, booking_number, booking = _booking_from_response(b_resp)
-    if not booking_id:
-        logger.error("upgrade: the API returned no booking id for the new provisional")
-        pwarn("the new booking could not be created")
-        return None
-
-    # Seats while it is still a cart, exactly as --book does: a seat is
-    # never worth losing the ticket over, so this never raises.
-    preference = params.get("seat_preference")
-    if preference:
-        booking, _ = _apply_seat_preference(
-            client, access_token, booking_id, booking, preference, provisional=True
-        )
-
-    checked_out = True
-    try:
-        # The API already put the holder's contact details on the provisional;
-        # send those back rather than invent a number. None = leave it as is.
-        phone = (booking.get("customer") or {}).get("phoneNumber") or next(
-            (p.get("phoneNumber") for p in booking.get("passengers") or [] if p.get("phoneNumber")),
-            None,
-        )
-        with spinner(f"checking out booking {booking_number or booking_id}"):
-            client.update_booking_customer(access_token, booking_id, cfg["auth"]["email"], phone)
-            client.checkout_booking(access_token, booking_id)
-    except Exception as e:
-        logger.error(f"upgrade: checkout failed for booking {booking_id}: {e}")
-        pwarn(f"checkout failed: {error_text(e)}")
-        checked_out = False
-
-    return {
-        "booking_id": booking_id,
-        "booking_number": booking_number,
-        "class": matched_class,
-        "booking": booking,
-        "checked_out": checked_out,
-    }
+    cart = Cart(client, access_token, cfg, passenger_token)
+    cart.add(leg, "the same departure")
+    return {**cart.finish(), "class": leg["comfort_class"]}
 
 
 def _upgrade_one_leg(
