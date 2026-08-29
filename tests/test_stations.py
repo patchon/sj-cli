@@ -149,6 +149,8 @@ MIXED = [
     {"name": "Ischgl, Florianplatz", "uicStationCode": "810099989", "synonyms": []},
     {"name": "Skellefteå busstation", "uicStationCode": "740000053", "synonyms": []},
     {"name": "Täby centrum station", "uicStationCode": "740020866", "synonyms": []},
+    {"name": "Åby centrum", "uicStationCode": "740021000", "synonyms": []},
+    {"name": "Kåge C", "uicStationCode": "740016132", "synonyms": []},
 ]
 
 
@@ -167,6 +169,7 @@ MIXED = [
         ("Oslo Bussterminal", False),  # foreign, 9xxxx
         ("Ischgl, Florianplatz", False),  # foreign, 9xxxx
         ("Uddevalla Kampenhof", False),
+        ("Kåge C", False),  # domestic " C" = centrum abbreviation, no longer special-cased
     ],
 )
 def test_is_train_station(name, expected):
@@ -185,6 +188,17 @@ def test_match_falls_back_to_every_match_without_a_train_station():
     idx = StationIndex(parse_stations(MIXED))
     assert names(idx.match("kampenhof")) == ["Uddevalla Kampenhof"]
     assert names(idx.match("bussterminal")) == ["Oslo Bussterminal", "Linköping Fjärrbussterminal"]
+
+
+def test_match_keeps_a_better_ranked_match_ahead_of_the_train_preference():
+    idx = StationIndex(parse_stations(MIXED))
+    # "Åby centrum" is an exact name match (rank 0, not itself train-looking);
+    # "Täby centrum station" only matches as a substring (rank 3, train-looking).
+    # The exact name must survive ahead of it, not get collapsed away.
+    assert names(idx.match("åby centrum")) == ["Åby centrum", "Täby centrum station"]
+    # Unchanged: "linköping"'s bus stops are the same rank as the train station,
+    # so they still drop.
+    assert names(idx.match("linköping")) == ["Linköping Central"]
 
 
 def test_exact_ignores_the_preference():

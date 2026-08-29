@@ -57,12 +57,12 @@ def _code_order(station: Station) -> int:
     return int(code) if code.isdecimal() else 10**12
 
 
-# A station word as a whole word (any case), or a bare trailing H / S / C
-# token (Köpenhamn H, Oslo S). Names only: shortName's " C" abbreviates
-# "centrum" for bus stops.
+# A station word as a whole word (any case). The Swedish definite forms
+# ("Centralstationen", "stationen") are deliberately not matched — in the
+# real list they occur only on "busstationen"/"brandstationen"-type stops.
 _STATION_WORDS = re.compile(
     r"(?i:\b(?:central|centralstation|station|stasjon|sentral|resecentrum|flygplats"
-    r"|lufthavn|airport|hbf|hauptbahnhof)\b)|\b[HSC]$"
+    r"|lufthavn|airport|hbf|hauptbahnhof)\b)"
 )
 
 
@@ -71,10 +71,10 @@ def is_train_station(station: Station) -> bool:
     True for a station SJ's list makes look like a railway station.
 
     The list carries no type, so this is a heuristic, validated on every
-    major Swedish city: a station word in the name (or a bare trailing H/S/C
-    token), or a foreign code (not 74…) below the 9xxxx range that holds the
-    bus terminals and resort stops. It decides only which matches are shown
-    first; nothing is ever hidden when no train-looking match exists.
+    major Swedish city: a station word in the name, or a foreign code
+    (not 74…) below the 9xxxx range that holds the bus terminals and resort
+    stops. It decides only which matches are shown first; nothing is ever
+    hidden when no train-looking match exists.
     """
     if _STATION_WORDS.search(station["name"]):
         return True
@@ -140,8 +140,9 @@ class StationIndex:
         Rank 0: name or synonym equals the query; 1: the name starts with it;
         2: a word of the name (split on space, -, /, parentheses) starts with
         it; 3: it is inside the name; 4: it is inside a synonym. Ties by UIC
-        code, lowest first. When any match is a train-looking station
-        (`is_train_station`), only those are returned.
+        code, lowest first. Once a train-looking station is reached, matches
+        ranked no better than it are dropped unless they are train-looking
+        too (`is_train_station`).
         """
         wanted = fold(query)
         if not wanted:
@@ -152,9 +153,11 @@ class StationIndex:
             if rank is not None:
                 ranked.append((rank, entry.code_order, entry))
         ranked.sort(key=lambda entry: (entry[0], entry[1]))
-        matches = [entry for _, _, entry in ranked]
-        # Prefer, don't hide: a query that reaches any train-looking station
-        # lists only those; otherwise every match (a bus stop can still be found).
-        if any(entry.train for entry in matches):
-            matches = [entry for entry in matches if entry.train]
-        return [entry.station for entry in matches]
+        # Prefer, don't hide: once a train-looking station is reached, matches
+        # ranked no better than it are dropped unless they are train-looking
+        # too; a better-ranked bus stop (typed by its exact name) stays.
+        train_ranks = [rank for rank, _, entry in ranked if entry.train]
+        if train_ranks:
+            best_train = min(train_ranks)
+            ranked = [item for item in ranked if item[2].train or item[0] < best_train]
+        return [entry.station for _, _, entry in ranked]
