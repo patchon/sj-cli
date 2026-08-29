@@ -125,6 +125,11 @@ class FakeClient:
     """
 
     STATIONS = {"Göteborg Central": "740000002", "Stockholm Central": "740000001"}
+    STATION_LIST = [
+        {"name": "Stockholm Central", "uicStationCode": "740000001", "synonyms": ["1"]},
+        {"name": "Göteborg Central", "uicStationCode": "740000002", "synonyms": ["2"]},
+        {"name": "Uppsala Central", "uicStationCode": "740000005", "synonyms": []},
+    ]
 
     def __init__(self, departures=None, offers_by_dep=None, *, checkout_ok=True, search_ids=None):
         self.departures = departures or {}
@@ -155,6 +160,10 @@ class FakeClient:
     def resolve_station(self, name):
         return self.STATIONS.get(name, name)
 
+    def get_stations(self):
+        self.calls.append(("stations",))
+        return [dict(s) for s in self.STATION_LIST]
+
     def search_journey(
         self, token, origin, dest, date, return_date=None, tp_id=None, service_types=None
     ):
@@ -169,7 +178,7 @@ class FakeClient:
             sid = f"{origin}->{dest}@{date}"
             return {"passengerListId": "PT", "departureSearchId": sid}
         # one-way with the pass: the flow reads departureSearchId regardless of direction
-        sid = "OUT" if origin == "Göteborg Central" else "IN"
+        sid = "OUT" if origin in ("Göteborg Central", "740000002") else "IN"
         return {"passengerListId": "PT", "departureSearchId": sid}
 
     def get_search_results(self, token, search_id):
