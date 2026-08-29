@@ -201,8 +201,8 @@ tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
   ✓ checking offers for return at 17:22
   ✓ adding return leg at 17:22
   ✓ checking out booking ERU0HWB2
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 klass Lugn   ERU0HWB2
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   ERU0HWB2
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 class calm   FULLFLEX   ERU0HWB2
 
 wed 16 sep 2026   tickets already booked
 
@@ -274,7 +274,7 @@ For each matching booking: show its day card (same shape as §5.5, no title), th
 ✓ searching for booking ERU0HWB2
 
 tue 15 sep 2026   Göteborg Central → Stockholm Central
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 klass Lugn   ERU0HWB2
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   ERU0HWB2
 
 ? cancel booking ERU0HWB2? [y/n]: y
 ✓ cancelling booking ERU0HWB2
@@ -305,8 +305,8 @@ A segment that has already departed is skipped before any seat map is read (`alr
 ╰──────────────────────────────────╯
 
 tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 klass Lugn   ERU0HWB2
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 7 seat 12   2 klass Lugn   ERU0HWB2
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ERU0HWB2
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 7 seat 12   2 class calm   FULLFLEX   ERU0HWB2
 
 ● 2 seat(s) changed
 ```
@@ -323,16 +323,16 @@ Fetches all active bookings within the travel pass validity period and displays 
 
 ```
 tue 18 aug 2026   Göteborg Central ⇄ Stockholm Central   past
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 klass Lugn   ZR8C6RT1
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 22   2 klass Lugn   ZR8C6RT1
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ZR8C6RT1
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 22   2 class calm   FULLFLEX   ZR8C6RT1
 
 wed 19 aug 2026   Göteborg Central ⇄ Stockholm Central
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 30   2 klass Lugn   TBRS43MG
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 55   2 klass Lugn   TBRS43MG
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 30   2 class calm   FULLFLEX   TBRS43MG
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 55   2 class calm   FULLFLEX   TBRS43MG
 
 mon 31 aug 2026   Göteborg Central ⇄ Stockholm Central
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 7 seat 32   2 klass        3RK7YJU4
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 21   2 klass Lugn   K883DH2T
+  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 7 seat 32   2 class        FULLFLEX   3RK7YJU4
+  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 21   2 class calm   FULLFLEX   K883DH2T
 
 ● 3 day(s) · 4 booking(s) · 2 in the past
 ```
@@ -352,8 +352,8 @@ When `seat_preference` (§4.3) is a ranked word list, a leg whose seat map holds
 
 ```
  fri 28 aug 2026   Linköping Central ⇄ Stockholm Central
-   → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 34 · window, table, forward   2 klass Lugn   EPPE0XKQ
-   ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 19 · aisle, backward · could take 47 · single, window, forward   2 klass Lugn   EPPE0XKQ
+   → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 34 · window, table, forward   2 class calm   FULLFLEX   EPPE0XKQ
+   ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 19 · aisle, backward · could take 47 · single, window, forward   2 class calm   FULLFLEX   EPPE0XKQ
 ```
 
 ### 5.6 Upgrade-class mode
@@ -424,7 +424,7 @@ tue 15 sep 2026   Göteborg Central → Stockholm Central
     ✓ booking 2 class calm
     ✓ checking out booking ZSVV7EML
     upgraded to 2 class calm · new booking ZSVV7EML
-    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 klass Lugn   ZSVV7EML
+    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ZSVV7EML
 
 ● 1 leg(s) attempted · 1 upgraded to 2 class calm
 ```
@@ -506,15 +506,15 @@ One journey, booked the way sj.se's front page does it, on the travel pass. Ever
 ? return date [2026-09-14]:          Enter = the same day; never before the outbound date
 ```
 
-Stations come from SJ's public `config/stations` list, matched case- and diacritic-insensitively: an exact name or synonym wins, then a name prefix, a word prefix, a substring, a synonym substring — ties by UIC code, which puts the big stations first. The 6-station map in `client.py` is still what config validation uses (offline); the picked codes go straight into the search. A `to` equal to `from` is refused (`! from and to are the same station`) and asked again, without the default.
+Stations come from SJ's public `config/stations` list, matched case- and diacritic-insensitively: an exact name or synonym wins, then a name prefix, a word prefix, a substring, a synonym substring — ties by UIC code, which puts the big stations first. When any match is a train-looking station (a station word such as `Central`/`station`/`Resecentrum`/`Flygplats` in the name, or a non-Swedish UIC code whose last five digits fall below the `9xxxx` range the bus terminals live in), matches ranked no better than it are dropped unless they are train-looking too — `linköping` gives `Linköping Central` alone, while a stop typed by its exact name still comes first; a bus stop is always found when nothing train-looking matches. The 6-station map in `client.py` is still what config validation uses (offline); the picked codes go straight into the search. A `to` equal to `from` is refused (`! from and to are the same station`) and asked again, without the default.
 
-One search (with the return date when asked), then per leg a day header and a pick list — `HH:MM → HH:MM   duration   train   class`, the class being what the pass would get on that departure (`comfort_class`, a fallback marked `fallback`, or `—` marked `no seats`, which cannot be picked) — that column is what the search reports, and the offer step can still fall further down the class chain (§7.2), said as `! outbound class fallback: 2 class calm → 2 class`. The highlighted row is the enabled departure closest to `time_leave` (`time_return` for the return — 17:00 when the config omits it, which it may when `roundtrip = false`); ↑↓ or a typed row number move it, Enter picks, Esc aborts. The pick's offers are read at once; a departure without a 0-price offer is said (`! no 0-price offer at 05:29 · pick another`), disabled, and the list asked again with the closest enabled row highlighted. Before the first list, every ticket the account already holds on the chosen dates is named (`! you hold booking 3HT2NEIL on 2026-09-14 (Göteborg Central → Stockholm Central 05:29) · departures overlapping it show no seats`) — a pass search reports every class unavailable on a departure that overlaps a held ticket (§5.6), so the list would otherwise look inexplicably empty there; a failed bookings fetch is only a note (`! could not check existing bookings: …`). There is no duplicate check — that warning is the whole guard; a day `--book` already covered can be booked again.
+One search (with the return date when asked), then per leg a day header and a pick list — `HH:MM → HH:MM   duration   train   class`, the class being what the pass would get on that departure (`comfort_class`, a fallback marked `fallback`, or `—` marked `no seats`, which cannot be picked) — that column is what the search reports, and the offer step can still fall further down the class chain (§7.2), said as `! outbound class fallback: 2 class calm → 2 class`. Departures already gone are dropped before the lists are built and counted under the day header (`2 already departed`) — the clock is read after the questions, so a train that left while they were being answered is gone from the list too; a leg with nothing left ends the run (`● no departures left for Göteborg Central → Stockholm Central today`, or `● no departures found for Göteborg Central → Stockholm Central on 2026-09-14` when the search itself came back empty), exit 1. The highlighted row is the enabled departure closest to `time_leave` (`time_return` for the return — 17:00 when the config omits it, which it may when `roundtrip = false`); ↑↓ or a typed row number move it, Enter picks, Esc aborts. The pick's offers are read at once; a departure without a 0-price offer is said (`! no 0-price offer at 05:29 · pick another`), disabled, and the list asked again with the closest enabled row highlighted. Before the first list, every ticket the account already holds on the chosen dates is named (`! you hold booking 3HT2NEIL on 2026-09-14 (Göteborg Central → Stockholm Central 05:29) · departures overlapping it show no seats`) — a pass search reports every class unavailable on a departure that overlaps a held ticket (§5.6), so the list would otherwise look inexplicably empty there; a row that overlaps a held ticket says which (`overlaps 3HT2NEIL · 04:01–08:38`, in place of the `fallback`/`no seats` note — the held route is named in front of the times when it is not the list's own, and a night train that departed the evening before counts as well, though only tickets on the chosen dates get the `! you hold` line), and such a row with no class of its own is refused as `overlaps booking 3HT2NEIL · pick another`. When SJ's own offers response names a double booking the pick prints `! outbound: SJ reports a conflict with booking 3HT2NEIL` and stands — the line comes from `resolve_offer`, so `--book` prints it too. A failed bookings fetch is only a note (`! could not check existing bookings: …`). There is no duplicate check — that warning is the whole guard; a day `--book` already covered can be booked again.
 
 Then the chosen leg(s) as day cards (one per date), and:
 
 - `--dry-run`: `● dry run · nothing booked` (dim), exit 0.
 - `? book? [y/N]:` — no: `● booking aborted, nothing was booked` (red), exit 1.
-- yes: the ordinary write path (§6.1 steps 8–12 through the `Cart`: provisional, the return leg added to it, seats when `seat_preference` is set, customer, checkout), the booked card, `● booked 3HT2NEIL` (green). A failed first add closes red (`● could not create the booking (…) · nothing was booked`), exit 1. A checkout failure closes red (`● booking 3HT2NEIL not checked out · provisional left, SJ releases it or cancel it on sj.se`), exit 1 — the `--book` cleanup covers only the configured route, so it is not promised here. A return leg that fails to add books the outbound alone (§8.2).
+- yes: the ordinary write path (§6.1 steps 8–12 through the `Cart`: provisional, the return leg added to it, seats when `seat_preference` is set, customer, checkout), the booked card (class and flexibility from the segment's codes: `2 class calm   FULLFLEX`), `● booked 3HT2NEIL` (green). A failed first add closes red (`● could not create the booking (…) · nothing was booked`), exit 1. A checkout failure closes red (`● booking 3HT2NEIL not checked out · provisional left, SJ releases it or cancel it on sj.se`), exit 1 — the `--book` cleanup covers only the configured route, so it is not promised here. A return leg that fails to add books the outbound alone (§8.2).
 
 Config: `[search_parameters]` is required (`comfort_class`, `flexibility`, `allow_class_fallback`, `service_types`, `seat_preference` apply as in `--book`; `station_from`/`station_to`, `time_leave`/`time_return` and `roundtrip` are defaults only), `dates` is not (and is not validated for this mode, as for `--cancel-date`). The pass is the single valid one, or the one chosen at the existing numbered prompt; the typed dates are checked against it. Needs a terminal on stdin and stdout, dry run included: refused otherwise after auth and the travel-pass fetch, but before it asks anything (`● not a terminal · --book-journey asks questions`, exit 1); with several valid passes the pass prompt refuses even earlier (`● N valid travel passes · run in a terminal to choose one`, §9.1). Ctrl-D at any prompt, or Esc in a pick list, aborts (`● booking aborted, nothing was booked`, exit 1); Ctrl-C exits 130 with the pick-list frame wiped and the terminal restored.
 
@@ -565,6 +565,8 @@ A round trip is always attempted the way the SJ app does it: one roundtrip searc
 ## 7. Departure Selection
 
 ### 7.1 Time matching
+
+Departures already gone at search time are dropped first (`drop_departed`), before the closest-to-`time_leave` choice below and before the alternative of §8.1: a same-day run never books a train that has left. A departure timed exactly at now is kept, and so is one whose timestamp cannot be parsed.
 
 When `select_closest_ticket_available = true` (the expected default), walk the departures by absolute time difference from the target time, regardless of direction (earlier or later), and take the first one that carries the requested class (or a fallback class, §7.2): a closest departure without the class (a bus, a regional without calm) is skipped with a warning, not the end of the leg. If the chosen departure has no 0-price offer, one alternative is tried (§8.1).
 
@@ -702,6 +704,7 @@ Color-coded by level in terminal.
 ## 11. Removed / Out of Scope
 
 - **Ad-hoc trips outside `--book-journey`**: several legs stitched by hand (a journey SJ sells with changes is fine), several passengers.
+- **Train-only station filter**: the picker prefers train-looking stations; it never hides a stop, so no switch is needed.
 - **Multi-passenger booking**: always single passenger (the pass holder).
 - **Dynamic station lookup in config**: config stations are validated against the hardcoded map; only `--book-journey` uses the live list.
 - **SMS re-trigger**: user re-runs the tool if the SMS doesn't arrive (a mistyped code *is* retried, §3.2 step 8).
