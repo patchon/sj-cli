@@ -705,7 +705,7 @@ Color-coded by level in terminal.
 - **Multi-passenger booking**: always single passenger (the pass holder).
 - **Dynamic station lookup in config**: config stations are validated against the hardcoded map; only `--book-journey` uses the live list.
 - **SMS re-trigger**: user re-runs the tool if the SMS doesn't arrive (a mistyped code *is* retried, §3.2 step 8).
-- **`dry_run` config key**: removed from config. `--dry-run` is a CLI modifier on `--book`/`--cancel-*`; the bare flags act for real.
+- **`dry_run` config key**: removed from config. `--dry-run` is a CLI modifier on `--book`/`--book-journey`/`--cancel-*`/`--change-seat-*`/`--upgrade-class`; the bare flags act for real.
 
 ## 12. Dependencies
 
