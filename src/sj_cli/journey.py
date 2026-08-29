@@ -26,8 +26,14 @@ def _ask_date(
     Re-asks until the answer is a YYYY-MM-DD date not before `earliest`
     (`too_early` is the complaint) and inside the pass validity `valid`
     (an unknown bound is not checked).
+
+    `default` is clamped up to the pass start when it is otherwise outside
+    `valid` — a pass bought ahead starts after today, and an unreachable
+    default would make Enter a dead key.
     """
     first, last = valid
+    if first is not None and default < first:
+        default = first
     while True:
         answer = ask_optional(f"{label} [{default.isoformat()}]: ")
         if answer is None:
@@ -60,6 +66,7 @@ def _ask_station(
             return None
         if other is not None and chosen["code"] == other["code"]:
             pwarn("from and to are the same station")
+            default = None  # a refused default must not be offered again
             continue
         return chosen
 
@@ -80,4 +87,5 @@ def _default_station(index: StationIndex, client: SJClient, name: str) -> Statio
     station = index.exact(name)
     if station is not None:
         return station
+    # a name the live list lacks: the search resolves it, as --book does
     return {"name": name, "code": client.resolve_station(name), "synonyms": []}

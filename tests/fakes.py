@@ -162,7 +162,7 @@ class FakeClient:
 
     def get_stations(self):
         self.calls.append(("stations",))
-        return [dict(s) for s in self.STATION_LIST]
+        return [{**s, "synonyms": list(s["synonyms"])} for s in self.STATION_LIST]
 
     def search_journey(
         self, token, origin, dest, date, return_date=None, tp_id=None, service_types=None
