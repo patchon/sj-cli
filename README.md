@@ -24,7 +24,7 @@ så det kan logga in, söka, välja rätt avgång, hitta kortinnehavarens erbjud
 slutföra bokningen, dag efter dag — helger och svenska röda dagar hoppas över, och en dag som
 redan är bokad dubbelbokas aldrig.
 
-Med `--dry-run` händer ingenting på riktigt: flaggan förhandsvisar `--book`, båda
+Med `--dry-run` händer ingenting på riktigt: flaggan förhandsvisar `--book`, `--book-journey`, båda
 avbokningsflaggorna, båda platsbytesflaggorna och `--upgrade-class`. En lägesflagga krävs alltid —
 kör du verktyget utan flaggor skrivs bara hjälptexten ut.
 
@@ -176,6 +176,8 @@ source venv/bin/activate
 
 sj-cli --book --dry-run        # förhandsvisa: visa vad som skulle bokas, utan att boka
 sj-cli --book                  # boka på riktigt
+sj-cli --book-journey          # boka en resa interaktivt: datum, från, till, retur? — sedan väljer du tåg ur en lista
+sj-cli --book-journey --dry-run   # samma frågor och listor, inget bokas
 sj-cli --list-bookings         # aktiva bokningar, en ruta per resdag
 sj-cli --list-bookings --seat-details   # samma, plus varje resas sittplats (window/aisle/table/solo/
                                 #   single/forward/backward) — ett extra anrop per resa som inte avgått;
@@ -219,6 +221,18 @@ tänker röra, och den vägrar köra alls när stdin inte är en terminal — cr
 en biljett. Bara den resa som uppgraderas avbokas — en tur och retur bokad som en bokning behåller
 sin andra resa — och ombokningen tar alltid samma avgång, aldrig den närmast `time_leave`.
 `--dry-run` gör provningen och rapporterar vad den skulle försöka, utan att röra någonting.
+
+`--book-journey` bokar en enda resa som på sj.se:s förstasida: den frågar efter datum, från,
+till och om du vill ha en retur (med datum), söker, och visar sedan dagens avgångar för varje
+delresa i en lista där du väljer med piltangenterna — med den klass periodkortet skulle få på
+just den avgången, eller `no seats` där det inte finns någon. Allt du inte skriver kommer från
+konfigurationen (dagens datum, `station_from`/`station_to`, `roundtrip`, avgången närmast
+`time_leave`/`time_return` förvald), så Enter rakt igenom bokar en dag av pendlingen;
+stationerna kan vara vilka som helst i SJ:s lista och filtreras medan du skriver. Efter en
+sammanfattning frågar den `book?` en gång, och bokar sedan precis som `--book` gör (samma
+platsval, samma utcheckning). Har du redan en biljett den dagen sägs det innan listan,
+eftersom en sökning med kortet döljer platserna på avgångar som överlappar den. Kräver en
+terminal; `--dry-run` går igenom alla frågor och listor utan att boka.
 
 ### Första inloggningen
 

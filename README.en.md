@@ -9,7 +9,7 @@ authenticate, search, pick the right departure, find the 0-price pass-holder off
 day after day, skipping weekends and Swedish red days and never double-booking a day that is
 already covered.
 
-Nothing real happens with `--dry-run` present: it previews `--book`, both cancel flags, both
+Nothing real happens with `--dry-run` present: it previews `--book`, `--book-journey`, both cancel flags, both
 change-seat flags and `--upgrade-class`. A mode flag is always required — running the tool bare
 just prints the help.
 
@@ -154,6 +154,8 @@ source venv/bin/activate
 
 sj-cli --book --dry-run        # preview: show what would be booked, without booking
 sj-cli --book                  # book for real
+sj-cli --book-journey          # book one journey interactively: date, from, to, return? — then pick the train from a list
+sj-cli --book-journey --dry-run   # the same questions and lists, nothing booked
 sj-cli --list-bookings         # active bookings as one card per travel day
 sj-cli --list-bookings --seat-details   # same, plus each leg's seat (window/aisle/table/solo/
                                 #   single/forward/backward) — one extra request per not-yet-departed leg;
@@ -196,6 +198,17 @@ refuses to run at all when stdin is not a terminal, so cron can never release a 
 one journey being upgraded is cancelled — a round trip booked as one booking keeps its other leg —
 and the re-booking always takes the same departure, never the one closest to `time_leave`.
 `--dry-run` does the probing and reports what it would attempt, touching nothing.
+
+`--book-journey` books a single journey the way sj.se's front page does: it asks for the date,
+from, to and whether you want a return (and when), searches, then lists each leg's departures for
+you to pick from with the arrow keys — showing the class the pass would get on that departure, or
+`no seats` where there is none. Everything you don't type comes from config (today's date,
+`station_from`/`station_to`, `roundtrip`, the departure closest to `time_leave`/`time_return`
+highlighted), so Enter all the way through books one day of the commute; the stations can be any
+in SJ's list and filter as you type. After a summary it asks `book?` once, then books exactly as
+`--book` does (same seat choice, same checkout). If you already hold a ticket that day it says so
+before the list, since a search made with the pass hides the seats on departures overlapping it.
+Needs a terminal; `--dry-run` walks through every question and list without booking.
 
 ### First login
 
