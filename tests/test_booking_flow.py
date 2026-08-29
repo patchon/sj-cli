@@ -440,8 +440,22 @@ def test_book_mode_checkout_failure_is_counted(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN}, checkout_ok=False)
     assert run_range(c, base_cfg(), dry_run=False) == {"days": 1, "failed": 1}
     out = capsys.readouterr().out
-    assert "  ! checkout failed, provisional left (cleaned up on next --book run)\n" in out
+    # The cause is the "!" line Cart printed; this consequence line stays dim.
+    assert "   checkout failed, provisional left (cleaned up on next --book run)\n" in out
     assert "\n ● 1 day(s) · 1 checkout failed" in out
+
+
+def test_book_mode_counts_a_provisional_without_an_id_as_an_error(capsys):
+    class NoId(FakeClient):
+        def create_provisional_booking(self, token, offer_id, passenger_token):
+            self.calls.append(("create", offer_id))
+            return {"booking": {}}
+
+    c = NoId({"OUT": OUT, "IN": IN})
+    assert run_range(c, base_cfg(), dry_run=False) == {"days": 1, "error": 1}
+    out = capsys.readouterr().out
+    assert "error: the API returned no booking id for the new provisional" in out
+    assert not [x for x in c.calls if x[0] in ("add", "customer", "checkout")]
 
 
 def test_dry_run_prints_cards_with_notes_and_returns_counts(capsys):

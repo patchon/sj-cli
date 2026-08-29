@@ -230,7 +230,7 @@ def resolve_offer(
     """
     departure_id = dep.get("departureId")
     if not departure_id:
-        logger.warning("departure has no departureId, skipping its offers")
+        logger.warning(f"{label}: departure has no departureId, skipping its offers")
         return None
     facts = describe_departure(dep, route)
     with spinner(f"checking offers for {label} at {facts['departure']}"):
@@ -1097,6 +1097,7 @@ class Cart:
         self.booking_number: str | None = None
         self.booking: dict = {}
         self.legs: list[str] = []
+        self._finished = False
 
     @property
     def held(self) -> bool:
@@ -1107,20 +1108,32 @@ class Cart:
         """
         Put one leg (a Leg, or a dict with its keys) in the cart under `label`.
 
-        Raises whatever the API raises. A first add that yields no booking id
-        raises SJAPIError, and the cart stays empty (held is False).
+        The first call creates the provisional booking, later ones add the
+        offer to it. Anything the API raises comes through unchanged.
+
+        Raises:
+            SJError: The leg carries no offer, or the cart has already been
+                checked out.
+            SJAPIError: The provisional came back without a booking id — the
+                cart is left untouched, so held stays False.
+
         """
+        if not leg.get("offer_id"):
+            raise SJError("a leg without an offer cannot be booked")
+        if self._finished:
+            raise SJError("the cart is already checked out")
         alt = "alternative " if leg.get("alternative") else ""
         if self.booking_id is None:
+            # The id check belongs inside the spinner: a provisional without
+            # an id is a failed step, and the trail should say so with a ✗.
             with spinner(f"creating booking with {alt}{label} at {leg['departure']}"):
                 resp = self._client.create_provisional_booking(
                     self._token, leg["offer_id"], self._passenger_token
                 )
-            booking_id, self.booking_number, self.booking = _booking_from_response(resp)
-            if not booking_id:
-                logger.error("the API returned no booking id for the new provisional")
-                raise SJAPIError("the API returned no booking id for the new provisional")
-            self.booking_id = booking_id
+                booking_id, number, booking = _booking_from_response(resp)
+                if not booking_id:
+                    raise SJAPIError("the API returned no booking id for the new provisional")
+            self.booking_id, self.booking_number, self.booking = booking_id, number, booking
         else:
             with spinner(f"adding {alt}{label} leg at {leg['departure']}"):
                 resp = self._client.add_offer_to_booking(
@@ -1135,15 +1148,21 @@ class Cart:
         """
         Seats, customer details and checkout for the held booking.
 
-        Never raises past the checkout: a failed checkout is reported with a
-        "!" line and checked_out=False — the provisional stays, and the next
-        --book run cleans it up (SPEC §6.2).
+        Never raises past those calls: a failed customer PATCH or checkout is
+        reported with a "!" line naming the step, and checked_out=False — the
+        provisional stays, and the next --book run cleans it up (SPEC §6.2).
 
         Returns:
             {"booking_id", "booking_number", "legs", "checked_out", "booking"}
             — the booking object is the API's, with journeys, for the card.
 
+        Raises:
+            SJError: Nothing has been added yet, or the cart has already been
+                checked out.
+
         """
+        if self._finished:
+            raise SJError("the cart is already checked out")
         if self.booking_id is None:
             raise SJError("nothing in the cart to check out")
         # Seats before checkout: a seat is chosen on the still-provisional
@@ -1161,6 +1180,9 @@ class Cart:
                 provisional=True,
             )
         checked_out = True
+        # Both calls sit under one spinner, so `step` says which of them the
+        # "!" line is about. Set before the try: the except reads it.
+        step = "customer details"
         try:
             # The API already put the holder's contact details on the
             # provisional; send those back rather than invent a number.
@@ -1177,11 +1199,13 @@ class Cart:
                 self._client.update_booking_customer(
                     self._token, self.booking_id, self._cfg["auth"]["email"], phone
                 )
+                step = "checkout"
                 self._client.checkout_booking(self._token, self.booking_id)
         except Exception as e:
-            logger.error(f"checkout failed for booking {self.booking_id}: {e}")
-            pwarn(f"checkout failed: {error_text(e)}")
+            logger.error(f"{step} failed for booking {self.booking_id}: {e}")
+            pwarn(f"{step} failed: {error_text(e)}")
             checked_out = False
+        self._finished = True
         return {
             "booking_id": self.booking_id,
             "booking_number": self.booking_number,
@@ -2050,7 +2074,9 @@ def process_date_range(
                     logger.error(f"could not render the legs of booking {number}: {e}")
                     pwarn(f"booked as {number}, but the legs could not be shown ({error_text(e)})")
                 if not result.get("checked_out"):
-                    pwarn("checkout failed, provisional left (cleaned up on next --book run)")
+                    # The cause already printed its own "!" line; this is the
+                    # consequence, so it stays quiet under it.
+                    pdim("checkout failed, provisional left (cleaned up on next --book run)")
                     count("failed")
                 else:
                     wanted = int(need_outbound) + int(need_inbound)
@@ -2899,7 +2925,8 @@ def _rebook_released_leg(
     customer + checkout.
 
     Returns:
-        {"booking_id", "booking_number", "class", "booking", "checked_out"}
+        {"booking_id", "booking_number", "legs", "class", "booking",
+        "checked_out"}
         when a provisional was created (checked_out says whether it became
         a real ticket); None when there was nothing to book — no search id,
         the departure was gone, or no 0-price offer; a provisional that
