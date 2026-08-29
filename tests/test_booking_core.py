@@ -300,7 +300,7 @@ def test_cart_finish_reports_a_failed_checkout_instead_of_raising(capsys):
     assert " ! checkout failed: checkout exploded\n" in capsys.readouterr().out
 
 
-def test_cart_refuses_a_provisional_without_an_id_and_an_empty_finish():
+def test_cart_refuses_a_provisional_without_an_id_and_an_empty_finish(capsys):
     class NoId(FakeClient):
         def create_provisional_booking(self, token, offer_id, passenger_token):
             self.calls.append(("create", offer_id))
@@ -309,6 +309,62 @@ def test_cart_refuses_a_provisional_without_an_id_and_an_empty_finish():
     cart = Cart(NoId(), "tok", base_cfg(), "PT")
     with pytest.raises(SJAPIError):
         cart.add(_leg(), "outbound")
+    # Nothing of the half-made booking is kept, and the trail says the step failed.
     assert cart.held is False
+    assert cart.booking_number is None
+    assert cart.booking == {}
+    assert cart.legs == []
+    assert " ✗ creating booking with outbound at 06:59\n" in capsys.readouterr().out
     with pytest.raises(SJError):
         cart.finish()
+
+
+def test_cart_keeps_the_booking_when_an_added_leg_comes_back_without_journeys():
+    class NoJourneys(FakeClient):
+        def add_offer_to_booking(self, token, booking_id, offer_id, passenger_token):
+            self.calls.append(("add", booking_id, offer_id))
+            return {"bookingId": booking_id, "booking": {}}
+
+    cart = Cart(NoJourneys(), "tok", base_cfg(), "PT")
+    cart.add(_leg(), "outbound")
+    cart.add(_leg("OFF-second", "17:22"), "return")
+    # The thin response must not wipe the journeys the card is rendered from.
+    assert len(cart.booking["journeys"]) == 1
+    assert cart.legs == ["outbound", "return"]
+
+
+def test_cart_refuses_a_leg_without_an_offer():
+    c = FakeClient()
+    cart = Cart(c, "tok", base_cfg(), "PT")
+    with pytest.raises(SJError):
+        cart.add({**_leg(), "offer_id": None}, "outbound")
+    assert c.calls == []
+    assert cart.held is False
+
+
+def test_cart_refuses_to_be_used_after_it_is_checked_out():
+    c = FakeClient({"OUT": [dep("o", D, "06:59", "11:36")]})
+    cart = Cart(c, "tok", base_cfg(), "PT")
+    cart.add(_leg(), "outbound")
+    cart.finish()
+    spent = list(c.calls)
+    with pytest.raises(SJError):
+        cart.finish()
+    with pytest.raises(SJError):
+        cart.add(_leg("OFF-second", "17:22"), "return")
+    assert c.calls == spent
+
+
+def test_cart_names_a_failed_customer_patch_and_never_checks_out(capsys):
+    class NoCustomer(FakeClient):
+        def update_booking_customer(self, token, booking_id, email, phone=None):
+            self.calls.append(("customer", booking_id))
+            raise RuntimeError("customer exploded")
+
+    c = NoCustomer({"OUT": [dep("o", D, "06:59", "11:36")]})
+    cart = Cart(c, "tok", base_cfg(), "PT")
+    cart.add(_leg(), "outbound")
+    result = cart.finish()
+    assert result["checked_out"] is False
+    assert ("checkout", "UUID-1") not in c.calls
+    assert " ! customer details failed: customer exploded\n" in capsys.readouterr().out
