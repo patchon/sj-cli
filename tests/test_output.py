@@ -11,7 +11,6 @@ from sj_cli.output import (
     confirm,
     day_header,
     departure_choice_lines,
-    format_class_name,
     format_duration,
     group_route,
     indented,
@@ -23,6 +22,7 @@ from sj_cli.output import (
     select_filtered,
     select_list,
     spinner,
+    split_product_name,
     style,
     visible_len,
 )
@@ -36,9 +36,21 @@ def test_format_duration():
     assert format_duration("weird") == "weird"
 
 
-def test_format_class_name():
-    assert format_class_name("2 klass Lugn, Kan återbetalas") == "2 klass Lugn"
-    assert format_class_name("") == "—"
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("2 klass Lugn, Kan återbetalas", ("2 class calm", "FULLFLEX")),
+        ("1 klass, Kan ej ombokas", ("1 class", "NOFLEX")),
+        ("2 klass, Kan ombokas", ("2 class", "SEMIFLEX")),
+        ("2 klass", ("2 class", None)),
+        ("2 class calm, FULLFLEX", ("2 class calm", "FULLFLEX")),  # already ours: untouched
+        ("Buss, Något annat", ("Buss", "Något annat")),  # unknown words pass through
+        ("", ("—", None)),
+        ("—", ("—", None)),
+    ],
+)
+def test_split_product_name(raw, expected):
+    assert split_product_name(raw) == expected
 
 
 def test_visible_len_and_pad_ignore_ansi():

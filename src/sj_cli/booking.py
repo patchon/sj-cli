@@ -25,7 +25,6 @@ from sj_cli.output import (
     blank,
     confirm,
     day_header,
-    format_class_name,
     format_duration,
     indented,
     leg_lines,
@@ -39,6 +38,7 @@ from sj_cli.output import (
     pstatus,
     pwarn,
     spinner,
+    split_product_name,
 )
 from sj_cli.seats import (
     COMFORT_CODES,
@@ -331,7 +331,8 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
 
     Returns:
         Display row dict with keys: date, direction, departure, arrival,
-        duration, comfort_class, route, booking_number, past, train, seat.
+        duration, comfort_class, flexibility, route, booking_number, past,
+        train, seat.
 
     """
     # API says OUTBOUND/INBOUND; the UI (and the dry-run table) says Outbound/Return
@@ -341,7 +342,13 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
     duration = segment.get("duration", "")
     # The API writes explicit nulls for absent sub-objects: `or {}` covers
     # both a missing key and a null value (`.get(key, {})` only the former).
-    prod_name = (segment.get("productFamily") or {}).get("name") or "—"
+    # The codes are the source; the Swedish product name only stands in for
+    # a segment that lacks them (translated by split_product_name).
+    family = segment.get("productFamily") or {}
+    name_class, name_flex = split_product_name(family.get("name") or "—")
+    comfort_code = family.get("salesCategoryComfort")
+    comfort_class = COMFORT_NAMES.get(str(comfort_code), "") if comfort_code else ""
+    flexibility = str(family.get("salesCategoryFlexibility") or "") or (name_flex or "")
     dep_station = (segment.get("departureStation") or {}).get("name") or "—"
     arr_station = (segment.get("arrivalStation") or {}).get("name") or "—"
 
@@ -379,7 +386,8 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
         "departure": dep_time,
         "arrival": arr_time,
         "duration": format_duration(duration),
-        "comfort_class": format_class_name(prod_name),
+        "comfort_class": comfort_class or name_class,
+        "flexibility": flexibility,
         "route": f"{dep_station} → {arr_station}",
         "booking_number": booking_number,
         "past": in_past,

@@ -3,6 +3,7 @@ from datetime import datetime
 from sj_cli.booking import (
     _dry_run_note,
     _run_outcome,
+    _segment_to_display_row,
     _span_label,
     booking_date_range,
     check_comfort_availability,
@@ -15,6 +16,7 @@ from sj_cli.booking import (
     select_best_departure,
     time_str_to_minutes,
 )
+from sj_cli.dates import sweden_now
 from tests.fakes import dep, offers
 
 D = "2026-09-01"
@@ -331,3 +333,38 @@ def test_segment_label_names_the_return_leg_and_disambiguates_a_change():
     # neither name given: the label must not end in a stray space
     bare = {"direction": "INBOUND"}
     assert _segment_label(bare, [bare, dict(bare)]) == "return"
+
+
+def _segment(family):
+    return {
+        "direction": "OUTBOUND",
+        "departureDateTime": "2026-09-01T06:59:00+02:00",
+        "arrivalDateTime": "2026-09-01T11:36:00+02:00",
+        "productFamily": family,
+        "departureStation": {"name": "Göteborg Central"},
+        "arrivalStation": {"name": "Stockholm Central"},
+    }
+
+
+def test_booked_row_takes_class_and_flexibility_from_the_codes():
+    row = _segment_to_display_row(
+        _segment(
+            {
+                "name": "2 klass Lugn, Kan återbetalas",
+                "salesCategoryComfort": "SECOND_CALM",
+                "salesCategoryFlexibility": "SEMIFLEX",
+            }
+        ),
+        "NUM1",
+        sweden_now(),
+    )
+    assert (row["comfort_class"], row["flexibility"]) == ("2 class calm", "SEMIFLEX")
+
+
+def test_booked_row_translates_the_name_when_the_codes_are_missing():
+    row = _segment_to_display_row(
+        _segment({"name": "1 klass, Kan ej ombokas"}), "NUM1", sweden_now()
+    )
+    assert (row["comfort_class"], row["flexibility"]) == ("1 class", "NOFLEX")
+    row = _segment_to_display_row(_segment(None), "NUM1", sweden_now())
+    assert (row["comfort_class"], row["flexibility"]) == ("—", "")
