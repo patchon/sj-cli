@@ -14,6 +14,7 @@ from sj_cli.booking import (
     process_booking_flow,
     process_date_range,
 )
+from sj_cli.dates import to_sweden
 from sj_cli.errors import SJAPIError
 from tests.fakes import FakeClient, FakeTokenManager, base_cfg, dep, offers, seatmap
 
@@ -846,3 +847,20 @@ def test_ask_mode_without_a_terminal_warns_once_and_keeps_the_seats(capsys, monk
     out = capsys.readouterr().out
     assert out.count("! seat selection needs a terminal") == 1
     assert not c.seat_updates
+
+
+def test_same_day_book_skips_a_departed_train(monkeypatch, capsys):
+    from datetime import date
+
+    from sj_cli import booking as m
+
+    monkeypatch.setattr(m, "sweden_now", lambda: to_sweden("2026-09-01T07:10:00+02:00"))
+    gone = dep("gone", D, "06:59", "11:36")
+    nxt = dep("next", D, "07:30", "09:10")
+    c = FakeClient({"OUT": [gone, nxt]})
+    cfg = base_cfg(dates="2026-09-01", roundtrip=False, select_closest_ticket_available=True)
+    process_date_range(
+        c, "tok", FakeTokenManager(), cfg, "TP", "TOK", [], dry_run=True, today=date(2026, 9, 1)
+    )
+    assert [call for call in c.calls if call[0] == "offers"] == [("offers", "next")]
+    assert "07:30" in capsys.readouterr().out

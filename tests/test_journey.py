@@ -602,3 +602,53 @@ def test_ctrl_c_before_anything_is_held_names_nothing(monkeypatch, capsys):
     with pytest.raises(KeyboardInterrupt):
         run(c, s)
     assert "left as a provisional" not in capsys.readouterr().out
+
+
+# --- departed trains ---------------------------------------------------------------
+
+T = TODAY.isoformat()
+
+
+def _shift(minutes):
+    return (NOW + timedelta(minutes=minutes)).strftime("%H:%M")
+
+
+def _dep_at(dep_id, minutes, duration=95):
+    """dep() at NOW + minutes, timestamped in NOW's own offset (not dep()'s fixed +02:00)."""
+    start = NOW + timedelta(minutes=minutes)
+    end = start + timedelta(minutes=duration)
+    d = dep(dep_id, start.date().isoformat(), start.strftime("%H:%M"), end.strftime("%H:%M"))
+    d["departureDateTime"] = start.isoformat(timespec="seconds")
+    d["arrivalDateTime"] = end.isoformat(timespec="seconds")
+    return d
+
+
+def test_departed_trains_are_dropped_and_counted(monkeypatch, capsys):
+    deps = [
+        _dep_at("gone-1", -120),
+        _dep_at("gone-2", -10),
+        _dep_at("next", 15),
+        _dep_at("later", 75),
+    ]
+    c = FakeClient({"OUT": deps})
+    s = Script(T, "", "", "n", "", True)
+    wire(monkeypatch, s)
+    assert run(c, s, base_cfg(roundtrip=False, time_leave=_shift(-10))) is True
+    _, rows, default_index, _ = s.lists[0]
+    assert len(rows) == 2 and rows[0].startswith(_shift(15))
+    assert default_index == 0  # the closest *upcoming* one
+    out = capsys.readouterr().out
+    assert "  2 already departed\n" in out
+    assert [call for call in c.calls if call[0] == "offers"] == [("offers", "next")]
+
+
+def test_all_departed_ends_the_run(monkeypatch, capsys):
+    c = FakeClient({"OUT": [_dep_at("gone", -60)]})
+    s = Script(T, "", "", "n")
+    wire(monkeypatch, s)
+    assert run(c, s, base_cfg(roundtrip=False)) is False
+    assert not any(call[0] == "offers" for call in c.calls)
+    assert (
+        " ● no departures left for Göteborg Central → Stockholm Central today"
+        in capsys.readouterr().out
+    )

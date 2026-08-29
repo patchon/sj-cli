@@ -11,6 +11,7 @@ from sj_cli.booking import (
     booked_rows,
     booking_date_range,
     describe_departure,
+    drop_departed,
     fetch_all_bookings,
     get_departure_time_minutes,
     is_active_booking,
@@ -31,6 +32,7 @@ from sj_cli.output import (
     departure_choice_lines,
     group_route,
     indented,
+    pdim,
     print_day_header,
     print_leg_lines,
     pstatus,
@@ -174,18 +176,24 @@ def _choose_leg(
     date_str: str,
     label: str,
     target_time: str,
+    departed: int = 0,
 ) -> Leg | None:
     """
     Let the user pick a departure and resolve its offer; None when they abort.
 
     A pick without a 0-price offer is said, disabled, and the list opened
-    again — the frame is redrawn, the day header is not repeated.
+    again — the frame is redrawn, the day header is not repeated. `departed`
+    is how many of the day's departures were already gone: said under the
+    day header, so a short list on a same-day run explains itself.
     """
     rows = _departure_rows(departures, route, params)
     for row, text in zip(rows, departure_choice_lines(rows), strict=True):
         row["text"] = text
     default = _closest_enabled(rows, target_time)
     print_day_header(date_str, route)
+    if departed:
+        with indented():
+            pdim(f"{departed} already departed")
     while True:
         picked = select_list(
             label,
@@ -342,7 +350,8 @@ def handle_book_journey(
         return False
 
     # The questions
-    today = sweden_now().date()
+    now = sweden_now()
+    today = now.date()
     valid = pass_validity(active_pass)
     day = _ask_date("date", today, today, "date is in the past", valid)
     if day is None:
@@ -389,11 +398,17 @@ def handle_book_journey(
             if return_str and found["in_id"]
             else []
         )
+    out_deps, out_gone = drop_departed(out_deps, now)
+    in_deps, in_gone = drop_departed(in_deps, now)
     if not out_deps:
-        pstatus(False, f"no departures found for {out_route} on {date_str}")
+        why = "left" if out_gone else "found"
+        when = "today" if out_gone else f"on {date_str}"
+        pstatus(False, f"no departures {why} for {out_route} {when}")
         return False
     if return_str and not in_deps:
-        pstatus(False, f"no departures found for {in_route} on {return_str}")
+        why = "left" if in_gone else "found"
+        when = "today" if in_gone else f"on {return_str}"
+        pstatus(False, f"no departures {why} for {in_route} {when}")
         return False
     _warn_held_bookings(
         client, access_token, active_pass, {date_str, *([return_str] if return_str else [])}
@@ -411,6 +426,7 @@ def handle_book_journey(
         date_str,
         "outbound",
         params["time_leave"],
+        departed=out_gone,
     )
     if outbound is None:
         return _aborted()
@@ -426,6 +442,7 @@ def handle_book_journey(
             return_str,
             "return",
             params.get("time_return", "17:00"),
+            departed=in_gone,
         )
         if inbound is None:
             return _aborted()

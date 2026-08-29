@@ -9,6 +9,7 @@ from sj_cli.booking import (
     check_comfort_availability,
     check_existing_booking,
     describe_run,
+    drop_departed,
     find_offer_id,
     get_departure_time_minutes,
     is_stale_provisional,
@@ -16,7 +17,7 @@ from sj_cli.booking import (
     select_best_departure,
     time_str_to_minutes,
 )
-from sj_cli.dates import sweden_now
+from sj_cli.dates import sweden_now, to_sweden
 from tests.fakes import dep, offers
 
 D = "2026-09-01"
@@ -368,3 +369,15 @@ def test_booked_row_translates_the_name_when_the_codes_are_missing():
     assert (row["comfort_class"], row["flexibility"]) == ("1 class", "NOFLEX")
     row = _segment_to_display_row(_segment(None), "NUM1", sweden_now())
     assert (row["comfort_class"], row["flexibility"]) == ("—", "")
+
+
+def test_drop_departed_keeps_now_and_the_unparsable():
+    now = to_sweden("2026-09-01T09:00:00+02:00")
+    gone = dep("gone", "2026-09-01", "08:59", "10:30")
+    at_now = dep("now", "2026-09-01", "09:00", "10:40")
+    later = dep("later", "2026-09-01", "09:01", "10:45")
+    odd = {"departureId": "odd", "departureDateTime": "soon"}
+    kept, dropped = drop_departed([gone, at_now, later, odd, {}], now)
+    assert [d.get("departureId") for d in kept] == ["now", "later", "odd", None]
+    assert dropped == 1
+    assert drop_departed([], now) == ([], 0)
