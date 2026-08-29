@@ -3,13 +3,16 @@
 import logging
 import os
 import re
+import select
+import shutil
 import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from sj_cli.dates import parse_api_datetime, sweden_now, to_sweden
+from sj_cli.errors import SJError
 from sj_cli.seats import Seat, number_key, seat_words
 
 logger = logging.getLogger(__name__)
@@ -642,3 +645,371 @@ def _extract_price(receipt_data: dict) -> str:
 
     logger.debug(f"could not extract price from receipt: {list(receipt_data.keys())}")
     return "\u2014"
+
+
+# --- list pickers ---------------------------------------------------------------
+#
+# select_filtered and select_list draw a small frame under an inline "?"
+# prompt and read keystrokes one at a time (cbreak mode; POSIX only, which
+# is what the tool targets). Every frame has the same height — the prompt
+# line, `height` rows, one footer line — so the cursor arithmetic is
+# trivial: draw, move up, done. With `keys` given the widget reads from
+# that iterator instead of the terminal (tests) and never touches termios.
+
+_CSI_FINAL = range(0x40, 0x7F)
+_ESC_WAIT = 0.05  # seconds: a lone Esc is one that nothing follows within this
+
+
+def _read_key(fd: int) -> str:
+    """
+    One keystroke from fd: a printable character or a key name.
+
+    Names: "enter", "backspace", "up", "down", "tab", "shift-tab", "esc",
+    "eof". Multi-byte UTF-8 is assembled from its lead byte (so "ö" arrives
+    whole); an unknown escape sequence or control byte is "" (the pickers
+    ignore it).
+    """
+    first = os.read(fd, 1)
+    if not first:
+        return "eof"
+    b = first[0]
+    if b == 0x1B:
+        ready, _, _ = select.select([fd], [], [], _ESC_WAIT)
+        if not ready:
+            return "esc"
+        second = os.read(fd, 1)
+        if second == b"O":  # application cursor mode: ESC O A/B
+            return {b"A": "up", b"B": "down"}.get(os.read(fd, 1), "")
+        if second != b"[":
+            return "esc" if not second else ""
+        seq = b""
+        while True:
+            ch = os.read(fd, 1)
+            if not ch:
+                return ""
+            seq += ch
+            if ch[0] in _CSI_FINAL:
+                break
+        return {b"A": "up", b"B": "down", b"Z": "shift-tab"}.get(seq, "")
+    if b in (0x0D, 0x0A):
+        return "enter"
+    if b in (0x7F, 0x08):
+        return "backspace"
+    if b == 0x09:
+        return "tab"
+    if b == 0x04:
+        return "eof"
+    if b < 0x20:
+        return ""
+    # UTF-8: the lead byte says how many continuation bytes follow. A slow
+    # pipe can hand them over in pieces, so read until the character is whole.
+    length = 1 if b < 0x80 else 2 if b < 0xE0 else 3 if b < 0xF0 else 4
+    raw = first
+    while len(raw) < length:
+        more = os.read(fd, length - len(raw))
+        if not more:
+            return ""
+        raw += more
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
+@contextmanager
+def _cbreak(fd: int):
+    """Put the terminal in cbreak mode for the block; always restore it (Ctrl-C included)."""
+    import termios
+    import tty
+
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def _terminal_keys(fd: int) -> Iterator[str]:
+    while True:
+        yield _read_key(fd)
+
+
+def _frame_size() -> tuple[int, int]:
+    size = shutil.get_terminal_size((80, 24))
+    return size.columns, size.lines
+
+
+def _clip(text: str, width: int) -> str:
+    """text, or its first width-1 characters and an ellipsis (plain text only, no ANSI)."""
+    return text if len(text) <= width else text[: max(0, width - 1)] + "…"
+
+
+def _scroll(first: int, highlight: int, height: int) -> int:
+    """The first visible row so that the highlighted one is inside the window."""
+    if highlight < first:
+        return highlight
+    if highlight >= first + height:
+        return highlight - height + 1
+    return first
+
+
+def _prompt_prefix() -> str:
+    return f"{_MARGIN}{_indent}{style('?', CYAN)} "
+
+
+def _prompt_line(text: str, width: int) -> str:
+    """The inline '? ' prefix plus text, clipped so the whole line fits width."""
+    prefix = _prompt_prefix()
+    return prefix + _clip(text, width - visible_len(prefix))
+
+
+def _draw_frame(prompt_line: str, lines: list[str], height: int) -> None:
+    """
+    Redraw the picker: the prompt line, then exactly height+1 lines, cursor back on the prompt.
+
+    Every line is cleared to its end so a shorter frame leaves nothing of a
+    taller one; the cursor ends at the end of the prompt line.
+    """
+    frame = lines[: height + 1] + [""] * (height + 1 - len(lines))
+    out = ["\r" + prompt_line + "\x1b[K"]
+    out += ["\n" + line + "\x1b[K" for line in frame]
+    out.append(f"\x1b[{height + 1}A\r\x1b[{visible_len(prompt_line) + 1}G")
+    with _stdout_lock:
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
+
+
+def _close_frame(final_line: str) -> None:
+    """Wipe the prompt line and the frame under it; leave final_line as the one line behind."""
+    with _stdout_lock:
+        sys.stdout.write("\r\x1b[J" + final_line + "\n")
+        sys.stdout.flush()
+
+
+def _rows(items: Sequence[str], first: int, highlight: int, height: int, width: int) -> list[str]:
+    rows = []
+    for i, text in enumerate(items[first : first + height], start=first):
+        clipped = _clip(text, width - 4)
+        rows.append(f"  {style('›', CYAN)} {clipped}" if i == highlight else f"    {clipped}")
+    return rows
+
+
+def _window_text(first: int, shown: int, total: int) -> str:
+    return f"{first + 1}–{first + shown} of {total}"
+
+
+def _keys_or_terminal(keys: Iterator[str] | None) -> tuple[Iterator[str], int | None]:
+    """The key source: the given iterator, or the terminal (which needs a TTY on both ends)."""
+    if keys is not None:
+        return keys, None
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise SJError("a list can only be picked from at a terminal")
+    fd = sys.stdin.fileno()
+    return _terminal_keys(fd), fd
+
+
+def select_filtered[T](
+    prompt: str,
+    default: T | None,
+    search: Callable[[str], list[T]],
+    render: Callable[[T], str],
+    height: int = 8,
+    keys: Iterator[str] | None = None,
+) -> T | None:
+    """
+    Pick an item by typing: every edit calls search(query) and redraws the shortlist.
+
+    ↑/↓ (Tab/Shift-Tab) move the highlight, wrapping; Enter takes the
+    highlighted item, or `default` when the query is empty; Backspace edits;
+    Esc/Ctrl-D return None. Leaves "? prompt: <rendered choice>" behind.
+    """
+    source, fd = _keys_or_terminal(keys)
+    if fd is None:
+        return _run_filtered(prompt, default, search, render, height, source)
+    with _cbreak(fd):
+        return _run_filtered(prompt, default, search, render, height, source)
+
+
+def _run_filtered[T](
+    prompt: str,
+    default: T | None,
+    search: Callable[[str], list[T]],
+    render: Callable[[T], str],
+    height: int,
+    keys: Iterator[str],
+) -> T | None:
+    default_label = render(default) if default is not None else ""
+    label = f"{prompt} [{default_label}]: " if default is not None else f"{prompt}: "
+    query = ""
+    results: list[T] = []
+    highlight = 0
+    first = 0
+
+    def draw() -> None:
+        nonlocal first
+        columns, _ = _frame_size()
+        width = columns - 1
+        first = _scroll(first, highlight, height)
+        rows = _rows([render(r) for r in results], first, highlight, height, width)
+        if not query:
+            footer = (
+                f"type to search · Enter keeps {default_label}"
+                if default is not None
+                else "type to search"
+            )
+        elif not results:
+            footer = "no match"
+        else:
+            footer = (
+                f"{_window_text(first, len(rows), len(results))} · ↑↓ move "
+                "· Enter picks · Esc aborts"
+            )
+        rows.append(f"  {style(footer, DIM)}")
+        _draw_frame(_prompt_line(f"{label}{query}", width), rows, height)
+
+    draw()
+    for key in keys:
+        if key == "enter":
+            if results:
+                chosen = results[highlight]
+            elif not query and default is not None:
+                chosen = default
+            else:
+                continue
+            _close_frame(f"{_prompt_prefix()}{prompt}: {style(render(chosen), DIM)}")
+            return chosen
+        if key in ("esc", "eof"):
+            _close_frame(f"{_prompt_prefix()}{prompt}: {query}")
+            return None
+        if key in ("down", "tab"):
+            if results:
+                highlight = (highlight + 1) % len(results)
+        elif key in ("up", "shift-tab"):
+            if results:
+                highlight = (highlight - 1) % len(results)
+        elif key == "backspace":
+            if not query:
+                continue
+            query = query[:-1]
+            results, highlight, first = search(query) if query else [], 0, 0
+        elif len(key) == 1 and key.isprintable():
+            query += key
+            results, highlight, first = search(query), 0, 0
+        else:
+            continue
+        draw()
+    return None
+
+
+def select_list[T](
+    prompt: str,
+    items: list[T],
+    render: Callable[[T], str],
+    default_index: int = 0,
+    reject: Callable[[T], str | None] | None = None,
+    height: int | None = None,
+    keys: Iterator[str] | None = None,
+) -> T | None:
+    """
+    Pick one of `items` with ↑/↓ (wrapping) or by typing its row number.
+
+    The bracketed number on the prompt line is the row Enter will take.
+    reject(item) may return why an item cannot be picked; that text shows in
+    the footer and the prompt stays. Esc/Ctrl-D return None; an empty list
+    is None at once. Leaves "? prompt: <rendered choice>" behind.
+    """
+    if not items:
+        return None
+    source, fd = _keys_or_terminal(keys)
+    if fd is None:
+        return _run_list(prompt, items, render, default_index, reject, height, source)
+    with _cbreak(fd):
+        return _run_list(prompt, items, render, default_index, reject, height, source)
+
+
+def _run_list[T](
+    prompt: str,
+    items: list[T],
+    render: Callable[[T], str],
+    default_index: int,
+    reject: Callable[[T], str | None] | None,
+    height: int | None,
+    keys: Iterator[str],
+) -> T | None:
+    columns, lines = _frame_size()
+    width = columns - 1
+    rows_text = [render(item) for item in items]
+    window = height if height is not None else min(len(items), max(4, lines - 8))
+    highlight = default_index if 0 <= default_index < len(items) else 0
+    first = 0
+    typed = ""
+    note = ""
+
+    def draw() -> None:
+        nonlocal first
+        first = _scroll(first, highlight, window)
+        rows = _rows(rows_text, first, highlight, window, width)
+        footer = note or (
+            f"{_window_text(first, len(rows), len(items))} · ↑↓ move "
+            "· digits jump · Enter picks · Esc aborts"
+        )
+        rows.append(f"  {style(footer, DIM)}")
+        _draw_frame(_prompt_line(f"{prompt} [{highlight + 1}]: {typed}", width), rows, window)
+
+    draw()
+    for key in keys:
+        note = ""
+        if key == "enter":
+            if typed and not 1 <= int(typed) <= len(items):
+                note, typed = f"no row {typed}", ""
+                draw()
+                continue
+            item = items[highlight]
+            complaint = reject(item) if reject is not None else None
+            if complaint:
+                note, typed = complaint, ""
+                draw()
+                continue
+            _close_frame(f"{_prompt_prefix()}{prompt}: {style(render(item), DIM)}")
+            return item
+        if key in ("esc", "eof"):
+            _close_frame(f"{_prompt_prefix()}{prompt} [{highlight + 1}]: {typed}")
+            return None
+        if key in ("down", "tab"):
+            highlight, typed = (highlight + 1) % len(items), ""
+        elif key in ("up", "shift-tab"):
+            highlight, typed = (highlight - 1) % len(items), ""
+        elif key == "backspace":
+            typed = typed[:-1]
+            if typed and 1 <= int(typed) <= len(items):
+                highlight = int(typed) - 1
+        elif len(key) == 1 and key in "0123456789" and len(typed) < 3:
+            typed += key
+            if 1 <= int(typed) <= len(items):
+                highlight = int(typed) - 1
+        else:
+            continue
+        draw()
+    return None
+
+
+def departure_choice_lines(rows: list[dict]) -> list[str]:
+    """
+    Pick-list text per departure row, columns aligned across the rows.
+
+    Row keys: departure, arrival, duration, train, comfort_class and note
+    ("fallback" / "no seats", shown dim after the class). No arrow and no
+    indent — the picker adds its own marker.
+    """
+    cols = ("duration", "train", "comfort_class")
+    widths = {c: max(visible_len(str(r.get(c) or "—")) for r in rows) for c in cols}
+    lines = []
+    for row in rows:
+        cells = [f"{row.get('departure', '—')} → {row.get('arrival', '—')}"]
+        cells += [pad(str(row.get(c) or "—"), widths[c]) for c in cols]
+        line = "   ".join(cells)
+        if row.get("note"):
+            line += f"   {style(str(row['note']), DIM)}"
+        lines.append(line.rstrip())
+    return lines

@@ -1,7 +1,16 @@
+import os
+import re
+
+import pytest
+
+from sj_cli import output
+from sj_cli.errors import SJError
 from sj_cli.output import (
+    _read_key,
     _reverse_route,
     confirm,
     day_header,
+    departure_choice_lines,
     format_class_name,
     format_duration,
     group_route,
@@ -11,6 +20,8 @@ from sj_cli.output import (
     pinfo,
     print_bookings_table,
     print_day_note,
+    select_filtered,
+    select_list,
     spinner,
     style,
     visible_len,
@@ -393,3 +404,202 @@ def test_confirm_uses_question_prompt(monkeypatch, capsys):
     assert confirm("cancel? [y/n]: ") is False
     monkeypatch.setattr("builtins.input", lambda: "")
     assert confirm("book? [y/N]: ") is False
+
+
+# --- list widget ----------------------------------------------------------------
+
+_CTRL = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def plain(out):
+    """Captured widget output without cursor/clear sequences (colour is already off)."""
+    return _CTRL.sub("", out)
+
+
+def frames(out):
+    """The frames a widget drew: each starts at a carriage return."""
+    return [f for f in plain(out).split("\r") if f]
+
+
+@pytest.fixture(autouse=True)
+def _small_terminal(monkeypatch):
+    monkeypatch.setattr(output.shutil, "get_terminal_size", lambda *_: os.terminal_size((60, 24)))
+
+
+STATIONS = ["Uppsala Central", "Uppsala Norra", "Umeå Central", "Uddevalla Central", "Ulricehamn"]
+
+
+def starts_with(q):
+    return [s for s in STATIONS if s.lower().startswith(q.lower())]
+
+
+def test_select_filtered_filters_moves_and_picks(capsys):
+    keys = iter(["u", "p", "down", "enter"])
+    chosen = select_filtered("to", "Stockholm Central", starts_with, str, keys=keys)
+    assert chosen == "Uppsala Norra"
+    out = capsys.readouterr().out
+    first, after_u, after_p, after_down = frames(out)[:4]
+    assert first.startswith(" ? to [Stockholm Central]: \n")
+    assert "type to search · Enter keeps Stockholm Central" in first
+    assert "› Uppsala Central" in after_u and "Ulricehamn" in after_u
+    assert "› Uppsala Central" in after_p and "Umeå" not in after_p
+    assert "› Uppsala Norra" in after_down
+    assert plain(out).rstrip().endswith(" ? to: Uppsala Norra")
+
+
+def test_select_filtered_enter_on_empty_query_keeps_the_default(capsys):
+    assert (
+        select_filtered("from", "Göteborg Central", starts_with, str, keys=iter(["enter"]))
+        == "Göteborg Central"
+    )
+    assert plain(capsys.readouterr().out).rstrip().endswith(" ? from: Göteborg Central")
+
+
+def test_select_filtered_enter_without_match_or_default_does_nothing_then_esc(capsys):
+    keys = iter(["x", "enter", "esc"])
+    assert select_filtered("to", None, starts_with, str, keys=keys) is None
+    out = plain(capsys.readouterr().out)
+    assert "no match" in out
+    assert out.rstrip().endswith(" ? to: x")
+
+
+def test_select_filtered_backspace_refilters_and_eof_aborts(capsys):
+    keys = iter(["u", "m", "backspace", "eof"])
+    assert select_filtered("to", None, starts_with, str, keys=keys) is None
+    f = frames(capsys.readouterr().out)
+    assert "› Umeå Central" in f[2]
+    assert "› Uppsala Central" in f[3] and "Umeå" in f[3]
+
+
+def test_select_filtered_frames_have_a_fixed_height(capsys):
+    keys = iter(["u", "down", "enter"])
+    select_filtered("to", None, starts_with, str, height=2, keys=keys)
+    for frame in frames(capsys.readouterr().out)[:-1]:
+        assert frame.count("\n") == 3  # prompt line + height rows + footer
+
+
+def test_select_filtered_scrolls_the_window_to_the_highlight(capsys):
+    keys = iter(["u", "down", "down", "down", "enter"])
+    select_filtered("to", None, starts_with, str, height=2, keys=keys)
+    f = frames(capsys.readouterr().out)
+    assert "Uppsala Central" in f[1] and "Umeå" not in f[1]  # rows 1-2
+    assert "3–4 of 5" in f[4] and "› Uddevalla Central" in f[4]  # scrolled to row 4
+
+
+def test_select_filtered_clips_rows_to_the_terminal_width(capsys, monkeypatch):
+    monkeypatch.setattr(output.shutil, "get_terminal_size", lambda *_: os.terminal_size((20, 24)))
+    select_filtered(
+        "to", None, lambda _q: ["A very long station name indeed"], str, keys=iter(["a", "esc"])
+    )
+    f = frames(capsys.readouterr().out)[1]
+    assert "A very long st…" in f and "indeed" not in f
+
+
+def test_select_list_default_arrows_digits_and_reject(capsys):
+    items = ["05:29 → 09:04", "06:10 → 09:58", "07:05 → 10:40"]
+    reject = lambda item: "no seats at 07:05 · pick another" if item.startswith("07") else None  # noqa: E731
+    keys = iter(["down", "enter", "up", "enter"])
+    assert (
+        select_list("outbound", items, str, default_index=1, reject=reject, keys=keys)
+        == "06:10 → 09:58"
+    )
+    f = frames(capsys.readouterr().out)
+    assert f[0].startswith(" ? outbound [2]: \n") and "› 06:10" in f[0]
+    assert "› 07:05" in f[1] and f[1].startswith(" ? outbound [3]:")
+    assert "no seats at 07:05 · pick another" in f[2]  # rejected: note shown, prompt stays
+    assert "› 06:10" in f[3]
+    assert f[-1].rstrip() == " ? outbound: 06:10 → 09:58"
+
+
+def test_select_list_digits_jump_and_a_bad_number_is_refused(capsys):
+    items = [f"{h:02d}:00" for h in range(5, 17)]  # 12 rows
+    keys = iter(["1", "2", "enter"])
+    assert select_list("outbound", items, str, keys=keys) == "16:00"
+    out = plain(capsys.readouterr().out)
+    assert " ? outbound [12]: 12\n" in out
+    assert out.rstrip().endswith(" ? outbound: 16:00")
+
+    keys = iter(["9", "9", "enter", "esc"])
+    assert select_list("outbound", items, str, keys=keys) is None
+    assert "no row 99" in plain(capsys.readouterr().out)
+
+
+def test_select_list_scrolls_and_reports_the_window(capsys):
+    items = [f"{h:02d}:00" for h in range(5, 17)]
+    keys = iter(["up", "enter"])  # wraps to the last row
+    assert select_list("return", items, str, height=4, keys=keys) == "16:00"
+    f = frames(capsys.readouterr().out)
+    assert "1–4 of 12" in f[0]
+    assert "9–12 of 12" in f[1] and "› 16:00" in f[1]
+
+
+def test_select_list_empty_items_is_none_and_no_tty_raises(monkeypatch):
+    assert select_list("x", [], str) is None
+    monkeypatch.setattr(output.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(SJError):
+        select_list("x", ["a"], str)
+    with pytest.raises(SJError):
+        select_filtered("x", None, lambda _q: [], str)
+
+
+def test_read_key_decodes_names_utf8_and_ignores_unknown_sequences():
+    r, w = os.pipe()
+    try:
+        os.write(
+            w, b"\r\n\x7f\x08\t\x04\x1b[A\x1b[B\x1b[Z\x1bOA\x1b[1;5Cq" + "ö".encode() + b"\x1b"
+        )
+        got = [_read_key(r) for _ in range(13)]
+        assert got == [
+            "enter",
+            "enter",
+            "backspace",
+            "backspace",
+            "tab",
+            "eof",
+            "up",
+            "down",
+            "shift-tab",
+            "up",
+            "",
+            "q",
+            "ö",
+        ]
+        assert _read_key(r) == "esc"  # a lone Esc: nothing follows within the wait
+        os.close(w)
+        assert _read_key(r) == "eof"
+    finally:
+        os.close(r)
+
+
+def test_departure_choice_lines_align_columns_and_dim_the_note():
+    rows = [
+        {
+            "departure": "05:29",
+            "arrival": "09:04",
+            "duration": "3h 35m",
+            "train": "X 2000 420",
+            "comfort_class": "2 class calm",
+            "note": "",
+        },
+        {
+            "departure": "06:10",
+            "arrival": "09:58",
+            "duration": "3h 48m",
+            "train": "SJ 3000 2130",
+            "comfort_class": "2 class",
+            "note": "fallback",
+        },
+        {
+            "departure": "07:05",
+            "arrival": "10:40",
+            "duration": "3h 35m",
+            "train": "X 2000 424",
+            "comfort_class": "—",
+            "note": "no seats",
+        },
+    ]
+    assert departure_choice_lines(rows) == [
+        "05:29 → 09:04   3h 35m   X 2000 420     2 class calm",
+        "06:10 → 09:58   3h 48m   SJ 3000 2130   2 class        fallback",
+        "07:05 → 10:40   3h 35m   X 2000 424     —              no seats",
+    ]
