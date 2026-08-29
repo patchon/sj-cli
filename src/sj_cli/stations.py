@@ -4,6 +4,7 @@ Station lookup for --book-journey: fold, rank and match SJ's station list.
 Pure — no HTTP, no printing.
 """
 
+import re
 import unicodedata
 from typing import Any, NamedTuple, TypedDict
 
@@ -56,6 +57,31 @@ def _code_order(station: Station) -> int:
     return int(code) if code.isdecimal() else 10**12
 
 
+# A station word as a whole word (any case), or a bare trailing H / S / C
+# token (Köpenhamn H, Oslo S). Names only: shortName's " C" abbreviates
+# "centrum" for bus stops.
+_STATION_WORDS = re.compile(
+    r"(?i:\b(?:central|centralstation|station|stasjon|sentral|resecentrum|flygplats"
+    r"|lufthavn|airport|hbf|hauptbahnhof)\b)|\b[HSC]$"
+)
+
+
+def is_train_station(station: Station) -> bool:
+    """
+    True for a station SJ's list makes look like a railway station.
+
+    The list carries no type, so this is a heuristic, validated on every
+    major Swedish city: a station word in the name (or a bare trailing H/S/C
+    token), or a foreign code (not 74…) below the 9xxxx range that holds the
+    bus terminals and resort stops. It decides only which matches are shown
+    first; nothing is ever hidden when no train-looking match exists.
+    """
+    if _STATION_WORDS.search(station["name"]):
+        return True
+    code = station["code"]
+    return code.isdecimal() and not code.startswith("74") and int(code[-5:]) < 90000
+
+
 def _rank(wanted: str, folded: str, words: list[str], synonyms: list[str]) -> int | None:
     if folded == wanted or wanted in synonyms:
         return 0
@@ -78,6 +104,7 @@ class _Entry(NamedTuple):
     words: list[str]
     synonyms: list[str]
     code_order: int
+    train: bool
 
 
 class StationIndex:
@@ -94,6 +121,7 @@ class StationIndex:
                     words=_words(folded),
                     synonyms=[fold(s) for s in station["synonyms"]],
                     code_order=_code_order(station),
+                    train=is_train_station(station),
                 )
             )
 
@@ -112,7 +140,8 @@ class StationIndex:
         Rank 0: name or synonym equals the query; 1: the name starts with it;
         2: a word of the name (split on space, -, /, parentheses) starts with
         it; 3: it is inside the name; 4: it is inside a synonym. Ties by UIC
-        code, lowest first.
+        code, lowest first. When any match is a train-looking station
+        (`is_train_station`), only those are returned.
         """
         wanted = fold(query)
         if not wanted:
@@ -121,6 +150,11 @@ class StationIndex:
         for entry in self._entries:
             rank = _rank(wanted, entry.folded, entry.words, entry.synonyms)
             if rank is not None:
-                ranked.append((rank, entry.code_order, entry.station))
+                ranked.append((rank, entry.code_order, entry))
         ranked.sort(key=lambda entry: (entry[0], entry[1]))
-        return [station for _, _, station in ranked]
+        matches = [entry for _, _, entry in ranked]
+        # Prefer, don't hide: a query that reaches any train-looking station
+        # lists only those; otherwise every match (a bus stop can still be found).
+        if any(entry.train for entry in matches):
+            matches = [entry for entry in matches if entry.train]
+        return [entry.station for entry in matches]
