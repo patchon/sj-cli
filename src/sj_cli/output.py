@@ -8,7 +8,7 @@ import shutil
 import sys
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta
 
 from sj_cli.dates import parse_api_datetime, sweden_now, to_sweden
@@ -655,9 +655,56 @@ def _extract_price(receipt_data: dict) -> str:
 # line, `height` rows, one footer line — so the cursor arithmetic is
 # trivial: draw, move up, done. With `keys` given the widget reads from
 # that iterator instead of the terminal (tests) and never touches termios.
+#
+# Never call a picker inside spinner(): the spinner's single-line clear
+# knows nothing about the frame below it, so the two would scribble over
+# each other (no deadlock — _stdout_lock is never held across a yield).
 
 _CSI_FINAL = range(0x40, 0x7F)
-_ESC_WAIT = 0.05  # seconds: a lone Esc is one that nothing follows within this
+_CSI_MAX = 16  # bytes: an escape sequence longer than this is not one we know
+_ESC_WAIT = 0.1  # seconds: a lone Esc is one that nothing follows within this
+
+
+def _read_within(fd: int) -> bytes | None:
+    """One more byte of an escape sequence; None when none arrives within _ESC_WAIT."""
+    ready, _, _ = select.select([fd], [], [], _ESC_WAIT)
+    return os.read(fd, 1) if ready else None
+
+
+def _read_escape(fd: int) -> str:
+    """
+    The key an Esc byte started, once the rest of its sequence has arrived.
+
+    A sequence is bounded both ways: every byte is awaited for _ESC_WAIT
+    only, and at most _CSI_MAX of them are read. Nothing following is a
+    lone Esc; a sequence that stalls or overruns is "" (ignored) rather
+    than a stray abort, and a stream that ends mid-sequence is "eof".
+    """
+    second = _read_within(fd)
+    if second is None:
+        return "esc"  # nothing followed it
+    if not second:
+        return "eof"
+    if second == b"O":  # application cursor mode: ESC O A/B
+        third = _read_within(fd)
+        if third is None:
+            return ""
+        if not third:
+            return "eof"
+        return {b"A": "up", b"B": "down"}.get(third, "")
+    if second != b"[":
+        return ""
+    seq = b""
+    while len(seq) < _CSI_MAX:
+        ch = _read_within(fd)
+        if ch is None:
+            return ""
+        if not ch:
+            return "eof"
+        seq += ch
+        if ch[0] in _CSI_FINAL:
+            return {b"A": "up", b"B": "down", b"Z": "shift-tab"}.get(seq, "")
+    return ""
 
 
 def _read_key(fd: int) -> str:
@@ -674,23 +721,7 @@ def _read_key(fd: int) -> str:
         return "eof"
     b = first[0]
     if b == 0x1B:
-        ready, _, _ = select.select([fd], [], [], _ESC_WAIT)
-        if not ready:
-            return "esc"
-        second = os.read(fd, 1)
-        if second == b"O":  # application cursor mode: ESC O A/B
-            return {b"A": "up", b"B": "down"}.get(os.read(fd, 1), "")
-        if second != b"[":
-            return "esc" if not second else ""
-        seq = b""
-        while True:
-            ch = os.read(fd, 1)
-            if not ch:
-                return ""
-            seq += ch
-            if ch[0] in _CSI_FINAL:
-                break
-        return {b"A": "up", b"B": "down", b"Z": "shift-tab"}.get(seq, "")
+        return _read_escape(fd)
     if b in (0x0D, 0x0A):
         return "enter"
     if b in (0x7F, 0x08):
@@ -717,7 +748,7 @@ def _read_key(fd: int) -> str:
 
 
 @contextmanager
-def _cbreak(fd: int):
+def _cbreak(fd: int) -> Iterator[None]:
     """Put the terminal in cbreak mode for the block; always restore it (Ctrl-C included)."""
     import termios
     import tty
@@ -741,8 +772,17 @@ def _frame_size() -> tuple[int, int]:
 
 
 def _clip(text: str, width: int) -> str:
-    """text, or its first width-1 characters and an ellipsis (plain text only, no ANSI)."""
-    return text if len(text) <= width else text[: max(0, width - 1)] + "…"
+    """
+    text, or its first width-1 visible characters and an ellipsis.
+
+    Styled text is fine: the width is measured in visible characters, and
+    text that fits comes back untouched. Truncating strips the styling —
+    a cut mid-sequence would drop the reset and bleed the colour into
+    everything printed after the frame.
+    """
+    if visible_len(text) <= width:
+        return text
+    return _ANSI_RE.sub("", text)[: max(0, width - 1)] + "…"
 
 
 def _scroll(first: int, highlight: int, height: int) -> int:
@@ -809,6 +849,23 @@ def _keys_or_terminal(keys: Iterator[str] | None) -> tuple[Iterator[str], int | 
     return _terminal_keys(fd), fd
 
 
+def _picked[T](fd: int | None, run: Callable[[], T], abort: str) -> T:
+    """
+    Run a picker's loop with the terminal put back and the frame wiped on the way out.
+
+    Ctrl-C must not leave the frame on screen with the shell prompt landing
+    in the middle of it: the frame is wiped and `abort` — the bare prompt
+    line — left as the record of where the run stopped, before the
+    exception carries on up to main().
+    """
+    with _cbreak(fd) if fd is not None else nullcontext():
+        try:
+            return run()
+        except BaseException:
+            _close_frame(abort)
+            raise
+
+
 def select_filtered[T](
     prompt: str,
     default: T | None,
@@ -825,10 +882,11 @@ def select_filtered[T](
     Esc/Ctrl-D return None. Leaves "? prompt: <rendered choice>" behind.
     """
     source, fd = _keys_or_terminal(keys)
-    if fd is None:
-        return _run_filtered(prompt, default, search, render, height, source)
-    with _cbreak(fd):
-        return _run_filtered(prompt, default, search, render, height, source)
+    return _picked(
+        fd,
+        lambda: _run_filtered(prompt, default, search, render, height, source),
+        f"{_prompt_prefix()}{prompt}: ",
+    )
 
 
 def _run_filtered[T](
@@ -841,6 +899,10 @@ def _run_filtered[T](
 ) -> T | None:
     default_label = render(default) if default is not None else ""
     label = f"{prompt} [{default_label}]: " if default is not None else f"{prompt}: "
+    # A frame needs height + 2 rows (prompt, rows, footer); on a short
+    # terminal an unclamped height scrolls the prompt off and the cursor
+    # arithmetic smears the frame across the screen.
+    height = max(1, min(height, _frame_size()[1] - 2))
     query = ""
     results: list[T] = []
     highlight = 0
@@ -922,10 +984,11 @@ def select_list[T](
     if not items:
         return None
     source, fd = _keys_or_terminal(keys)
-    if fd is None:
-        return _run_list(prompt, items, render, default_index, reject, height, source)
-    with _cbreak(fd):
-        return _run_list(prompt, items, render, default_index, reject, height, source)
+    return _picked(
+        fd,
+        lambda: _run_list(prompt, items, render, default_index, reject, height, source),
+        f"{_prompt_prefix()}{prompt}: ",
+    )
 
 
 def _run_list[T](
@@ -937,10 +1000,10 @@ def _run_list[T](
     height: int | None,
     keys: Iterator[str],
 ) -> T | None:
-    columns, lines = _frame_size()
-    width = columns - 1
+    lines = _frame_size()[1]
     rows_text = [render(item) for item in items]
     window = height if height is not None else min(len(items), max(4, lines - 8))
+    window = max(1, min(window, lines - 2))  # a frame needs window + 2 rows
     highlight = default_index if 0 <= default_index < len(items) else 0
     first = 0
     typed = ""
@@ -948,6 +1011,7 @@ def _run_list[T](
 
     def draw() -> None:
         nonlocal first
+        width = _frame_size()[0] - 1
         first = _scroll(first, highlight, window)
         rows = _rows(rows_text, first, highlight, window, width)
         footer = note or (
@@ -959,7 +1023,6 @@ def _run_list[T](
 
     draw()
     for key in keys:
-        note = ""
         if key == "enter":
             if typed and not 1 <= int(typed) <= len(items):
                 note, typed = f"no row {typed}", ""
@@ -990,11 +1053,12 @@ def _run_list[T](
                 highlight = int(typed) - 1
         else:
             continue
+        note = ""  # only where the screen is about to change: note matches it
         draw()
     return None
 
 
-def departure_choice_lines(rows: list[dict]) -> list[str]:
+def departure_choice_lines(rows: list[dict[str, str]]) -> list[str]:
     """
     Pick-list text per departure row, columns aligned across the rows.
 

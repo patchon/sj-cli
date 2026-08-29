@@ -423,7 +423,9 @@ def frames(out):
 
 @pytest.fixture(autouse=True)
 def _small_terminal(monkeypatch):
-    monkeypatch.setattr(output.shutil, "get_terminal_size", lambda *_: os.terminal_size((60, 24)))
+    # _frame_size, not shutil.get_terminal_size: output.shutil *is* the
+    # global shutil, so patching there would stub it for the whole process.
+    monkeypatch.setattr(output, "_frame_size", lambda: (60, 24))
 
 
 STATIONS = ["Uppsala Central", "Uppsala Norra", "Umeå Central", "Uddevalla Central", "Ulricehamn"]
@@ -487,7 +489,7 @@ def test_select_filtered_scrolls_the_window_to_the_highlight(capsys):
 
 
 def test_select_filtered_clips_rows_to_the_terminal_width(capsys, monkeypatch):
-    monkeypatch.setattr(output.shutil, "get_terminal_size", lambda *_: os.terminal_size((20, 24)))
+    monkeypatch.setattr(output, "_frame_size", lambda: (20, 24))
     select_filtered(
         "to", None, lambda _q: ["A very long station name indeed"], str, keys=iter(["a", "esc"])
     )
@@ -603,3 +605,76 @@ def test_departure_choice_lines_align_columns_and_dim_the_note():
         "06:10 → 09:58   3h 48m   SJ 3000 2130   2 class        fallback",
         "07:05 → 10:40   3h 35m   X 2000 424     —              no seats",
     ]
+
+
+def test_clip_measures_visible_width_and_never_cuts_a_reset(monkeypatch):
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    styled = "abc " + style("note", output.DIM)
+    assert output._clip(styled, 40) is styled  # fits: handed back untouched
+    clipped = output._clip(styled, 6)
+    assert "\x1b" not in clipped  # a cut row drops its styling rather than its reset
+    assert clipped == "abc n…"
+
+
+def test_a_picker_wipes_its_frame_when_interrupted(capsys):
+    class _CtrlC:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        select_filtered("to", None, starts_with, str, keys=_CtrlC())
+    out = capsys.readouterr().out
+    assert plain(out).rstrip().endswith(" ? to:")  # the bare prompt line is what stays
+    assert out.rindex("\x1b[K") < out.index("\x1b[J")  # the wipe comes after the last frame
+
+
+def test_select_filtered_clamps_its_frame_to_a_short_terminal(capsys, monkeypatch):
+    monkeypatch.setattr(output, "_frame_size", lambda: (60, 5))
+    select_filtered("to", "Stockholm Central", starts_with, str, height=8, keys=iter(["enter"]))
+    drawn = frames(capsys.readouterr().out)[:-1]
+    assert drawn
+    for frame in drawn:
+        assert frame.count("\n") == 4  # prompt + 3 rows + footer: 8 clamped to 3
+
+
+def test_select_list_clamps_its_frame_to_a_short_terminal(capsys, monkeypatch):
+    monkeypatch.setattr(output, "_frame_size", lambda: (60, 5))
+    items = [f"{h:02d}:00" for h in range(5, 17)]
+    assert select_list("outbound", items, str, keys=iter(["enter"])) == "05:00"
+    drawn = frames(capsys.readouterr().out)[:-1]
+    assert drawn
+    for frame in drawn:
+        assert frame.count("\n") == 4
+
+
+def test_select_filtered_scrolls_back_up(capsys):
+    keys = iter(["u", "down", "down", "down", "up", "up", "up", "enter"])
+    assert select_filtered("to", None, starts_with, str, height=2, keys=keys) == "Uppsala Central"
+    f = frames(capsys.readouterr().out)
+    assert "3–4 of 5" in f[4]  # scrolled down to row 4
+    assert "1–2 of 5" in f[7] and "› Uppsala Central" in f[7]  # and back to the top
+
+
+def test_select_filtered_tab_and_shift_tab_move_like_arrows():
+    keys = iter(["u", "tab", "enter"])
+    assert select_filtered("to", None, starts_with, str, keys=keys) == "Uppsala Norra"
+    keys = iter(["u", "shift-tab", "enter"])
+    assert select_filtered("to", None, starts_with, str, keys=keys) == "Ulricehamn"
+
+
+def test_select_list_backspace_walks_the_typed_number_back(capsys):
+    items = [f"{h:02d}:00" for h in range(5, 17)]
+    keys = iter(["1", "2", "backspace", "enter"])
+    assert select_list("outbound", items, str, keys=keys) == "05:00"
+    f = frames(capsys.readouterr().out)
+    assert f[1].startswith(" ? outbound [1]: 1\n")
+    assert f[2].startswith(" ? outbound [12]: 12\n")
+    assert f[3].startswith(" ? outbound [1]: 1\n")
+
+
+def test_select_list_out_of_range_default_falls_back_to_the_first_row():
+    items = [f"{h:02d}:00" for h in range(5, 17)]
+    assert select_list("outbound", items, str, default_index=99, keys=iter(["enter"])) == "05:00"
