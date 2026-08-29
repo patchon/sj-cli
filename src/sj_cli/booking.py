@@ -19,6 +19,7 @@ from sj_cli.dates import (
     to_sweden,
 )
 from sj_cli.errors import SJAPIError, SJAuthError, SJConfigError, SJError, error_text
+from sj_cli.logger import log_json
 from sj_cli.output import (
     ask,
     ask_optional,
@@ -266,6 +267,9 @@ def resolve_offer(
     facts = describe_departure(dep, route)
     with spinner(f"checking offers for {label} at {facts['departure']}"):
         response = client.get_offers(access_token, departure_id, passenger_token)
+    conflicts = offer_conflicts(response)
+    if conflicts:
+        pwarn(f"{label}: SJ reports a conflict with booking {', '.join(conflicts)}")
     found = find_offer_id(
         response,
         class_,
@@ -644,6 +648,30 @@ def find_offer_id(
                 )
 
     return None
+
+
+def offer_conflicts(offer_response: dict) -> list[str]:
+    """
+    Bookings SJ says this offer would double-book, as numbers or ids.
+
+    The offers response carries `bookingsInConflictForDoubleBooking` — what
+    sj.se renders as "same booking at another time". Its element shape has
+    never been captured non-empty, so dicts (bookingNumber, then bookingId)
+    and plain strings are read and anything else skipped; the raw list is
+    logged for the day it is.
+    """
+    raw = offer_response.get("bookingsInConflictForDoubleBooking") or []
+    if raw:
+        logger.debug(f"bookingsInConflictForDoubleBooking: {log_json(raw)}")
+    found: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            value = item.get("bookingNumber") or item.get("bookingId")
+            if value:
+                found.append(str(value))
+        elif isinstance(item, str) and item:
+            found.append(item)
+    return found
 
 
 def _try_alternative_departure(
