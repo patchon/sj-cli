@@ -448,8 +448,17 @@ def test_abort_at_any_prompt_writes_nothing(monkeypatch, capsys, at):
     replies[at] = None
     s = Script(*replies[: at + 1])
     wire(monkeypatch, s)
+    # The scripted prompts print nothing, so pin the closing's shape by its
+    # calls: a blank line, then the red line — like every other closing.
+    events = []
+    monkeypatch.setattr(journey, "blank", lambda: events.append("blank"))
+    real_pstatus = journey.pstatus
+    monkeypatch.setattr(
+        journey, "pstatus", lambda ok, msg: (events.append((ok, msg)), real_pstatus(ok, msg))
+    )
     assert run(c, s) is False
     assert not any(call[0] in WRITES for call in c.calls)
+    assert events[-2:] == ["blank", (False, "booking aborted, nothing was booked")]
     assert capsys.readouterr().out.rstrip().endswith(" ● booking aborted, nothing was booked")
 
 

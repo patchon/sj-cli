@@ -583,7 +583,8 @@ def main() -> None:
         finally:
             client.close()
     except KeyboardInterrupt:
-        pinfo("\ninterrupted by user")
+        print()
+        pstatus(False, "interrupted by user")
         print()
         sys.exit(130)
 
