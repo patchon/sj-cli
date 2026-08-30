@@ -724,7 +724,7 @@ def test_overlap_needs_an_intersection_on_the_same_day_or_across_midnight():
     assert journey._overlap(overnight, [_held("M", "01:00", "02:00", day=D2)]).number == "M"
 
 
-def test_overlapping_rows_say_which_booking(monkeypatch):
+def test_overlapping_rows_say_which_booking(monkeypatch, capsys):
     # 06:30 ok, 07:00 no class, 07:30 ok — all three overlap; 12:00 is clear
     c = FakeClient({"OUT": [OUT[0], NO_CLASS, OUT[2], dep("o-clear", D, "12:00", "13:40")]})
     c.bookings_list = [held("HELD1", D, dep_time="06:59", arr_time="11:36")]
@@ -737,6 +737,20 @@ def test_overlapping_rows_say_which_booking(monkeypatch):
     assert re.search(r"2 class calm\s+overlaps HELD1 · 06:59–11:36$", rows[2])
     assert not rows[3].endswith("overlaps HELD1 · 06:59–11:36")
     assert rejected == ["overlaps booking HELD1 · pick another"] * 3
+    # one row is still pickable, so the dead-end line stays out of the way
+    assert "every departure is held" not in capsys.readouterr().out
+
+
+def test_a_list_with_no_pickable_row_says_so_and_still_opens(monkeypatch, capsys):
+    c = FakeClient({"OUT": [OUT[0], OUT[1]]})  # both overlap HELD1, one *is* it
+    c.bookings_list = [held("HELD1", D)]
+    s = Script(D, "", "", "n", None)  # Esc at the list
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    out = capsys.readouterr().out
+    assert " ! every departure is held or overlaps a held ticket · Esc aborts\n" in out
+    assert len(s.lists) == 1  # the list opened anyway, so every refusal is visible
+    assert out.rstrip().endswith("● booking aborted, nothing was booked")
 
 
 def test_a_held_train_is_booked_not_merely_overlapping(monkeypatch):

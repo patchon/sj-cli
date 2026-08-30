@@ -4,7 +4,7 @@ import logging
 import sys
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from sj_cli.booking import (
     Cart,
@@ -246,7 +246,9 @@ def _overlap(departure: dict, held: Sequence[_Held]) -> _Held | None:
     return None
 
 
-def _match_held(departure: dict, route: str, held: Sequence[_Held]) -> tuple[str, _Held] | None:
+def _match_held(
+    departure: dict, route: str, held: Sequence[_Held]
+) -> tuple[Literal["booked", "overlaps"], _Held] | None:
     """
     ("booked", h) when the departure is a train the account holds, else ("overlaps", h) or None.
 
@@ -284,7 +286,8 @@ def _departure_rows(
     A row the account already holds a ticket on says `booked NUM`, one
     overlapping a held ticket says which one (with the held route when it
     differs from this list's) instead of "no seats"; both are disabled
-    whatever class the search reported, and the class column keeps it.
+    whatever class the search reported, the class column keeps it, and
+    `held_by` names that booking — the caller says so when no row is left.
     """
     wanted = params["comfort_class"]
     allow_fallback = params.get("allow_class_fallback", True)
@@ -298,9 +301,11 @@ def _departure_rows(
         row["note"] = "" if class_ == wanted else ("fallback" if class_ else "no seats")
         row["minutes"] = get_departure_time_minutes(dep)
         row["disabled"] = "" if class_ else f"no seats at {row['departure']} · pick another"
+        row["held_by"] = ""
         match = _match_held(dep, route, held)
         if match is not None:
             kind, hit = match
+            row["held_by"] = hit.number
             if kind == "booked":
                 row["note"] = f"booked {hit.number}"
                 row["disabled"] = f"already booked as {hit.number} · pick another"
@@ -347,8 +352,10 @@ def _choose_leg(
     again — the frame is redrawn, the day header is not repeated. `departed`
     is how many of the day's departures were already gone: said under the
     day header, so a short list on a same-day run explains itself. `held`
-    are the tickets the account already holds: a row overlapping one names
-    it, and is disabled when it has no class either.
+    are the tickets the account already holds: a row that is one, or
+    that overlaps one, names it and cannot be picked — when that is every
+    row, the list still opens, so each refusal is visible, behind a line
+    saying the leg is a dead end.
     """
     rows = _departure_rows(departures, route, params, held)
     for row, text in zip(rows, departure_choice_lines(rows), strict=True):
@@ -358,6 +365,8 @@ def _choose_leg(
     if departed:
         with indented():
             pdim(f"{departed} already departed")
+    if rows and all(row["held_by"] for row in rows):
+        pwarn("every departure is held or overlaps a held ticket · Esc aborts")
     while True:
         picked = select_list(
             label,
