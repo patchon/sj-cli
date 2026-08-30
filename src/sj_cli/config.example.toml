@@ -32,5 +32,8 @@ service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 # Words: window, aisle, table, solo, single, easy access, no animals, forward, backward
 #   solo is SJ's first-class "Singelplats" product; single is any seat with no
 #   neighbour, computed from the 2+1 carriage layout — not the same thing
+# Any word can be negated as "avoid <word>": it pushes those seats last
+#   (best-effort — one is still taken when nothing else is free)
 # (an earlier word outranks every later one; contradictions are rejected)
 #seat_preference = ["window", "table"]
+#seat_preference = ["avoid table", "single", "window", "forward"]

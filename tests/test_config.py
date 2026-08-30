@@ -296,6 +296,19 @@ def test_seat_preference_accepts_single_and_still_rejects_unknown_words():
     assert any("nonsense" in err for err in e.value.errors)
 
 
+def test_seat_preference_accepts_avoid_and_rejects_an_unknown_target():
+    cfg = future_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["Avoid  table", "window"]
+    CfgManager().verify_cfg(cfg)
+    assert cfg["search_parameters"]["seat_preference"] == ["avoid table", "window"]
+
+    cfg = future_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["avoid middle"]
+    with pytest.raises(SJConfigError) as e:
+        CfgManager().verify_cfg(cfg)
+    assert any('unknown "avoid middle"' in err for err in e.value.errors)
+
+
 def test_seat_preference_errors_are_collected():
     cfg = future_cfg()
     cfg["search_parameters"]["seat_preference"] = ["kitchen"]

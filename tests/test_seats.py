@@ -92,6 +92,31 @@ def test_parse_preference_rejects_bad_values():
     assert errors
 
 
+def test_parse_preference_accepts_avoid():
+    wishes, errors = parse_preference(["Avoid  Table", "single", "window", "forward"])
+    assert errors == []
+    assert wishes == ["avoid table", "single", "window", "forward"]
+
+
+def test_parse_preference_still_rejects_window_plus_aisle_around_an_avoid_word():
+    # "avoid table" changes nothing about the pre-existing pair rules: a list
+    # naming both window and aisle is still a contradiction.
+    _, errors = parse_preference(["avoid table", "single", "aisle", "window", "forward"])
+    assert any("cannot ask for both window and aisle" in e for e in errors)
+
+
+def test_parse_preference_rejects_bad_avoid_forms():
+    _, errors = parse_preference(["avoid middle"])
+    assert any('unknown "avoid middle"' in e for e in errors)
+    _, errors = parse_preference(["avoid table", "avoid table"])
+    assert any("twice" in e for e in errors)
+    _, errors = parse_preference(["table", "avoid table"])
+    assert any("cannot ask for both table and avoid table" in e for e in errors)
+    # "ask" is the whole-value literal, not a vocabulary word: it cannot be negated
+    _, errors = parse_preference(["avoid ask"])
+    assert errors
+
+
 def test_free_seats_only_lists_selectable_seats_with_direction():
     m = seatmap(
         [("14", ["WINDOW"], True), ("17", ["AISLE"], False), ("70", ["TABLE", "WINDOW"], True)],
@@ -284,6 +309,29 @@ def test_best_seat_honours_direction_wishes():
     )
     assert best_seat(m, ["forward"])["number"] == "14"
     assert best_seat(m, ["backward"])["number"] == "19"
+
+
+def test_avoid_is_the_negation():
+    m = seatmap(
+        [("14", ["TABLE", "WINDOW"], True), ("19", ["WINDOW"], True)],
+        selectable=["14", "19"],
+    )
+    seats = {s["number"]: s for s in free_seats(m)}
+    assert satisfies(seats["14"], "table") is True
+    assert satisfies(seats["14"], "avoid table") is False
+    assert satisfies(seats["19"], "avoid table") is True
+
+
+def test_best_seat_puts_avoided_seats_last():
+    # 14 is a forward window seat at a table; 19 is a bare backward seat.
+    m = seatmap(
+        [("14", ["TABLE", "WINDOW"], True), ("19", [], False)],
+        selectable=["14", "19"],
+    )
+    wishes = ["avoid table", "single", "aisle", "window", "forward"]
+    assert best_seat(m, wishes)["number"] == "19"
+    # Without the negation the window seat at the table wins on its own merits.
+    assert best_seat(m, ["window", "forward"])["number"] == "14"
 
 
 def test_best_seat_returns_none_when_nothing_is_selectable():

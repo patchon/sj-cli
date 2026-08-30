@@ -42,6 +42,7 @@ from sj_cli.output import (
     split_product_name,
 )
 from sj_cli.seats import (
+    AVOID,
     COMFORT_CODES,
     COMFORT_NAMES,
     Seat,
@@ -1413,7 +1414,15 @@ def _choose_seat(seatmap: dict, preference: list[str] | str, label: str) -> Seat
     # best_seat is best-effort — name the top wish it could not honour
     missed = [w for w in wishes if not satisfies(seat, w)]
     if missed:
-        pwarn(f"{label}: no {missed[0]} seat free, taking {describe_seat(seat)}")
+        # A negation reads the other way round: "no table-free seat", not
+        # "no avoid table seat free".
+        wish = missed[0]
+        wanted = (
+            f"no {wish.removeprefix(AVOID)}-free seat"
+            if wish.startswith(AVOID)
+            else f"no {wish} seat free"
+        )
+        pwarn(f"{label}: {wanted}, taking {describe_seat(seat)}")
     return seat
 
 
