@@ -139,8 +139,11 @@ vanlig fönsterplats framför en gångplats vid bord. Ord: `window` (fönster), 
 (gång), `table` (bord), `solo` (SJ:s förstaklassprodukt "Singelplats"), `single`
 (en plats utan granne, beräknad från vagnens 2+1-layout — inte samma sak som `solo`),
 `easy access` (lättåtkomlig), `no animals` (djurfritt), `forward` (med färdriktningen),
-`backward` (mot färdriktningen). Sätt den till `"ask"` för att bli tillfrågad om varje
-resa (kräver en terminal), eller utelämna nyckeln så väljer SJ plats åt dig. En önskan
+`backward` (mot färdriktningen). Varje ord kan negeras — `avoid table` gör bordsplatser
+till sista utvägen: `["avoid table", "single", "window", "forward"]` tar vilken bordsfri
+plats som helst framför vilken bordsplats som helst. Sätt den till `"ask"` för att bli
+tillfrågad om varje resa (kräver en terminal), eller utelämna nyckeln så väljer SJ plats
+åt dig. En önskan
 är aldrig en garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en
 `!`-rad namnger önskemålet som inte kunde uppfyllas. Platsen SJ valde behålls bara när
 det inte finns någon ledig plats att byta till.

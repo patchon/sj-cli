@@ -34,6 +34,11 @@ SEAT_WORDS: dict[str, str | None] = {
 # Wishes that cannot both be met by one seat
 _CONTRADICTIONS = (("window", "aisle"), ("forward", "backward"))
 
+# Any vocabulary word can be negated by prefixing it: "avoid table" is met by
+# exactly the seats "table" is not. Spelled "avoid" rather than "no", because
+# "no animals" is already a positive zone word.
+AVOID = "avoid "
+
 # API comfort code -> display name. The single source for both the offer
 # lookup (booking.find_offer_id) and the seat picker's carriage header, the
 # way SERVICE_TYPE_NAMES is the single source for service types.
@@ -77,7 +82,8 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
 
     Returns:
         (preference, errors) — the preference is the literal "ask", a
-        normalised list of vocabulary words, or None when the key is absent.
+        normalised list of vocabulary words — each optionally negated as
+        "avoid <word>" — or None when the key is absent.
         Errors are collected, never raised, so config.py can report them
         together with everything else. A None preference with a non-empty
         error list means "invalid", not "absent" — that distinction is safe
@@ -87,7 +93,7 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
     if value is None:
         return None, []
 
-    words = ", ".join(sorted(SEAT_WORDS))
+    words = f'{", ".join(sorted(SEAT_WORDS))} — each also as "{AVOID}<word>"'
     if isinstance(value, str):
         if _word(value) == ASK:
             return ASK, []
@@ -100,7 +106,7 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
 
     wishes = [_word(v) for v in value]
     errors: list[str] = []
-    unknown = [w for w in wishes if w not in SEAT_WORDS]
+    unknown = [w for w in wishes if w.removeprefix(AVOID) not in SEAT_WORDS]
     if unknown:
         quoted = ", ".join(f'"{w}"' for w in unknown)
         errors.append(f"seat_preference: unknown {quoted}. Valid words: {words}")
@@ -110,6 +116,11 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
     for a, b in _CONTRADICTIONS:
         if a in wishes and b in wishes:
             errors.append(f"seat_preference cannot ask for both {a} and {b}")
+    errors.extend(
+        f"seat_preference cannot ask for both {word} and {AVOID}{word}"
+        for word in SEAT_WORDS
+        if word in wishes and f"{AVOID}{word}" in wishes
+    )
     return (None, errors) if errors else (wishes, [])
 
 
@@ -230,7 +241,16 @@ def free_seats(seatmap: dict[str, Any]) -> list[Seat]:
 
 
 def satisfies(seat: Seat, wish: str) -> bool:
-    """Whether one free seat meets one vocabulary wish."""
+    """
+    Whether one free seat meets one vocabulary wish.
+
+    A wish prefixed with "avoid " is the exact negation of the word it names:
+    `satisfies(seat, "avoid table")` is `not satisfies(seat, "table")`. That is
+    all a negation is — `rank` stays lexicographic, so where an "avoid" word
+    sits in the wish list is what makes it a mild preference or a last resort.
+    """
+    if wish.startswith(AVOID):
+        return not satisfies(seat, wish.removeprefix(AVOID))
     if wish == "forward":
         return seat["forward"]
     if wish == "backward":
