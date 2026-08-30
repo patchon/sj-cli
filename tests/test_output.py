@@ -743,3 +743,24 @@ def test_select_list_with_every_row_refused_opens_and_only_esc_leaves(capsys):
     assert select_list("outbound", items, str, reject=reject, keys=keys) is None
     out = plain(capsys.readouterr().out)
     assert "overlaps booking H · pick another" in out
+
+
+def test_select_list_keeps_a_typed_prefix_past_a_refused_row(capsys):
+    items = [f"{h:02d}:00" for h in range(5, 17)]  # 12 rows
+    reject = lambda item: "held" if item == "05:00" else None  # noqa: E731
+    keys = iter(["1", "2", "enter"])  # row 1 is refused, but 12 is still reachable
+    assert select_list("outbound", items, str, reject=reject, keys=keys) == "16:00"
+    f = frames(capsys.readouterr().out)
+    assert f[0].startswith(" ? outbound [2]: \n")  # the refused default moved on
+    assert f[1].startswith(" ? outbound [2]: 1\n") and "held" in f[1]  # reason, prefix kept
+    assert f[2].startswith(" ? outbound [12]: 12\n")
+
+    keys = iter(["1", "9", "enter", "esc"])  # a prefix grown out of range: the old complaint
+    assert select_list("outbound", items, str, reject=reject, keys=keys) is None
+    assert "no row 19" in plain(capsys.readouterr().out)
+
+    short = ["05:29", "06:10", "07:05"]
+    reject = lambda item: "held" if item == "06:10" else None  # noqa: E731
+    assert select_list("outbound", short, str, reject=reject, keys=iter(["2", "enter"])) == "05:29"
+    f = frames(capsys.readouterr().out)
+    assert f[1].startswith(" ? outbound [1]: \n") and "held" in f[1]  # no row 2x: typed dropped

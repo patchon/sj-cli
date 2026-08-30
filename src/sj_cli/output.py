@@ -1018,8 +1018,9 @@ def select_list[T](
     reject(item) may return why an item cannot be picked: such a row is drawn
     dim, the arrows pass over it and the highlight never rests on it while a
     selectable row exists — a typed number pointing at one shows its reason in
-    the footer and stays put. Esc/Ctrl-D return None; an empty list is None at
-    once. Leaves "? prompt: <rendered choice>" behind.
+    the footer and stays put, keeping what was typed while a further digit
+    could still name another row. Esc/Ctrl-D return None; an empty list is
+    None at once. Leaves "? prompt: <rendered choice>" behind.
     """
     if not items:
         return None
@@ -1063,13 +1064,17 @@ def _run_list[T](
         """
         Take a typed row number: move the highlight, or say why that row cannot be picked.
 
-        A refused row leaves the highlight where it was and drops the typed
-        number, so the bracket on the prompt line always names a row Enter takes.
+        A refused row leaves the highlight where it was; the typed number is
+        kept only while another digit could still extend it into a row that
+        exists (row 1 refused must not put row 12 out of reach), and dropped
+        once it cannot — so the bracket on the prompt line names a row Enter
+        takes as soon as the typing is finished.
         """
         nonlocal highlight, typed
         complaint = refused[int(number) - 1]
         if complaint:
-            typed = ""
+            if int(number) * 10 > len(items):  # no digit could grow it into another row
+                typed = ""
             return complaint
         highlight = int(number) - 1
         return ""
