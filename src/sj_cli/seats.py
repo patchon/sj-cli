@@ -31,8 +31,13 @@ SEAT_WORDS: dict[str, str | None] = {
     "single": None,
 }
 
-# Wishes that cannot both be met by one seat
-_CONTRADICTIONS = (("window", "aisle"), ("forward", "backward"))
+# Pairs that cannot both be met by one seat *and* say nothing when listed
+# together. Only forward/backward qualifies: every seat is one or the other, so
+# naming both can never change the ranking — it is a typo, not a wish. Window
+# and aisle look like a contradiction but are not one: a seat can be neither,
+# and an earlier wish outranks a later one, so ["aisle", "window"] is a
+# meaningful fallback order (aisle seats, then window seats, then the rest).
+_CONTRADICTIONS = (("forward", "backward"),)
 
 # Any vocabulary word can be negated by prefixing it: "avoid table" is met by
 # exactly the seats "table" is not. Spelled "avoid" rather than "no", because

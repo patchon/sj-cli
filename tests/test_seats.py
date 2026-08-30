@@ -82,10 +82,8 @@ def test_parse_preference_rejects_bad_values():
     assert preference is None
     _, errors = parse_preference([])
     assert errors and "omit" in errors[0]
-    _, errors = parse_preference(["window", "aisle"])
-    assert errors and "window" in errors[0] and "aisle" in errors[0]
     _, errors = parse_preference(["forward", "backward"])
-    assert errors
+    assert errors and "forward" in errors[0] and "backward" in errors[0]
     _, errors = parse_preference(["window", "window"])
     assert errors and "twice" in errors[0]
     _, errors = parse_preference(42)
@@ -93,16 +91,22 @@ def test_parse_preference_rejects_bad_values():
 
 
 def test_parse_preference_accepts_avoid():
-    wishes, errors = parse_preference(["Avoid  Table", "single", "window", "forward"])
+    wishes, errors = parse_preference(["Avoid  Table", "single", "aisle", "window", "forward"])
     assert errors == []
-    assert wishes == ["avoid table", "single", "window", "forward"]
+    assert wishes == ["avoid table", "single", "aisle", "window", "forward"]
 
 
-def test_parse_preference_still_rejects_window_plus_aisle_around_an_avoid_word():
-    # "avoid table" changes nothing about the pre-existing pair rules: a list
-    # naming both window and aisle is still a contradiction.
+def test_window_and_aisle_are_a_fallback_order_not_a_contradiction():
+    # An earlier wish outranks a later one, so naming both means "aisle seats,
+    # then window seats, then the rest" — a real preference, not a typo. Only
+    # forward/backward (a binary partition: both together can never change the
+    # order) and a word with its own negation are rejected.
     _, errors = parse_preference(["avoid table", "single", "aisle", "window", "forward"])
-    assert any("cannot ask for both window and aisle" in e for e in errors)
+    assert errors == []
+    _, errors = parse_preference(["forward", "backward"])
+    assert any("cannot ask for both forward and backward" in e for e in errors)
+    _, errors = parse_preference(["window", "avoid window"])
+    assert any("cannot ask for both window and avoid window" in e for e in errors)
 
 
 def test_parse_preference_rejects_bad_avoid_forms():

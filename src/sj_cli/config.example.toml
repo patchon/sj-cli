@@ -36,4 +36,4 @@ service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 #   (best-effort — one is still taken when nothing else is free)
 # (an earlier word outranks every later one; contradictions are rejected)
 #seat_preference = ["window", "table"]
-#seat_preference = ["avoid table", "single", "window", "forward"]
+#seat_preference = ["avoid table", "single", "aisle", "window", "forward"]
