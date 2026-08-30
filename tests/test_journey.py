@@ -65,11 +65,21 @@ class Script:
         reply = self._next(prompt)
         if reply is None:
             return None
-        chosen = items[default_index] if reply == "" else items[reply]
+        if reply == "":
+            # Enter on the default row: the widget never opens on a rejected
+            # one, so the highlight has stepped on to the next row that is free.
+            index = default_index
+            for n in range(len(items)):
+                index = (default_index + n) % len(items)
+                if not (reject and reject(items[index])):
+                    break
+            chosen = items[index]
+        else:
+            chosen = items[reply]
         complaint = reject(chosen) if reject else None
         if complaint:
             # The widget keeps the prompt open on a rejected row, so a script
-            # that picks one is testing something that cannot happen.
+            # that picks one by number is testing something that cannot happen.
             pytest.fail(f"picked a rejected row: {complaint}")
         return chosen
 
