@@ -140,8 +140,10 @@ vanlig fönsterplats framför en gångplats vid bord. Ord: `window` (fönster), 
 (en plats utan granne, beräknad från vagnens 2+1-layout — inte samma sak som `solo`),
 `easy access` (lättåtkomlig), `no animals` (djurfritt), `forward` (med färdriktningen),
 `backward` (mot färdriktningen). Varje ord kan negeras — `avoid table` gör bordsplatser
-till sista utvägen: `["avoid table", "single", "window", "forward"]` tar vilken bordsfri
-plats som helst framför vilken bordsplats som helst. Sätt den till `"ask"` för att bli
+till sista utvägen: `["avoid table", "single", "aisle", "window", "forward"]` tar vilken
+bordsfri plats som helst framför vilken bordsplats som helst. Ord som ser ut som
+motsatser är en fallordning, inte en konflikt — `["aisle", "window"]` betyder gångplats
+i första hand, fönsterplats i andra. Sätt den till `"ask"` för att bli
 tillfrågad om varje resa (kräver en terminal), eller utelämna nyckeln så väljer SJ plats
 åt dig. En önskan
 är aldrig en garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en
