@@ -856,3 +856,27 @@ def test_book_journey_needs_search_parameters_but_not_dates(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "handle_book_journey", lambda *_a, **_k: seen.setdefault("ran", True))
     cli._run(parse_args(["--book-journey"]), _StubClient())  # no SystemExit: dates not validated
     assert seen == {"ran": True}
+
+
+def test_ctrl_c_closes_with_a_red_line_and_exit_130(monkeypatch, capsys):
+    from argparse import Namespace
+
+    from sj_cli import cli
+
+    class _Client:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(cli, "setup_logging", lambda _level: None)
+    monkeypatch.setattr(cli, "parse_args", lambda: Namespace(login_status=False))
+    monkeypatch.setattr(cli, "SJClient", _Client)
+
+    def interrupted(_args, _client):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_run", interrupted)
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 130
+    out = capsys.readouterr().out
+    assert out.endswith("\n\n \u25cf interrupted by user\n\n")

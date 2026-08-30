@@ -437,6 +437,8 @@ def _print_cards(rows: list[dict]) -> None:
 
 
 def _aborted() -> bool:
+    """The red closing line of an abort, after the blank every closing gets."""
+    blank()
     pstatus(False, "booking aborted, nothing was booked")
     return False
 
@@ -540,11 +542,13 @@ def handle_book_journey(
     if not out_deps:
         why = "left" if out_gone else "found"
         when = "today" if date_str == today_str else f"on {date_str}"
+        blank()
         pstatus(False, f"no departures {why} for {out_route} {when}")
         return False
     if return_str and not in_deps:
         why = "left" if in_gone else "found"
         when = "today" if return_str == today_str else f"on {return_str}"
+        blank()
         pstatus(False, f"no departures {why} for {in_route} {when}")
         return False
     dates = {date_str, *([return_str] if return_str else [])}
@@ -609,6 +613,7 @@ def handle_book_journey(
             # may have gone stale; a failed first add leaves the cart empty
             # (nothing is held), which is a plain end to the run, not a crash.
             logger.error(f"outbound leg failed: {e}")
+            blank()
             pstatus(False, f"could not create the booking ({error_text(e)}) · nothing was booked")
             return False
         if inbound is not None:
