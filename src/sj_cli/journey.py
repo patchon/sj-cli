@@ -22,6 +22,7 @@ from sj_cli.booking import (
     resolve_offer,
     search,
     time_str_to_minutes,
+    train_name,
 )
 from sj_cli.client import SJClient
 from sj_cli.dates import sweden_now, to_sweden
@@ -142,6 +143,7 @@ class _Held(NamedTuple):
     dest: str
     dep: datetime
     arr: datetime | None
+    train: str
 
 
 def _held_segments(
@@ -194,6 +196,7 @@ def _held_segments(
                         dest=(seg.get("arrivalStation") or {}).get("name") or "—",
                         dep=dep,
                         arr=arr,
+                        train=train_name(seg),
                     )
                 )
     return held
@@ -203,17 +206,17 @@ def _warn_held_bookings(held: Sequence[_Held], dates: set[str]) -> None:
     """
     Name every ticket the account holds on the chosen dates.
 
-    A pass search reports every class unavailable on a departure that
-    overlaps a held ticket, so the list will show "no seats" there: say why.
-    Segments picked up from the evening before are not on a chosen date and
-    stay out of this summary — the row they overlap still names them.
+    A search sometimes still offers seats on a departure that overlaps a
+    held ticket, so the list would show them as available: say why they are
+    refused. Segments picked up from the evening before are not on a chosen
+    date and stay out of this summary — the row they overlap still names them.
     """
     for h in held:
         if h.day not in dates:
             continue
         pwarn(
             f"you hold booking {h.number} on {h.day} ({h.origin} → {h.dest} "
-            f"{h.dep.strftime('%H:%M')}) · departures overlapping it show no seats"
+            f"{h.dep.strftime('%H:%M')}) · departures overlapping it are not selectable"
         )
 
 
@@ -243,6 +246,33 @@ def _overlap(departure: dict, held: Sequence[_Held]) -> _Held | None:
     return None
 
 
+def _match_held(departure: dict, route: str, held: Sequence[_Held]) -> tuple[str, _Held] | None:
+    """
+    ("booked", h) when the departure is a train the account holds, else ("overlaps", h) or None.
+
+    Booked: a held segment leaving at the same instant with the same train
+    name (brand + number) or the same route — the row is that ticket, which
+    is worth more than "overlaps". Only when no segment is that train does
+    the time-intersection rule (`_overlap`) apply. SJ itself does not refuse
+    a pure time overlap (it has sold one three minutes into another ticket);
+    refusing both here is the user's rule.
+    """
+    if not held:
+        return None
+    try:
+        dep = to_sweden(departure.get("departureDateTime") or "")
+    except (ValueError, TypeError):
+        return None
+    legs = departure.get("legs") or [{}]
+    train = train_name(legs[0])
+    for h in held:
+        same_train = bool(train) and h.train == train
+        if h.dep == dep and (same_train or f"{h.origin} → {h.dest}" == route):
+            return "booked", h
+    hit = _overlap(departure, held)
+    return ("overlaps", hit) if hit is not None else None
+
+
 def _departure_rows(
     departures: list[dict], route: str, params: dict, held: Sequence[_Held] = ()
 ) -> list[dict[str, Any]]:
@@ -251,9 +281,10 @@ def _departure_rows(
 
     class_ is the class the pass would get on it (the configured one, a
     fallback, or None = no seats); the row is disabled when there is none.
-    A row overlapping a held ticket says which one (with the held route
-    when it differs from this list's) instead of "no seats", and a
-    class-less overlapping row is disabled with that booking's number.
+    A row the account already holds a ticket on says `booked NUM`, one
+    overlapping a held ticket says which one (with the held route when it
+    differs from this list's) instead of "no seats"; both are disabled
+    whatever class the search reported, and the class column keeps it.
     """
     wanted = params["comfort_class"]
     allow_fallback = params.get("allow_class_fallback", True)
@@ -267,16 +298,19 @@ def _departure_rows(
         row["note"] = "" if class_ == wanted else ("fallback" if class_ else "no seats")
         row["minutes"] = get_departure_time_minutes(dep)
         row["disabled"] = "" if class_ else f"no seats at {row['departure']} · pick another"
-        hit = _overlap(dep, held)
-        if hit is not None:
-            span = f"{hit.dep:%H:%M}–{hit.arr:%H:%M}" if hit.arr else f"{hit.dep:%H:%M}"
-            held_route = f"{hit.origin} → {hit.dest}"
-            where = "" if held_route == route else f"{held_route} "
-            # Deliberately in place of a "fallback" note: resolve_offer's
-            # caller says the fallback again after the pick, the overlap is
-            # only ever said here.
-            row["note"] = f"overlaps {hit.number} · {where}{span}"
-            if class_ is None:
+        match = _match_held(dep, route, held)
+        if match is not None:
+            kind, hit = match
+            if kind == "booked":
+                row["note"] = f"booked {hit.number}"
+                row["disabled"] = f"already booked as {hit.number} · pick another"
+            else:
+                span = f"{hit.dep:%H:%M}–{hit.arr:%H:%M}" if hit.arr else f"{hit.dep:%H:%M}"
+                held_route = f"{hit.origin} → {hit.dest}"
+                where = "" if held_route == route else f"{held_route} "
+                # In place of a "fallback" note: the fallback is said again
+                # after the pick, the held ticket only here.
+                row["note"] = f"overlaps {hit.number} · {where}{span}"
                 row["disabled"] = f"overlaps booking {hit.number} · pick another"
         rows.append(row)
     return rows
