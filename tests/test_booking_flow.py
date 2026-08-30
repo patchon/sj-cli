@@ -743,8 +743,8 @@ def test_a_wish_that_cannot_be_met_is_reported(capsys):
     assert "! outbound: no window seat free, taking carriage 3 seat 17" in capsys.readouterr().out
 
 
-def test_a_missed_avoid_wish_is_reported_as_free_of(capsys):
-    """A negated wish reads naturally: "no table-free seat", not "no avoid table seat"."""
+def test_a_missed_avoid_wish_says_it_could_not_avoid_it(capsys):
+    """A negated wish reads the other way round: "could not avoid table"."""
     c = FakeClient({"OUT": OUT, "IN": IN})
     c.seatmaps = {
         "SM-OUTBOUND": seatmap(free=(("17", ["TABLE"], True),), assigned=("3", "39")),
@@ -753,7 +753,7 @@ def test_a_missed_avoid_wish_is_reported_as_free_of(capsys):
     cfg = base_cfg()
     cfg["search_parameters"]["seat_preference"] = ["avoid table"]
     run_range(c, cfg, dry_run=False)
-    assert "! outbound: no table-free seat, taking carriage 3 seat 17" in capsys.readouterr().out
+    assert "! outbound: could not avoid table, taking carriage 3 seat 17" in capsys.readouterr().out
 
 
 # --- seat_preference = "ask" -------------------------------------------------

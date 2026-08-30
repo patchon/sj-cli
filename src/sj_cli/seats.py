@@ -118,13 +118,18 @@ def parse_preference(value: Any) -> tuple[Preference, list[str]]:
     duplicates = sorted({w for w in wishes if wishes.count(w) > 1})
     if duplicates:
         errors.append(f"seat_preference lists {', '.join(duplicates)} twice")
-    for a, b in _CONTRADICTIONS:
-        if a in wishes and b in wishes:
-            errors.append(f"seat_preference cannot ask for both {a} and {b}")
+    # Every pair that says nothing when listed together: the inert pairs, the
+    # same pairs negated (avoiding both sides of a partition is as empty as
+    # asking for both), and every word with its own negation.
+    pairs = (
+        *_CONTRADICTIONS,
+        *((f"{AVOID}{a}", f"{AVOID}{b}") for a, b in _CONTRADICTIONS),
+        *((word, f"{AVOID}{word}") for word in SEAT_WORDS),
+    )
     errors.extend(
-        f"seat_preference cannot ask for both {word} and {AVOID}{word}"
-        for word in SEAT_WORDS
-        if word in wishes and f"{AVOID}{word}" in wishes
+        f"seat_preference cannot ask for both {a} and {b}"
+        for a, b in pairs
+        if a in wishes and b in wishes
     )
     return (None, errors) if errors else (wishes, [])
 

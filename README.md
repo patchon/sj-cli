@@ -141,14 +141,13 @@ vanlig fönsterplats framför en gångplats vid bord. Ord: `window` (fönster), 
 `easy access` (lättåtkomlig), `no animals` (djurfritt), `forward` (med färdriktningen),
 `backward` (mot färdriktningen). Varje ord kan negeras — `avoid table` gör bordsplatser
 till sista utvägen: `["avoid table", "single", "aisle", "window", "forward"]` tar vilken
-bordsfri plats som helst framför vilken bordsplats som helst. Ord som ser ut som
-motsatser är en fallordning, inte en konflikt — `["aisle", "window"]` betyder gångplats
-i första hand, fönsterplats i andra. Sätt den till `"ask"` för att bli
-tillfrågad om varje resa (kräver en terminal), eller utelämna nyckeln så väljer SJ plats
-åt dig. En önskan
-är aldrig en garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en
-`!`-rad namnger önskemålet som inte kunde uppfyllas. Platsen SJ valde behålls bara när
-det inte finns någon ledig plats att byta till.
+bordsfri plats som helst framför vilken bordsplats som helst. Ord som ser ut som motsatser
+är en fallordning, inte en konflikt — `["aisle", "window"]` betyder gångplats i första
+hand, fönsterplats i andra. Sätt den till `"ask"` för att bli tillfrågad om varje resa
+(kräver en terminal), eller utelämna nyckeln så väljer SJ plats åt dig. En önskan är aldrig
+en garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en `!`-rad
+namnger önskemålet som inte kunde uppfyllas. Platsen SJ valde behålls bara när det inte
+finns någon ledig plats att byta till.
 
 Alla egenskaper kommer från SJ:s platskarta, och SJ varnar själva för att kartan inte alltid
 stämmer med tåget som rullar in: både nya och äldre X 2000 är i trafik, så tre platser per rad
