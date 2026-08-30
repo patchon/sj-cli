@@ -850,10 +850,25 @@ def _close_frame(final_line: str) -> None:
         sys.stdout.flush()
 
 
-def _rows(items: Sequence[str], first: int, highlight: int, height: int, width: int) -> list[str]:
+def _rows(
+    items: Sequence[str],
+    first: int,
+    highlight: int,
+    height: int,
+    width: int,
+    refused: Sequence[str | None] | None = None,
+) -> list[str]:
+    """
+    The visible window: `  › text` on the highlight, `    text` elsewhere.
+
+    A row `refused` says cannot be picked is dimmed after the clip, so the
+    styling is never cut mid-sequence; the marker stays the highlight's.
+    """
     rows = []
     for i, text in enumerate(items[first : first + height], start=first):
         clipped = _clip(text, width - 4)
+        if refused is not None and refused[i]:
+            clipped = style(clipped, DIM)
         rows.append(f"  {style('›', CYAN)} {clipped}" if i == highlight else f"    {clipped}")
     return rows
 
@@ -1000,9 +1015,11 @@ def select_list[T](
     Pick one of `items` with ↑/↓ (wrapping) or by typing its row number.
 
     The bracketed number on the prompt line is the row Enter will take.
-    reject(item) may return why an item cannot be picked; that text shows in
-    the footer and the prompt stays. Esc/Ctrl-D return None; an empty list
-    is None at once. Leaves "? prompt: <rendered choice>" behind.
+    reject(item) may return why an item cannot be picked: such a row is drawn
+    dim, the arrows pass over it and the highlight never rests on it while a
+    selectable row exists — a typed number pointing at one shows its reason in
+    the footer and stays put. Esc/Ctrl-D return None; an empty list is None at
+    once. Leaves "? prompt: <rendered choice>" behind.
     """
     if not items:
         return None
@@ -1025,18 +1042,47 @@ def _run_list[T](
 ) -> T | None:
     lines = _frame_size()[1]
     rows_text = [render(item) for item in items]
+    # Asked once per row: reject() is pure, and a caller that changes a row's
+    # standing (an offer that turned out not to exist) re-opens the list.
+    refused = [reject(item) if reject is not None else None for item in items]
     window = height if height is not None else min(len(items), max(4, lines - 8))
     window = max(1, min(window, lines - 2))  # a frame needs window + 2 rows
     highlight = default_index if 0 <= default_index < len(items) else 0
     first = 0
     typed = ""
-    note = ""
+
+    def step(i: int, direction: int) -> int:
+        """The next selectable row that way, wrapping; i itself when every row is refused."""
+        for n in range(1, len(items) + 1):
+            j = (i + direction * n) % len(items)
+            if not refused[j]:
+                return j
+        return i
+
+    def jump(number: str) -> str:
+        """
+        Take a typed row number: move the highlight, or say why that row cannot be picked.
+
+        A refused row leaves the highlight where it was and drops the typed
+        number, so the bracket on the prompt line always names a row Enter takes.
+        """
+        nonlocal highlight, typed
+        complaint = refused[int(number) - 1]
+        if complaint:
+            typed = ""
+            return complaint
+        highlight = int(number) - 1
+        return ""
+
+    if refused[highlight]:  # the list never opens on a row that cannot be picked
+        highlight = step(highlight, 1)
+    note = refused[highlight] or ""  # non-empty only when every row is refused
 
     def draw() -> None:
         nonlocal first
         width = _frame_size()[0] - 1
         first = _scroll(first, highlight, window)
-        rows = _rows(rows_text, first, highlight, window, width)
+        rows = _rows(rows_text, first, highlight, window, width, refused)
         footer = note or (
             f"{_window_text(first, len(rows), len(items))} · ↑↓ move "
             "· digits jump · Enter picks · Esc aborts"
@@ -1051,32 +1097,35 @@ def _run_list[T](
                 note, typed = f"no row {typed}", ""
                 draw()
                 continue
-            item = items[highlight]
-            complaint = reject(item) if reject is not None else None
-            if complaint:
+            complaint = refused[highlight]
+            if complaint:  # only reachable when every row is refused
                 note, typed = complaint, ""
                 draw()
                 continue
+            item = items[highlight]
             _close_frame(f"{_prompt_prefix()}{prompt}: {style(render(item), DIM)}")
             return item
         if key in ("esc", "eof"):
             _close_frame(f"{_prompt_prefix()}{prompt} [{highlight + 1}]: {typed}")
             return None
+        # Each branch says what the footer holds next: a note only where the
+        # screen is about to change, so the two never disagree.
         if key in ("down", "tab"):
-            highlight, typed = (highlight + 1) % len(items), ""
+            highlight, typed = step(highlight, 1), ""
+            note = refused[highlight] or ""
         elif key in ("up", "shift-tab"):
-            highlight, typed = (highlight - 1) % len(items), ""
+            highlight, typed = step(highlight, -1), ""
+            note = refused[highlight] or ""
         elif key == "backspace":
-            typed = typed[:-1]
+            typed, note = typed[:-1], ""
             if typed and 1 <= int(typed) <= len(items):
-                highlight = int(typed) - 1
+                note = jump(typed)
         elif len(key) == 1 and key in "0123456789" and len(typed) < 3:
-            typed += key
+            typed, note = typed + key, ""
             if 1 <= int(typed) <= len(items):
-                highlight = int(typed) - 1
+                note = jump(typed)
         else:
             continue
-        note = ""  # only where the screen is about to change: note matches it
         draw()
     return None
 

@@ -732,10 +732,11 @@ def test_overlapping_rows_say_which_booking(monkeypatch, capsys):
     wire(monkeypatch, s)
     assert run(c, s) is True
     _, rows, _, rejected = s.lists[0]
-    assert re.search(r"2 class calm\s+overlaps HELD1 · 06:59–11:36$", rows[0])
-    assert re.search(r"—\s+overlaps HELD1 · 06:59–11:36$", rows[1])  # not "no seats"
-    assert re.search(r"2 class calm\s+overlaps HELD1 · 06:59–11:36$", rows[2])
-    assert not rows[3].endswith("overlaps HELD1 · 06:59–11:36")
+    note = "overlaps HELD1 · Göteborg Central → Stockholm Central 06:59–11:36"
+    assert re.search(rf"2 class calm\s+{note}$", rows[0])
+    assert re.search(rf"—\s+{note}$", rows[1])  # not "no seats"
+    assert re.search(rf"2 class calm\s+{note}$", rows[2])
+    assert not rows[3].endswith(note)
     assert rejected == ["overlaps booking HELD1 · pick another"] * 3
     # one row is still pickable, so the dead-end line stays out of the way
     assert "every departure is held" not in capsys.readouterr().out
@@ -764,11 +765,11 @@ def test_a_held_train_is_booked_not_merely_overlapping(monkeypatch):
     wire(monkeypatch, s)
     assert run(c, s) is True
     _, rows, _, rejected = s.lists[0]
-    assert re.search(r"2 class calm\s+booked SAME$", rows[1])
-    assert re.search(r"overlaps OTHER · 06:20–07:30$", rows[0])
+    assert re.search(r"2 class calm\s+already booked in SAME$", rows[1])
+    assert rows[0].endswith("overlaps OTHER · Göteborg Central → Stockholm Central 06:20–07:30")
     assert rejected[:2] == [
         "overlaps booking OTHER · pick another",
-        "already booked as SAME · pick another",
+        "this journey is already booked in SAME · pick another",
     ]
 
 
@@ -818,13 +819,17 @@ def test_a_night_train_from_the_evening_before_overlaps_the_morning(monkeypatch,
     wire(monkeypatch, s)
     assert run(c, s) is True
     _, rows, _, _ = s.lists[0]
-    assert re.search(r"2 class calm\s+overlaps NIGHT · 23:50–06:00$", rows[0])
+    assert re.search(
+        r"2 class calm\s+overlaps NIGHT · Göteborg Central → Stockholm Central 23:50–06:00$",
+        rows[0],
+    )
     # the summary names tickets on the chosen dates; this one is on the day before
     assert "you hold booking NIGHT" not in capsys.readouterr().out
 
 
-def test_the_note_names_the_held_route_when_it_differs():
+def test_the_note_always_names_the_held_route():
     row = dep("x", D, "06:59", "11:36")
+    route = "Göteborg Central → Stockholm Central"
     other = journey._Held(
         number="HELD1",
         day=D,
@@ -834,10 +839,19 @@ def test_the_note_names_the_held_route_when_it_differs():
         arr=to_sweden(f"{D}T11:36:00+02:00"),
         train="SJ 3000 1",  # another train on another route: an overlap, not "booked"
     )
-    rows = journey._departure_rows(
-        [row], "Göteborg Central → Stockholm Central", base_cfg()["search_parameters"], [other]
-    )
+    params = base_cfg()["search_parameters"]
+    rows = journey._departure_rows([row], route, params, [other])
     assert rows[0]["note"] == "overlaps HELD1 · Uppsala Central → Stockholm Central 06:59–11:36"
+    # and the list's own route is named just the same (a later train on it,
+    # so the row overlaps the ticket rather than being it)
+    same = other._replace(
+        number="HELD2",
+        origin="Göteborg Central",
+        dep=to_sweden(f"{D}T07:30:00+02:00"),
+        arr=to_sweden(f"{D}T09:10:00+02:00"),
+    )
+    rows = journey._departure_rows([row], route, params, [same])
+    assert rows[0]["note"] == f"overlaps HELD2 · {route} 07:30–09:10"
 
 
 def test_the_return_list_gets_its_own_overlaps(monkeypatch):
@@ -861,6 +875,12 @@ def test_the_return_list_gets_its_own_overlaps(monkeypatch):
     s = Script(D, "", "", "y", D2, 3, 2, True)  # both held rows are out; pick the clear ones
     wire(monkeypatch, s)
     assert run(c, s) is True
-    assert re.search(r"2 class calm\s+overlaps H1 · 06:59–11:36$", s.lists[0][1][0])
-    assert re.search(r"2 class calm\s+overlaps H2 · 17:22–21:53$", s.lists[1][1][0])
-    assert re.search(r"2 class calm\s+booked H2$", s.lists[1][1][1])
+    assert re.search(
+        r"2 class calm\s+overlaps H1 · Göteborg Central → Stockholm Central 06:59–11:36$",
+        s.lists[0][1][0],
+    )
+    assert re.search(
+        r"2 class calm\s+overlaps H2 · Stockholm Central → Göteborg Central 17:22–21:53$",
+        s.lists[1][1][0],
+    )
+    assert re.search(r"2 class calm\s+already booked in H2$", s.lists[1][1][1])

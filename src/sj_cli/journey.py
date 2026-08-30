@@ -283,11 +283,11 @@ def _departure_rows(
 
     class_ is the class the pass would get on it (the configured one, a
     fallback, or None = no seats); the row is disabled when there is none.
-    A row the account already holds a ticket on says `booked NUM`, one
-    overlapping a held ticket says which one (with the held route when it
-    differs from this list's) instead of "no seats"; both are disabled
-    whatever class the search reported, the class column keeps it, and
-    `held_by` names that booking — the caller says so when no row is left.
+    A row the account already holds a ticket on says `already booked in NUM`,
+    one overlapping a held ticket says which one, with that ticket's route,
+    instead of "no seats"; both are disabled whatever class the search
+    reported, the class column keeps it, and `held_by` names that booking —
+    the caller says so when no row is left.
     """
     wanted = params["comfort_class"]
     allow_fallback = params.get("allow_class_fallback", True)
@@ -307,15 +307,15 @@ def _departure_rows(
             kind, hit = match
             row["held_by"] = hit.number
             if kind == "booked":
-                row["note"] = f"booked {hit.number}"
-                row["disabled"] = f"already booked as {hit.number} · pick another"
+                row["note"] = f"already booked in {hit.number}"
+                row["disabled"] = f"this journey is already booked in {hit.number} · pick another"
             else:
                 span = f"{hit.dep:%H:%M}–{hit.arr:%H:%M}" if hit.arr else f"{hit.dep:%H:%M}"
-                held_route = f"{hit.origin} → {hit.dest}"
-                where = "" if held_route == route else f"{held_route} "
                 # In place of a "fallback" note: the fallback is said again
-                # after the pick, the held ticket only here.
-                row["note"] = f"overlaps {hit.number} · {where}{span}"
+                # after the pick, the held ticket only here. The route is named
+                # even when it is this list's own — the note reads as the
+                # ticket it points at, not as a diff against the header.
+                row["note"] = f"overlaps {hit.number} · {hit.origin} → {hit.dest} {span}"
                 row["disabled"] = f"overlaps booking {hit.number} · pick another"
         rows.append(row)
     return rows
