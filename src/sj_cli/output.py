@@ -862,7 +862,9 @@ def _rows(
     The visible window: `  › text` on the highlight, `    text` elsewhere.
 
     A row `refused` says cannot be picked is dimmed after the clip, so the
-    styling is never cut mid-sequence; the marker stays the highlight's.
+    styling is never cut mid-sequence; the marker stays the highlight's. The
+    wrap assumes any styling inside the row runs to its end (as the dim note
+    departure_choice_lines appends does): a reset mid-row would end the dim there.
     """
     rows = []
     for i, text in enumerate(items[first : first + height], start=first):
@@ -1019,8 +1021,14 @@ def select_list[T](
     dim, the arrows pass over it and the highlight never rests on it while a
     selectable row exists — a typed number pointing at one shows its reason in
     the footer and stays put, keeping what was typed while a further digit
-    could still name another row. Esc/Ctrl-D return None; an empty list is
-    None at once. Leaves "? prompt: <rendered choice>" behind.
+    could still name another row. It is called once per item as the list opens
+    and must be pure: a caller that changes a row's standing (an offer that
+    turned out not to exist) re-opens the list. When it refuses every row the
+    list still opens — the highlight on the default row, its reason in the
+    footer with the Esc hint — so each refusal is visible.
+
+    Esc/Ctrl-D return None; an empty list is None at once. Leaves
+    "? prompt: <rendered choice>" behind.
     """
     if not items:
         return None
@@ -1081,6 +1089,7 @@ def _run_list[T](
 
     if refused[highlight]:  # the list never opens on a row that cannot be picked
         highlight = step(highlight, 1)
+    all_refused = all(refused)
     note = refused[highlight] or ""  # non-empty only when every row is refused
 
     def draw() -> None:
@@ -1088,10 +1097,15 @@ def _run_list[T](
         width = _frame_size()[0] - 1
         first = _scroll(first, highlight, window)
         rows = _rows(rows_text, first, highlight, window, width, refused)
-        footer = note or (
-            f"{_window_text(first, len(rows), len(items))} · ↑↓ move "
-            "· digits jump · Enter picks · Esc aborts"
-        )
+        if note:
+            # A list where every row is refused never shows the hint line, so
+            # the standing note is what has to name the way out.
+            footer = f"{note} · Esc aborts" if all_refused else note
+        else:
+            footer = (
+                f"{_window_text(first, len(rows), len(items))} · ↑↓ move "
+                "· digits jump · Enter picks · Esc aborts"
+            )
         rows.append(f"  {style(footer, DIM)}")
         _draw_frame(_prompt_line(f"{prompt} [{highlight + 1}]: {typed}", width), rows, window)
 

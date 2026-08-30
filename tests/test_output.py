@@ -720,11 +720,15 @@ def test_select_list_refuses_a_digit_that_points_at_a_refused_row(capsys):
     items = ["05:29", "06:10", "07:05"]
     complaint = "this journey is already booked in X · pick another"
     reject = lambda item: complaint if item == "06:10" else None  # noqa: E731
-    keys = iter(["2", "enter"])
+    keys = iter(["2", "backspace", "enter"])
     assert select_list("outbound", items, str, reject=reject, keys=keys) == "05:29"
     f = frames(capsys.readouterr().out)
     assert complaint in f[1]
     assert f[1].startswith(" ? outbound [1]:")  # the highlight stayed
+    # a list with a pickable row keeps the Esc hint for the hint line, which
+    # comes back on the next key
+    assert "Esc aborts" not in f[1]
+    assert "↑↓ move · digits jump · Enter picks · Esc aborts" in f[2]
 
 
 def test_select_list_draws_refused_rows_dim(capsys, monkeypatch):
@@ -732,8 +736,7 @@ def test_select_list_draws_refused_rows_dim(capsys, monkeypatch):
     items = ["05:29", "06:10"]
     reject = lambda item: "held" if item == "06:10" else None  # noqa: E731
     select_list("outbound", items, str, reject=reject, keys=iter(["esc"]))
-    out = capsys.readouterr().out
-    assert "\x1b[2m" in out.split("06:10")[0][-12:]  # the refused row is wrapped in DIM
+    assert "\x1b[2m06:10" in capsys.readouterr().out  # the refused row is wrapped in DIM
 
 
 def test_select_list_with_every_row_refused_opens_and_only_esc_leaves(capsys):
@@ -741,8 +744,10 @@ def test_select_list_with_every_row_refused_opens_and_only_esc_leaves(capsys):
     reject = lambda _item: "overlaps booking H · pick another"  # noqa: E731
     keys = iter(["down", "enter", "esc"])
     assert select_list("outbound", items, str, reject=reject, keys=keys) is None
-    out = plain(capsys.readouterr().out)
-    assert "overlaps booking H · pick another" in out
+    f = frames(capsys.readouterr().out)
+    # the hint line never shows on such a list, so the standing note carries the way out
+    assert f[0].rstrip().endswith("overlaps booking H · pick another · Esc aborts")
+    assert "overlaps booking H · pick another" in f[1]
 
 
 def test_select_list_keeps_a_typed_prefix_past_a_refused_row(capsys):
