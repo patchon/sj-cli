@@ -744,7 +744,7 @@ def test_a_held_train_is_booked_not_merely_overlapping(monkeypatch):
     c = FakeClient({"OUT": [OUT[0], OUT[1], OUT[2], dep("o-clear", D, "12:00", "13:40")]})
     c.bookings_list = [
         held("OTHER", D, dep_time="06:20", arr_time="07:30"),
-        held("SAME", D, dep_time="06:59", arr_time="11:36"),
+        held("SAME", D, dep_time="06:59", arr_time="11:36", train="X 2000 O-BEST"),
     ]
     s = Script(D, "", "", "n", 3, True)
     wire(monkeypatch, s)
