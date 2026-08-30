@@ -208,13 +208,12 @@ config or the obvious default (today — or the pass start if the pass has not b
 highlighted), so Enter all the way through books one day of the commute; the stations can be
 any in SJ's list and filter as you type. The station list shows train stations first (a bus
 stop only when it matches better, or when nothing train-looking matches), departures that have
-already left are not shown, and a departure overlapping a ticket you already hold says which
-one. After a summary it asks `book?` once, then books exactly as `--book` does (same seat
-choice, same checkout). If you already hold a ticket that day it says so before the list, since
-a search made with the pass hides the seats on departures overlapping it. There is no duplicate
-check, though — that warning is the whole guard, and a day `--book` has already covered can be
-booked again. Needs a terminal; `--dry-run` walks through every question and list without
-booking.
+already left are not shown, and a departure you already hold a ticket for, or that overlaps one,
+says which and cannot be picked. After a summary it asks `book?` once, then books exactly as
+`--book` does (same seat choice, same checkout). If you already hold a ticket that day it says
+so before the list. There is no duplicate check, though — that warning is the whole guard, and
+a day `--book` has already covered can be booked again. Needs a terminal; `--dry-run` walks
+through every question and list without booking.
 
 ### First login
 

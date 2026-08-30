@@ -231,12 +231,12 @@ kortet inte börjat gälla än — `station_from`/`station_to`, `roundtrip`, avg
 `time_leave`/`time_return` förvald), så Enter rakt igenom bokar en dag av pendlingen; stationerna
 kan vara vilka som helst i SJ:s lista och filtreras medan du skriver. Stationslistan visar
 tågstationer först (en busshållplats bara när den matchar bättre, eller när ingen station
-matchar), avgångar som redan gått visas inte, och en avgång som överlappar en biljett du redan har
-säger vilken. Efter en sammanfattning frågar den `book?` en gång, och bokar sedan precis som
-`--book` gör (samma platsval, samma utcheckning). Har du redan en biljett den dagen sägs det innan
-listan, eftersom en sökning med kortet döljer platserna på avgångar som överlappar den. Någon
-dubbelbokningsspärr finns inte — varningen är hela skyddet; en dag som `--book` redan bokat kan
-bokas igen. Kräver en terminal; `--dry-run` går igenom alla frågor och listor utan att boka.
+matchar), avgångar som redan gått visas inte, och en avgång som du redan har biljett på, eller som
+överlappar en, säger vilken och kan inte väljas. Efter en sammanfattning frågar den `book?` en
+gång, och bokar sedan precis som `--book` gör (samma platsval, samma utcheckning). Har du redan en
+biljett den dagen sägs det innan listan. Någon dubbelbokningsspärr finns inte — varningen är hela
+skyddet; en dag som `--book` redan bokat kan bokas igen. Kräver en terminal; `--dry-run` går
+igenom alla frågor och listor utan att boka.
 
 ### Första inloggningen
 

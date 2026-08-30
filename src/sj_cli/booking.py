@@ -170,7 +170,7 @@ def _get_arrival_time(departure: dict) -> str:
         return "—"
 
 
-def _train_name(node: dict) -> str:
+def train_name(node: dict) -> str:
     """
     Brand + public number of a search leg or a booked segment ("X 2000 520").
 
@@ -208,7 +208,7 @@ def describe_departure(dep: dict, route: str) -> DepartureFacts:
     "A → B".
     """
     legs = dep.get("legs") or [{}]
-    train = _train_name(legs[0])
+    train = train_name(legs[0])
     changes = dep.get("numberOfChanges")
     if changes is None:
         changes = max(len(legs) - 1, 0)
@@ -386,7 +386,7 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
     arr_station = (segment.get("arrivalStation") or {}).get("name") or "—"
 
     # Train: brand + public service number, e.g. "X 2000 537"
-    train = _train_name(segment) or "—"
+    train = train_name(segment) or "—"
 
     # Seat: carriage + seat number from the first required product
     seat = "—"

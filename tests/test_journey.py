@@ -362,38 +362,44 @@ def held(
     arr_day=None,
     origin="Göteborg Central",
     dest="Stockholm Central",
+    train=None,
 ):
-    """A bookings-list entry: one segment leaving `day` at dep_time (arr_day = an overnight)."""
+    """
+    A bookings-list entry: one segment leaving `day` at dep_time (arr_day = an overnight).
+
+    `train` ("X 2000 519") splits on the last space into the brand and public
+    number train_name() reads back; without it the segment names no train, so
+    only its route can make a row "booked".
+    """
+    brand, _, service = train.rpartition(" ") if train else ("", "", "")
+    segment = {
+        "departureDateTime": f"{day}T{dep_time}:00+02:00",
+        "arrivalDateTime": f"{arr_day or day}T{arr_time}:00+02:00",
+        "departureStation": {"name": origin},
+        "arrivalStation": {"name": dest},
+    }
+    if train:
+        segment["serviceBrandNameDescription"] = brand
+        segment["publicServiceName"] = service
     return {
         "bookingId": f"U-{number}",
         "booking": {
             "bookingNumber": number,
             "bookingStatus": status,
-            "journeys": [
-                {
-                    "segments": [
-                        {
-                            "departureDateTime": f"{day}T{dep_time}:00+02:00",
-                            "arrivalDateTime": f"{arr_day or day}T{arr_time}:00+02:00",
-                            "departureStation": {"name": origin},
-                            "arrivalStation": {"name": dest},
-                        }
-                    ]
-                }
-            ],
+            "journeys": [{"segments": [segment]}],
         },
     }
 
 
 def test_held_booking_on_the_date_is_pointed_out(monkeypatch, capsys):
-    c = FakeClient({"OUT": OUT})
+    c = FakeClient({"OUT": [*OUT, dep("o-clear", D, "12:00", "13:40")]})
     c.bookings_list = [held("HELD1", D)]
-    s = Script(D, "", "", "n", "", False)
+    s = Script(D, "", "", "n", 3, False)  # every OUT row is held or overlaps it
     wire(monkeypatch, s)
     assert run(c, s) is False
     assert (
         f" ! you hold booking HELD1 on {D} (Göteborg Central → Stockholm Central 06:59)"
-        " · departures overlapping it show no seats\n"
+        " · departures overlapping it are not selectable\n"
     ) in capsys.readouterr().out
 
 
@@ -687,7 +693,7 @@ def test_the_clock_is_read_after_the_questions(monkeypatch, capsys):
 # --- overlaps ------------------------------------------------------------------------
 
 
-def _held(number, dep_time, arr_time, day=None, arr_day=None):
+def _held(number, dep_time, arr_time, day=None, arr_day=None, train=""):
     day = day or D
     return journey._Held(
         number=number,
@@ -696,6 +702,7 @@ def _held(number, dep_time, arr_time, day=None, arr_day=None):
         dest="Stockholm Central",
         dep=to_sweden(f"{day}T{dep_time}:00+02:00"),
         arr=to_sweden(f"{arr_day or day}T{arr_time}:00+02:00") if arr_time else None,
+        train=train,
     )
 
 
@@ -718,16 +725,65 @@ def test_overlap_needs_an_intersection_on_the_same_day_or_across_midnight():
 
 
 def test_overlapping_rows_say_which_booking(monkeypatch):
-    c = FakeClient({"OUT": [OUT[0], NO_CLASS, OUT[2]]})  # 06:30 ok, 07:00 no class, 07:30 ok
+    # 06:30 ok, 07:00 no class, 07:30 ok — all three overlap; 12:00 is clear
+    c = FakeClient({"OUT": [OUT[0], NO_CLASS, OUT[2], dep("o-clear", D, "12:00", "13:40")]})
     c.bookings_list = [held("HELD1", D, dep_time="06:59", arr_time="11:36")]
-    s = Script(D, "", "", "n", 0, True)
+    s = Script(D, "", "", "n", 3, True)
     wire(monkeypatch, s)
     assert run(c, s) is True
     _, rows, _, rejected = s.lists[0]
     assert re.search(r"2 class calm\s+overlaps HELD1 · 06:59–11:36$", rows[0])
     assert re.search(r"—\s+overlaps HELD1 · 06:59–11:36$", rows[1])  # not "no seats"
     assert re.search(r"2 class calm\s+overlaps HELD1 · 06:59–11:36$", rows[2])
-    assert rejected == ["overlaps booking HELD1 · pick another"]
+    assert not rows[3].endswith("overlaps HELD1 · 06:59–11:36")
+    assert rejected == ["overlaps booking HELD1 · pick another"] * 3
+
+
+def test_a_held_train_is_booked_not_merely_overlapping(monkeypatch):
+    # o-best (06:59 to 11:36, "X 2000 O-BEST") is the exact train of SAME; it also overlaps OTHER.
+    c = FakeClient({"OUT": [OUT[0], OUT[1], OUT[2], dep("o-clear", D, "12:00", "13:40")]})
+    c.bookings_list = [
+        held("OTHER", D, dep_time="06:20", arr_time="07:30"),
+        held("SAME", D, dep_time="06:59", arr_time="11:36"),
+    ]
+    s = Script(D, "", "", "n", 3, True)
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    _, rows, _, rejected = s.lists[0]
+    assert re.search(r"2 class calm\s+booked SAME$", rows[1])
+    assert re.search(r"overlaps OTHER · 06:20–07:30$", rows[0])
+    assert rejected[:2] == [
+        "overlaps booking OTHER · pick another",
+        "already booked as SAME · pick another",
+    ]
+
+
+def test_booked_needs_the_same_instant_and_train_or_route():
+    row = dep("x", D, "06:59", "11:36")  # route in the call below is Göteborg → Stockholm
+    same_route = _held("R", "06:59", "11:36")
+    other_route_same_train = journey._Held(
+        number="T",
+        day=D,
+        origin="Uppsala Central",
+        dest="Stockholm Central",
+        dep=to_sweden(f"{D}T06:59:00+02:00"),
+        arr=to_sweden(f"{D}T11:36:00+02:00"),
+        train="X 2000 X",
+    )
+    other_route_other_train = other_route_same_train._replace(number="O", train="SJ 3000 1")
+    route = "Göteborg Central → Stockholm Central"
+    assert journey._match_held(row, route, [same_route]) == ("booked", same_route)
+    assert journey._match_held(row, route, [other_route_same_train]) == (
+        "booked",
+        other_route_same_train,
+    )
+    assert journey._match_held(row, route, [other_route_other_train]) == (
+        "overlaps",
+        other_route_other_train,
+    )
+    later = same_route._replace(dep=to_sweden(f"{D}T07:00:00+02:00"))
+    assert journey._match_held(row, route, [later])[0] == "overlaps"
+    assert journey._match_held(row, route, []) is None
 
 
 def test_sj_conflict_at_offer_time_is_said(monkeypatch, capsys):
@@ -742,9 +798,9 @@ def test_sj_conflict_at_offer_time_is_said(monkeypatch, capsys):
 
 def test_a_night_train_from_the_evening_before_overlaps_the_morning(monkeypatch, capsys):
     prev = (FUTURE - timedelta(days=1)).isoformat()
-    c = FakeClient({"OUT": [dep("early", D, "05:00", "07:00")]})
+    c = FakeClient({"OUT": [dep("early", D, "05:00", "07:00"), dep("later", D, "08:00", "10:00")]})
     c.bookings_list = [held("NIGHT", prev, dep_time="23:50", arr_time="06:00", arr_day=D)]
-    s = Script(D, "", "", "n", "", True)
+    s = Script(D, "", "", "n", 1, True)  # the 05:00 row is out, the 08:00 one is clear
     wire(monkeypatch, s)
     assert run(c, s) is True
     _, rows, _, _ = s.lists[0]
@@ -762,6 +818,7 @@ def test_the_note_names_the_held_route_when_it_differs():
         dest="Stockholm Central",
         dep=to_sweden(f"{D}T06:59:00+02:00"),
         arr=to_sweden(f"{D}T11:36:00+02:00"),
+        train="SJ 3000 1",  # another train on another route: an overlap, not "booked"
     )
     rows = journey._departure_rows(
         [row], "Göteborg Central → Stockholm Central", base_cfg()["search_parameters"], [other]
@@ -770,8 +827,12 @@ def test_the_note_names_the_held_route_when_it_differs():
 
 
 def test_the_return_list_gets_its_own_overlaps(monkeypatch):
-    in_deps = [dep("i-early", D2, "16:50", "18:30"), dep("i-best", D2, "17:22", "21:53")]
-    c = FakeClient({"OUT": OUT, "IN": in_deps})
+    in_deps = [
+        dep("i-early", D2, "16:50", "18:30"),
+        dep("i-best", D2, "17:22", "21:53"),
+        dep("i-clear", D2, "22:00", "23:40"),
+    ]
+    c = FakeClient({"OUT": [*OUT, dep("o-clear", D, "12:00", "13:40")], "IN": in_deps})
     c.bookings_list = [
         held("H1", D),
         held(
@@ -783,8 +844,9 @@ def test_the_return_list_gets_its_own_overlaps(monkeypatch):
             dest="Göteborg Central",
         ),
     ]
-    s = Script(D, "", "", "y", D2, 0, 0, True)
+    s = Script(D, "", "", "y", D2, 3, 2, True)  # both held rows are out; pick the clear ones
     wire(monkeypatch, s)
     assert run(c, s) is True
     assert re.search(r"2 class calm\s+overlaps H1 · 06:59–11:36$", s.lists[0][1][0])
-    assert re.search(r"2 class calm\s+overlaps H2 · 17:22–21:53$", s.lists[1][1][1])
+    assert re.search(r"2 class calm\s+overlaps H2 · 17:22–21:53$", s.lists[1][1][0])
+    assert re.search(r"2 class calm\s+booked H2$", s.lists[1][1][1])
