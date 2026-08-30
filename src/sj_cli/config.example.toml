@@ -34,6 +34,6 @@ service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 #   neighbour, computed from the 2+1 carriage layout — not the same thing
 # Any word can be negated as "avoid <word>": it pushes those seats last
 #   (best-effort — one is still taken when nothing else is free)
-# (an earlier word outranks every later one; contradictions are rejected)
+# (an earlier word outranks every later one; a word and its own negation are rejected)
 #seat_preference = ["window", "table"]
 #seat_preference = ["avoid table", "single", "aisle", "window", "forward"]

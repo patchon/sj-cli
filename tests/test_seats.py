@@ -103,8 +103,13 @@ def test_window_and_aisle_are_a_fallback_order_not_a_contradiction():
     # order) and a word with its own negation are rejected.
     _, errors = parse_preference(["avoid table", "single", "aisle", "window", "forward"])
     assert errors == []
+    assert parse_preference(["window", "aisle"])[1] == []
     _, errors = parse_preference(["forward", "backward"])
     assert any("cannot ask for both forward and backward" in e for e in errors)
+    # The negated pair is as empty as the positive one: every seat is one or
+    # the other, so avoiding both says nothing either.
+    _, errors = parse_preference(["avoid forward", "avoid backward"])
+    assert any("cannot ask for both avoid forward and avoid backward" in e for e in errors)
     _, errors = parse_preference(["window", "avoid window"])
     assert any("cannot ask for both window and avoid window" in e for e in errors)
 

@@ -1414,11 +1414,12 @@ def _choose_seat(seatmap: dict, preference: list[str] | str, label: str) -> Seat
     # best_seat is best-effort — name the top wish it could not honour
     missed = [w for w in wishes if not satisfies(seat, w)]
     if missed:
-        # A negation reads the other way round: "no table-free seat", not
-        # "no avoid table seat free".
+        # A negation reads the other way round — and cannot be phrased as a
+        # missing property without stuttering on the zone words ("no no
+        # animals-free seat"), so it says what happened instead.
         wish = missed[0]
         wanted = (
-            f"no {wish.removeprefix(AVOID)}-free seat"
+            f"could not avoid {wish.removeprefix(AVOID)}"
             if wish.startswith(AVOID)
             else f"no {wish} seat free"
         )

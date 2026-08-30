@@ -122,10 +122,11 @@ the carriage's 2+1 layout — not the same as `solo`), `easy access`, `no animal
 `forward`, `backward`. Any word can be negated — `avoid table` makes tables the last
 resort: `["avoid table", "single", "aisle", "window", "forward"]` takes any table-free
 seat over any table seat. Words that look like opposites are a fallback order, not a
-conflict — `["aisle", "window"]` means aisle seats first, window seats next. Set it to `"ask"` to be prompted for every leg instead (needs a
-terminal), or omit the key and SJ assigns the seat. A preference is never a guarantee:
-when nothing matches, the best remaining seat is taken anyway and a `!` line names the
-wish it missed. The seat SJ picked is kept only when no seat is free to move to.
+conflict — `["aisle", "window"]` means aisle seats first, window seats next. Set it to
+`"ask"` to be prompted for every leg instead (needs a terminal), or omit the key and SJ
+assigns the seat. A preference is never a guarantee: when nothing matches, the best
+remaining seat is taken anyway and a `!` line names the wish it missed. The seat SJ
+picked is kept only when no seat is free to move to.
 
 Every characteristic comes from SJ's seat map, and SJ warns that the map may not match the
 train that actually arrives: refurbished and older X 2000 units are both in service, so three
