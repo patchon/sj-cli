@@ -512,17 +512,18 @@ def test_select_filtered_clips_rows_to_the_terminal_width(capsys, monkeypatch):
 def test_select_list_default_arrows_digits_and_reject(capsys):
     items = ["05:29 → 09:04", "06:10 → 09:58", "07:05 → 10:40"]
     reject = lambda item: "no seats at 07:05 · pick another" if item.startswith("07") else None  # noqa: E731
-    keys = iter(["down", "enter", "up", "enter"])
+    keys = iter(["down", "enter"])
     assert (
         select_list("outbound", items, str, default_index=1, reject=reject, keys=keys)
-        == "06:10 → 09:58"
+        == "05:29 → 09:04"
     )
-    f = frames(capsys.readouterr().out)
+    out = capsys.readouterr().out
+    f = frames(out)
     assert f[0].startswith(" ? outbound [2]: \n") and "› 06:10" in f[0]
-    assert "› 07:05" in f[1] and f[1].startswith(" ? outbound [3]:")
-    assert "no seats at 07:05 · pick another" in f[2]  # rejected: note shown, prompt stays
-    assert "› 06:10" in f[3]
-    assert f[-1].rstrip() == " ? outbound: 06:10 → 09:58"
+    # down passes over the rejected row 3 and wraps to row 1, so Enter picks it
+    assert "› 05:29" in f[1] and f[1].startswith(" ? outbound [1]:")
+    assert "no seats at 07:05 · pick another" not in plain(out)  # never refused: never highlighted
+    assert f[-1].rstrip() == " ? outbound: 05:29 → 09:04"
 
 
 def test_select_list_digits_jump_and_a_bad_number_is_refused(capsys):
@@ -690,3 +691,55 @@ def test_select_list_backspace_walks_the_typed_number_back(capsys):
 def test_select_list_out_of_range_default_falls_back_to_the_first_row():
     items = [f"{h:02d}:00" for h in range(5, 17)]
     assert select_list("outbound", items, str, default_index=99, keys=iter(["enter"])) == "05:00"
+
+
+def test_select_list_skips_refused_rows_when_moving(capsys):
+    items = ["05:29", "06:10", "07:05", "08:00"]
+    reject = lambda item: "held" if item in ("06:10", "07:05") else None  # noqa: E731
+    keys = iter(["down", "enter"])  # from row 1 over two refused rows to row 4
+    assert select_list("outbound", items, str, reject=reject, keys=keys) == "08:00"
+    assert "1–4 of 4" in frames(capsys.readouterr().out)[0]
+    keys = iter(["up", "enter"])  # up from row 1 wraps to row 4
+    assert select_list("outbound", items, str, reject=reject, keys=keys) == "08:00"
+    keys = iter(["down", "down", "enter"])  # 1 → 4 → wraps to 1
+    assert select_list("outbound", items, str, reject=reject, keys=keys) == "05:29"
+
+
+def test_select_list_starts_on_the_first_selectable_row(capsys):
+    items = ["05:29", "06:10", "07:05"]
+    reject = lambda item: "held" if item == "06:10" else None  # noqa: E731
+    assert (
+        select_list("outbound", items, str, default_index=1, reject=reject, keys=iter(["enter"]))
+        == "07:05"
+    )
+    f = frames(capsys.readouterr().out)
+    assert f[0].startswith(" ? outbound [3]:")
+
+
+def test_select_list_refuses_a_digit_that_points_at_a_refused_row(capsys):
+    items = ["05:29", "06:10", "07:05"]
+    complaint = "this journey is already booked in X · pick another"
+    reject = lambda item: complaint if item == "06:10" else None  # noqa: E731
+    keys = iter(["2", "enter"])
+    assert select_list("outbound", items, str, reject=reject, keys=keys) == "05:29"
+    f = frames(capsys.readouterr().out)
+    assert complaint in f[1]
+    assert f[1].startswith(" ? outbound [1]:")  # the highlight stayed
+
+
+def test_select_list_draws_refused_rows_dim(capsys, monkeypatch):
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    items = ["05:29", "06:10"]
+    reject = lambda item: "held" if item == "06:10" else None  # noqa: E731
+    select_list("outbound", items, str, reject=reject, keys=iter(["esc"]))
+    out = capsys.readouterr().out
+    assert "\x1b[2m" in out.split("06:10")[0][-12:]  # the refused row is wrapped in DIM
+
+
+def test_select_list_with_every_row_refused_opens_and_only_esc_leaves(capsys):
+    items = ["05:29", "06:10"]
+    reject = lambda _item: "overlaps booking H · pick another"  # noqa: E731
+    keys = iter(["down", "enter", "esc"])
+    assert select_list("outbound", items, str, reject=reject, keys=keys) is None
+    out = plain(capsys.readouterr().out)
+    assert "overlaps booking H · pick another" in out
