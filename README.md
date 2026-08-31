@@ -147,9 +147,11 @@ hand, fönsterplats i andra. Sätt den till `"ask"` för att bli tillfrågad om 
 (kräver en terminal), eller utelämna nyckeln så väljer SJ plats åt dig. En önskan är aldrig
 en garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en `!`-rad
 namnger önskemålet som inte kunde uppfyllas. En plats byts bara när en ledig är strikt
-bättre enligt din lista — ben som redan sitter bäst lämnas ifred (`keeping carriage 3 seat
-39 · nothing free outranks it`), liksom platsen SJ valde när det inte finns någon ledig
-plats att byta till.
+bättre enligt din lista — resor som redan sitter bäst lämnas ifred (`keeping carriage 3
+seat 39 · aisle, forward · nothing free outranks it`), liksom platsen SJ valde när det inte
+finns någon ledig plats att byta till. För att byta bort en plats av ett skäl som inte finns
+i listan, lägg till ordet i `seat_preference` — eller använd `"ask"`, som väljer för hand
+och kringgår behållandet.
 
 Alla egenskaper kommer från SJ:s platskarta, och SJ varnar själva för att kartan inte alltid
 stämmer med tåget som rullar in: både nya och äldre X 2000 är i trafik, så tre platser per rad

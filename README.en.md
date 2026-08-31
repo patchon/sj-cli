@@ -127,8 +127,10 @@ conflict — `["aisle", "window"]` means aisle seats first, window seats next. S
 assigns the seat. A preference is never a guarantee: when nothing matches, the best
 remaining seat is taken anyway and a `!` line names the wish it missed. A seat is only
 changed when a free one is strictly better by your list — legs already on their best seat
-are left alone (`keeping carriage 3 seat 39 · nothing free outranks it`), and so is the
-seat SJ picked when nothing is free to move to.
+are left alone (`keeping carriage 3 seat 39 · aisle, forward · nothing free outranks it`),
+and so is the seat SJ picked when nothing is free to move to. To move off a seat for a
+reason not on your list, add the word to `seat_preference` — or use `"ask"`, which picks by
+hand and bypasses the keep.
 
 Every characteristic comes from SJ's seat map, and SJ warns that the map may not match the
 train that actually arrives: refurbished and older X 2000 units are both in service, so three

@@ -1500,9 +1500,6 @@ def _apply_seat_preference(
         seat = _choose_seat(seatmap, preference, label)
         if seat is None:
             continue
-        if (seat["carriage"], seat["number"]) == current_seat(seatmap):
-            pdim(f"{label}: already on the best seat")
-            continue
         updates.append(_seat_update(segment, seat))
 
     if not updates:
@@ -2590,9 +2587,6 @@ def _preview_seats(
             # _choose_seat's rule, in the present tense: only a strictly
             # better free seat is worth proposing.
             pdim(f"{label}: keeps {describe_seat(current)} · nothing free outranks it")
-            continue
-        if (seat["carriage"], seat["number"]) == current_seat(seatmap):
-            pdim(f"{label}: already on the best seat")
             continue
         pinfo(f"{label}: would take {describe_seat(seat)}")
         would_change += 1
