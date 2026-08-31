@@ -146,8 +146,10 @@ bordsfri plats som helst framför vilken bordsplats som helst. Ord som ser ut so
 hand, fönsterplats i andra. Sätt den till `"ask"` för att bli tillfrågad om varje resa
 (kräver en terminal), eller utelämna nyckeln så väljer SJ plats åt dig. En önskan är aldrig
 en garanti: när ingen plats matchar tas ändå den bästa lediga platsen och en `!`-rad
-namnger önskemålet som inte kunde uppfyllas. Platsen SJ valde behålls bara när det inte
-finns någon ledig plats att byta till.
+namnger önskemålet som inte kunde uppfyllas. En plats byts bara när en ledig är strikt
+bättre enligt din lista — ben som redan sitter bäst lämnas ifred (`keeping carriage 3 seat
+39 · nothing free outranks it`), liksom platsen SJ valde när det inte finns någon ledig
+plats att byta till.
 
 Alla egenskaper kommer från SJ:s platskarta, och SJ varnar själva för att kartan inte alltid
 stämmer med tåget som rullar in: både nya och äldre X 2000 är i trafik, så tre platser per rad
@@ -194,7 +196,7 @@ sj-cli --cancel-booking JS3TWMF1 --dry-run     # förhandsvisa en avbokning: rut
 sj-cli --cancel-booking JS3TWMF1,ABCD1234    # avboka via bokningsnummer (versaler spelar ingen roll)
 sj-cli --change-seat-date 2026-09-28            # byt plats den dagen (konfigurerad sträcka)
 sj-cli --change-seat-booking ZSVV7EML           # byt plats på en bokning, oavsett sträcka
-sj-cli --change-seat-date W40 --dry-run         # förhandsgranska vilka platser som skulle väljas
+sj-cli --change-seat-date W40 --dry-run         # förhandsgranska vilka platser som skulle väljas, och hur många
 sj-cli --upgrade-class W40 --dry-run            # visa vilka bokade resor som skulle kunna flyttas upp till comfort_class
 sj-cli --upgrade-class 2026-09-28               # avboka och boka om de resorna (frågar en gång, kräver terminal)
 sj-cli --login                 # logga in, cacha token, avsluta

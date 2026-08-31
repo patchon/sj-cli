@@ -1411,6 +1411,16 @@ def _choose_seat(seatmap: dict, preference: list[str] | str, label: str) -> Seat
     if seat is None:
         pwarn(f"no free seat to choose from for {label}")
         return None
+    current = assigned_seat(seatmap)
+    if current is not None and wish_rank(current, wishes) <= wish_rank(seat, wishes):
+        # The --seat-details hint's rule: only a *strictly* better free seat
+        # is worth moving to. best_seat always returns something, so without
+        # this a run could trade a table-free seat for a table (an `avoid`
+        # wish nothing free meets) or swap two equally good seats for
+        # nothing. A current seat the carriage layout does not know gives
+        # nothing to compare against, and the best free one is taken as before.
+        pdim(f"{label}: keeping {describe_seat(current)} · nothing free outranks it")
+        return None
     # best_seat is best-effort — name the top wish it could not honour
     missed = [w for w in wishes if not satisfies(seat, w)]
     if missed:
@@ -2529,18 +2539,23 @@ def _preview_seats(
     booking: dict,
     preference: list[str] | str,
     label_fn: Callable[[dict, list[dict]], str] = _train_label,
-) -> None:
+) -> int:
     """
     Dry-run seat preview: report what --change-seat would do, without writing.
 
     Mirrors _apply_seat_preference's segment walk (same seat-map fetch, same
-    hasDeparted/canChangeSeat skip) but only reads: it never calls
-    update_seats, and in "ask" mode it never prompts — it reports the
-    current seat and how many are free instead.
+    hasDeparted/canChangeSeat skip, same "keep a seat nothing free outranks"
+    rule) but only reads: it never calls update_seats, and in "ask" mode it
+    never prompts — it reports the current seat and how many are free instead.
+
+    Returns:
+        How many legs would actually change seat, for the closing status —
+        "ask" mode reports nothing to count and contributes nothing.
     """
     segments = [
         seg for journey in booking.get("journeys") or [] for seg in journey.get("segments") or []
     ]
+    would_change = 0
     for segment in segments:
         label = label_fn(segment, segments)
         search_id = segment.get("seatMapSearchId")
@@ -2561,18 +2576,27 @@ def _preview_seats(
 
         if isinstance(preference, str):  # "ask": read-only, never prompt in a dry run
             carriage, number = current_seat(seatmap)
-            current = f"carriage {carriage} seat {number}" if carriage else "no assigned seat"
-            pdim(f"{label}: currently {current} · {len(free_seats(seatmap))} free seat(s)")
+            held = f"carriage {carriage} seat {number}" if carriage else "no assigned seat"
+            pdim(f"{label}: currently {held} · {len(free_seats(seatmap))} free seat(s)")
             continue
 
-        seat = best_seat(seatmap, list(preference))
+        wishes = list(preference)
+        seat = best_seat(seatmap, wishes)
         if seat is None:
             pwarn(f"no free seat to choose from for {label}")
+            continue
+        current = assigned_seat(seatmap)
+        if current is not None and wish_rank(current, wishes) <= wish_rank(seat, wishes):
+            # _choose_seat's rule, in the present tense: only a strictly
+            # better free seat is worth proposing.
+            pdim(f"{label}: keeps {describe_seat(current)} · nothing free outranks it")
             continue
         if (seat["carriage"], seat["number"]) == current_seat(seatmap):
             pdim(f"{label}: already on the best seat")
             continue
         pinfo(f"{label}: would take {describe_seat(seat)}")
+        would_change += 1
+    return would_change
 
 
 def handle_change_seat(
@@ -2683,6 +2707,7 @@ def handle_change_seat(
 
     any_target = bool(targets)
     seats_changed_total = 0
+    would_change_total = 0
     now = sweden_now()
 
     for item, booking, matched_date in targets:
@@ -2723,7 +2748,9 @@ def handle_change_seat(
             target_booking = {"journeys": [{"segments": workable}]}
             try:
                 if dry_run:
-                    _preview_seats(client, access_token, booking_id, target_booking, preference)
+                    would_change_total += _preview_seats(
+                        client, access_token, booking_id, target_booking, preference
+                    )
                 else:
                     updated, changed = _apply_seat_preference(
                         client,
@@ -2747,8 +2774,17 @@ def handle_change_seat(
 
     if seats_changed_total:
         pstatus(True, f"{seats_changed_total} seat(s) changed")
+    elif any_target and dry_run:
+        # Dim either way — a dry run writes nothing — but say how many legs
+        # would move, so "nothing to change" means exactly that.
+        pstatus(
+            None,
+            f"dry run · {would_change_total} seat(s) would change"
+            if would_change_total
+            else "dry run · nothing to change",
+        )
     elif any_target:
-        pstatus(None, "dry run · nothing to change" if dry_run else "nothing changed")
+        pstatus(None, "nothing changed")
     elif not reported:
         # One closing ● per operation: an unresolved booking number already
         # printed its own, so do not follow it with "no bookings matched".
