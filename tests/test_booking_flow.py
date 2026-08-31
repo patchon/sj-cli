@@ -652,6 +652,28 @@ def test_book_mode_skips_the_patch_when_the_seat_is_already_best():
     assert not c.seat_updates
 
 
+def test_book_mode_keeps_the_assigned_seat_when_nothing_free_outranks_it(capsys):
+    """
+    The provisional path shares _choose_seat, so it must not worsen a seat.
+
+    SJ assigns a table-free seat and only tables are free: under "avoid
+    table" the booking keeps what it was given and no seat reaches the PATCH.
+    """
+    c = FakeClient({"OUT": OUT, "IN": IN})
+    kept = seatmap(free=(("39", ["AISLE"], True), ("73", ["TABLE"], True)), assigned=("3", "39"))
+    kept["seatsPossibleToSelect"]["3"] = ["73"]  # the seat we hold is not one to move to
+    c.seatmaps = {"SM-OUTBOUND": kept, "SM-INBOUND": kept}
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["avoid table"]
+    counts = run_range(c, cfg, dry_run=False)
+
+    assert counts["booked"] == 1
+    assert not [call for call in c.calls if call[0] == "seats"]
+    out = capsys.readouterr().out
+    assert "outbound: keeping carriage 3 seat 39 · aisle, forward · nothing free outranks it" in out
+    assert "✓ checking out booking" in out
+
+
 def test_a_seat_failure_still_books_the_day(capsys):
     c = FakeClient({"OUT": OUT, "IN": IN})
     c.seatmap_error = SJAPIError("seat map unavailable")

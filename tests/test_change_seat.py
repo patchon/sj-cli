@@ -82,6 +82,23 @@ def booking_item(number="NUM1", date=FUTURE_DATE, direction="OUTBOUND", origin="
     }
 
 
+def a_known_current_seat(current_codes, free, number="39", reversed_=False):
+    """
+    A seat map whose assigned seat can be found in the carriage layout.
+
+    fakes.seatmap() makes every layout seat selectable and its default
+    assigned seat (3/39) is not in the layout at all — the shape where
+    seats.assigned_seat() gives up and the best free seat is taken. The keep
+    rule needs the other shape: an assigned seat the layout knows, so it can
+    be ranked against what is free. So the assigned seat is put in the
+    carriage and then taken back out of seatsPossibleToSelect (a seat you
+    already hold is not one you can move to).
+    """
+    m = seatmap(free=((number, current_codes, reversed_), *free), assigned=("3", number))
+    m["seatsPossibleToSelect"]["3"] = [spec[0] for spec in free]
+    return m
+
+
 def test_change_seat_by_date_patches_the_confirmed_endpoint():
     c = FakeClient()
     c.bookings_list = [booking_item()]
@@ -123,7 +140,9 @@ def test_change_seat_dry_run_sends_no_patch(capsys):
 
     handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE], dry_run=True)
     assert not c.seat_updates
-    assert "would take" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "would take" in out
+    assert "● dry run · 1 seat(s) would change" in out
 
 
 def test_change_seat_reports_an_unknown_booking_number(capsys):
@@ -295,3 +314,89 @@ def test_the_train_label_falls_back_when_the_service_is_unnamed():
 
     segment = {"direction": "INBOUND"}
     assert _train_label(segment, [segment]) == "return"
+
+
+# --- a seat is only changed when a free one is strictly better ----------------
+
+
+def test_a_seat_no_free_one_outranks_is_kept(capsys):
+    """The live bug: an avoid-table run traded a table-free seat for a table."""
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    c.seatmaps = {
+        "SM-OUTBOUND": a_known_current_seat(["AISLE"], (("73", ["TABLE", "AISLE"], True),))
+    }
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["avoid table"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE]) is True
+    assert not c.seat_updates
+    out = capsys.readouterr().out
+    assert "keeping carriage 3 seat 39 ·" in out
+    assert "nothing free outranks it" in out
+    assert "● nothing changed" in out
+
+
+def test_an_equally_good_free_seat_is_not_taken(capsys):
+    """Ties keep: swapping two seats that meet the same wishes gains nothing."""
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    c.seatmaps = {"SM-OUTBOUND": a_known_current_seat(["WINDOW"], (("73", ["WINDOW"], False),))}
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE]) is True
+    assert not c.seat_updates
+    assert "keeping carriage 3 seat 39 ·" in capsys.readouterr().out
+
+
+def test_a_current_seat_the_layout_does_not_know_is_still_replaced(capsys):
+    """
+    No locatable current seat, nothing to compare: today's behaviour stands.
+
+    fakes.seatmap()'s default assigned seat is not in the carriage layout, so
+    assigned_seat() returns None — even a table seat is taken under an
+    avoid-table preference rather than guessing what the passenger holds.
+    """
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["avoid table"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE]) is True
+    _, updates, _ = c.seat_updates[0]
+    assert updates[0]["seatNumber"] == "70"
+    assert "keeping" not in capsys.readouterr().out
+
+
+def test_the_dry_run_closing_counts_only_the_legs_that_would_change(capsys):
+    c = FakeClient()
+    c.bookings_list = [two_day_booking()]
+    c.seatmaps = {
+        # already the best seat on the map...
+        "SM-D1": a_known_current_seat(["WINDOW"], (("73", ["AISLE"], True),)),
+        # ...and a genuinely better one free on the other leg
+        "SM-D2": a_known_current_seat(["AISLE"], (("73", ["WINDOW"], True),)),
+    }
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, booking_numbers=["NUM1"], dry_run=True) is True
+    assert not c.seat_updates
+    out = capsys.readouterr().out
+    assert "keeps carriage 3 seat 39 · window" in out
+    assert "would take carriage 3 seat 73 · window" in out
+    assert "● dry run · 1 seat(s) would change" in out
+
+
+def test_a_dry_run_that_would_change_nothing_says_so(capsys):
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    c.seatmaps = {"SM-OUTBOUND": a_known_current_seat(["WINDOW"], (("73", ["AISLE"], True),))}
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE], dry_run=True) is True
+    out = capsys.readouterr().out
+    assert "keeps carriage 3 seat 39 ·" in out
+    assert "● dry run · nothing to change" in out

@@ -125,8 +125,10 @@ seat over any table seat. Words that look like opposites are a fallback order, n
 conflict — `["aisle", "window"]` means aisle seats first, window seats next. Set it to
 `"ask"` to be prompted for every leg instead (needs a terminal), or omit the key and SJ
 assigns the seat. A preference is never a guarantee: when nothing matches, the best
-remaining seat is taken anyway and a `!` line names the wish it missed. The seat SJ
-picked is kept only when no seat is free to move to.
+remaining seat is taken anyway and a `!` line names the wish it missed. A seat is only
+changed when a free one is strictly better by your list — legs already on their best seat
+are left alone (`keeping carriage 3 seat 39 · nothing free outranks it`), and so is the
+seat SJ picked when nothing is free to move to.
 
 Every characteristic comes from SJ's seat map, and SJ warns that the map may not match the
 train that actually arrives: refurbished and older X 2000 units are both in service, so three
@@ -172,7 +174,7 @@ sj-cli --cancel-booking JS3TWMF1 --dry-run     # preview a cancel: cards + what 
 sj-cli --cancel-booking JS3TWMF1,ABCD1234    # cancel by booking number (any case)
 sj-cli --change-seat-date 2026-09-28            # re-seat that day (configured route)
 sj-cli --change-seat-booking ZSVV7EML           # re-seat one booking, any route
-sj-cli --change-seat-date W40 --dry-run         # preview which seats it would take
+sj-cli --change-seat-date W40 --dry-run         # preview: which seats it would take, and how many
 sj-cli --upgrade-class W40 --dry-run            # report which booked legs could move up to comfort_class
 sj-cli --upgrade-class 2026-09-28               # release and re-book those legs (asks once, terminal only)
 sj-cli --login                 # authenticate, cache the token, exit
