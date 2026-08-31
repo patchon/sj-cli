@@ -334,6 +334,9 @@ def test_a_seat_no_free_one_outranks_is_kept(capsys):
     out = capsys.readouterr().out
     assert "keeping carriage 3 seat 39 ·" in out
     assert "nothing free outranks it" in out
+    # The keep comes before the missed-wish warning: nothing was taken, so
+    # there is no unhonoured wish to report.
+    assert "could not avoid" not in out
     assert "● nothing changed" in out
 
 
@@ -348,6 +351,21 @@ def test_an_equally_good_free_seat_is_not_taken(capsys):
     assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE]) is True
     assert not c.seat_updates
     assert "keeping carriage 3 seat 39 ·" in capsys.readouterr().out
+
+
+def test_a_dry_run_does_not_propose_an_equally_good_seat(capsys):
+    """The preview ties the same way _choose_seat does — and counts nothing."""
+    c = FakeClient()
+    c.bookings_list = [booking_item()]
+    c.seatmaps = {"SM-OUTBOUND": a_known_current_seat(["WINDOW"], (("73", ["WINDOW"], False),))}
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE], dry_run=True) is True
+    out = capsys.readouterr().out
+    assert "keeps carriage 3 seat 39 ·" in out
+    assert "would take" not in out
+    assert "● dry run · nothing to change" in out
 
 
 def test_a_current_seat_the_layout_does_not_know_is_still_replaced(capsys):
