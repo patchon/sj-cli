@@ -5,6 +5,10 @@
 Command-line tool that books SJ (Swedish Railways) trips for you on a travel
 pass, e.g. an *SJ Årskort* (annual pass) or *SJ 30-dagarskort* (30-day pass).
 
+This tool is entirely *vibe-coded*: all of the code was written by
+[Claude](https://claude.ai), from my instructions. I directed, reviewed and
+tested; I did not write the code.
+
 ![sj-cli demo](demo.gif)
 
 ## Why
@@ -15,32 +19,42 @@ costs 0 kr, since the trip is already paid for through the pass.
 
 What you may not realise when you buy the pass is that you are not guaranteed
 a seat on the departures you want. If the train is sold out in your class you
-simply cannot book a ticket, which stings when you have paid a considerable
-amount for a monthly pass, and even more so for an annual one.
+simply cannot book a ticket, which in turn is rather disappointing when you
+have paid so much for a monthly pass, and even more so for an annual one.
 
 In practice this means booking your trip well in advance, which is not always
 possible. Booking the day before is, on the route I commute, close to
-impossible: by then it is always "full".
+impossible, since by then it is always "sold out".
 
-The most frustrating part is that "sold out" rarely means full. In all the
-years I have commuted I have never boarded a single train where every seat in
-my class was taken, even though no ticket could be booked precisely because the
-train was "sold out". The staff on board have also been clear that the train is
-"fully booked" and that everyone therefore has to sit in their booked seat.
-Despite that there have, as I said, always been free seats in my class.
+The most frustrating part is that "sold out" does not mean full. In all the
+years I have commuted I have never boarded **a single train** where every seat
+in my class was taken, even though no ticket could be booked precisely because
+the train was "sold out". The staff on board have also been clear that the
+train is "fully booked" and that everyone therefore has to sit in their booked
+seat. Despite that there have, as I said, always been free seats in my class.
+
+It gets more frustrating still when the staff ask for my ticket and I explain
+that none could be booked, whereupon they explain that it is because the train
+is full. That is rather paradoxical, since I would argue that I am the actual
+physical proof that this is not the case, with more empty seats around me, it
+should be added.
 
 Only SJ can say why. One guess is that pass holders book seats they then never
-use; another is that SJ counts a train as full with a generous margin.
-Whatever the cause, you have paid a considerable sum for a pass that in
-practice does not let you travel when you want to.
+use; another that SJ counts a train as full with a generous margin; a third
+that a seat booked for part of the route counts as taken the whole way.
+Whatever the cause, it is very disappointing not to be able to take the train
+you want when you have paid so much for your pass, especially when the train
+is not even full (which it never is).
 
 ## The fix?
 
-That is SJ's problem to solve, and there are surely several conceivable ways:
-requiring a booking to be confirmed a day before departure to remain valid,
-upgrading to the next class instead of refusing when one is sold out, or simply
-a seat count that matches what the train actually looks like. Without insight
-into the cause it is of course hard to know what would help.
+Only SJ can solve it, but a few conceivable ways would be:
+
+* requiring a booking to be confirmed a day before departure to remain valid,
+* upgrading to the next class instead of refusing when one is sold out,
+* or simply a seat count that matches what the train actually looks like.
+
+Without insight into the cause it is of course hard to know what would help.
 
 The only thing I know is that I want to get on the train, and to do that I have
 to book tickets weeks and months ahead. Ironically, that makes me part of the
@@ -49,7 +63,8 @@ who did not get a ticket on a day I had booked but did not travel)*.
 
 ## The tool
 
-This tool does not fix SJ's problem, but it makes it easier to live with.
+This tool does not fix SJ's problem, but with it I can at least book every trip
+I intend to make, weeks and months ahead.
 
 It books your trips the way the sj.se app does, but for many days at once.
 Single trips can also be booked interactively. You specify:
@@ -64,10 +79,8 @@ Single trips can also be booked interactively. You specify:
 
 The tool then books the tickets that match your wishes, day by day; a day that
 is already booked is never booked twice. It talks to the same API as the sj.se
-web app (reverse-engineered, so nothing official), which lets it log in,
-search, pick the right departure, find the pass holder's 0 kr offer and check
-out. It can also run as a "dry run", which previews what would have been
-booked without making any actual booking attempts.
+web app (reverse-engineered, nothing official), which lets it log in, search,
+pick the right departure, find the pass holder's 0 kr offer and check out.
 
 ## Requirements
 

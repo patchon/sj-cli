@@ -5,6 +5,10 @@
 Ett kommandoradsverktyg som bokar resor med SJ åt dig som har periodkort, till
 exempel *SJ Årskort* eller *SJ 30-dagarskort*.
 
+Det här verktyget är helt *vibe-kodat*: all kod är skriven av
+[Claude](https://claude.ai), utifrån mina instruktioner. Jag har styrt, granskat
+och testat, inte skrivit koden.
+
 ![demo av sj-cli](demo.gif)
 
 ## Varför
@@ -20,40 +24,49 @@ när man betalat så mycket för ett månadskort, och i synnerhet för ett årsk
 
 I praktiken innebär det att man måste boka sin resa långt i förväg, vilket inte
 alltid är möjligt. Att boka dagen innan är, på den sträcka jag pendlar, i det
-närmaste omöjligt - det alltid "fullbokat".
+närmaste omöjligt - då det alltid är "fullbokat".
 
 Det mest frustrerande är att "fullbokat" inte betyder fullt. Under alla år jag
-har pendlat har jag aldrig klivit på ett enda tåg där varje plats i min klass
-varit upptagen, trots att det inte gått att boka biljett just för att tåget är
-"fullbokat". Personalen ombord har dessutom varit tydlig med att tåget är "helt
-fullbokat" och att alla därför måste sitta på sin bokade plats. Trots det har
-det, som sagt, alltid funnits lediga platser i min klass.
+har pendlat har jag aldrig klivit på **ett enda tåg** där varje plats i min
+klass varit upptagen, trots att det inte gått att boka biljett just för att
+tåget är "fullbokat". Personalen ombord har dessutom varit tydlig med att tåget
+är "helt fullbokat" och att alla därför måste sitta på sin bokade plats. Trots
+det har det, som sagt, alltid funnits lediga platser i min klass.
+
+Ännu mer frustrerande blir det när personalen frågar efter biljett och jag
+förklarar att det inte gick att boka någon, varpå de förklarar att det beror
+på att tåget är fullt - vilket blir väldigt paradoxalt då jag vill påstå att jag
+är det faktiska fysiska beviset på att så inte är fallet - dessutom med fler
+tomma säten runt omkring mig skall tilläggas.
 
 Varför det är så kan bara SJ svara på. En gissning är att resenärer med
-periodkort bokar platser som de sedan inte använder; en annan är att SJ räknar
-tåget som fullt med god marginal. Oavsett orsak så känns det väldigt tråkigt att
-inte kunna resa med önskat tåg när man har betalat så mycket pengar för sitt 
-periodkort - framförallt när tåget inte ens är fullt (vilket det aldrig är). 
+periodkort bokar platser som de sedan inte använder; en annan att SJ räknar
+tåget som fullt med god marginal; en tredje att en plats som är bokad för en
+del av sträckan räknas som upptagen hela vägen. Oavsett orsak så känns det
+väldigt tråkigt att inte kunna resa med önskat tåg när man har betalat så mycket
+pengar för sitt periodkort - framförallt när tåget inte ens är fullt
+(vilket det aldrig är).
 
 ## Lösningen?
 
-Det kan bara SJ lösa, men några tänkbara vägar skulle kanske kunna vara; 
+Det kan bara SJ lösa, men några tänkbara vägar skulle kunna vara:
+
 * att en bokning måste bekräftas ett dygn före avgång för att gälla,
-*  att en fullbokad klass ger uppgradering till nästa i stället för avslag,
-*  eller helt enkelt en platsräkning som stämmer med hur tåget faktiskt ser ut.
-Utan insyn i orsaken dock är det såklart svårt att veta vad som skulle hjälpa.
+* att en fullbokad klass ger uppgradering till nästa i stället för avslag,
+* eller helt enkelt en platsräkning som stämmer med hur tåget faktiskt ser ut.
+
+Utan insyn i orsaken är det dock såklart svårt att veta vad som skulle hjälpa.
 
 Det enda jag vet är att jag vill åka med tåget, och för att göra det måste jag
 boka biljetter veckor och månader i förväg. Ironiskt nog blir jag därmed en del
 av problemet. I det här fallet väljer jag ändå att sätta min egen pendling
-först *(förlåt till dig som inte fick biljett en dag jag hade bokat men inte 
+först *(förlåt till dig som inte fick biljett en dag jag hade bokat men inte
 åkte)*.
 
 ## Verktyget
 
-Det här verktyget löser inte SJ:s problem, men jag kan åtminstone säkerställa
-att jag kan boka upp biljetter för alla resor jag tänkt göra, veckor och månader
-i förväg..
+Det här verktyget löser inte SJ:s problem, men med det kan jag åtminstone boka
+alla resor jag tänkt göra, veckor och månader i förväg.
 
 Det bokar dina resor på samma sätt som appen på sj.se gör, fast för många dagar
 på en gång. Enskilda resor kan också bokas interaktivt. Du anger:
@@ -68,10 +81,9 @@ på en gång. Enskilda resor kan också bokas interaktivt. Du anger:
 
 Sedan bokar verktyget de biljetter som stämmer överens med dina önskemål, dag
 för dag; en dag som redan är bokad dubbelbokas aldrig. Det pratar med samma API
-som webbappen på sj.se (bakåtkonstruerat, alltså inget officiellt), så det kan
+som webbappen på sj.se (reverse engineered, inget officiellt), så det kan
 logga in, söka, välja rätt avgång, hitta periodkortets erbjudande till 0 kr och
-slutföra bokningen. Verktyget kan även köras i "dry run", som förhandsvisar vad
-som skulle ha bokats utan att göra några faktiska bokningsförsök.
+slutföra bokningen.
 
 ## Krav
 
@@ -210,6 +222,7 @@ efter e-post och lösenord. Parametrarna för resan måste dock alltid fyllas i
 för hand.
 
 Miljövariabler som stöds:
+
 ```bash
 LOG_LEVEL=DEBUG|TRACE # diagnostik på stderr (TRACE lägger till httpx trafikloggar)
 NO_COLOR=1            # oformaterad utskrift (sker även automatiskt i en pipe)
