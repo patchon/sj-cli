@@ -15,14 +15,14 @@ kostar 0 kr, eftersom resan redan är betald genom periodkortet.
 
 Det man kanske inte har klart för sig när man köper kortet är att man inte är
 garanterad plats på de avgångar man önskar. Är tåget fullbokat i din klass kan
-du helt enkelt inte boka någon biljett, vilket svider när man betalar en rejäl
-slant för ett månadskort, och i synnerhet för ett årskort.
+du helt enkelt inte boka någon biljett, vilket i sin tur känns ganska tråkigt
+när man betalat så mycket för ett månadskort, och i synnerhet för ett årskort.
 
 I praktiken innebär det att man måste boka sin resa långt i förväg, vilket inte
 alltid är möjligt. Att boka dagen innan är, på den sträcka jag pendlar, i det
-närmaste omöjligt: då är det alltid "fullt".
+närmaste omöjligt - det alltid "fullbokat".
 
-Det mest frustrerande är att "fullbokat" sällan betyder fullt. Under alla år jag
+Det mest frustrerande är att "fullbokat" inte betyder fullt. Under alla år jag
 har pendlat har jag aldrig klivit på ett enda tåg där varje plats i min klass
 varit upptagen, trots att det inte gått att boka biljett just för att tåget är
 "fullbokat". Personalen ombord har dessutom varit tydlig med att tåget är "helt
@@ -31,25 +31,29 @@ det, som sagt, alltid funnits lediga platser i min klass.
 
 Varför det är så kan bara SJ svara på. En gissning är att resenärer med
 periodkort bokar platser som de sedan inte använder; en annan är att SJ räknar
-tåget som fullt med god marginal. Oavsett orsak har man betalat en så pass
-betydande summa för ett kort som i praktiken inte låter en resa när man vill.
+tåget som fullt med god marginal. Oavsett orsak så känns det väldigt tråkigt att
+inte kunna resa med önskat tåg när man har betalat så mycket pengar för sitt 
+periodkort - framförallt när tåget inte ens är fullt (vilket det aldrig är). 
 
 ## Lösningen?
 
-Det är SJ:s problem att lösa, och det finns säkert flera tänkbara vägar: att en
-bokning måste bekräftas ett dygn före avgång för att gälla, att en fullbokad
-klass ger uppgradering till nästa i stället för avslag, eller helt enkelt en
-platsräkning som stämmer med hur tåget faktiskt ser ut. Utan insyn i orsaken är
-det såklart svårt att veta vad som skulle hjälpa.
+Det kan bara SJ lösa, men några tänkbara vägar skulle kanske kunna vara; 
+* att en bokning måste bekräftas ett dygn före avgång för att gälla,
+*  att en fullbokad klass ger uppgradering till nästa i stället för avslag,
+*  eller helt enkelt en platsräkning som stämmer med hur tåget faktiskt ser ut.
+Utan insyn i orsaken dock är det såklart svårt att veta vad som skulle hjälpa.
 
-Det enda jag vet är att jag vill komma med tåget, och för att göra det måste jag
+Det enda jag vet är att jag vill åka med tåget, och för att göra det måste jag
 boka biljetter veckor och månader i förväg. Ironiskt nog blir jag därmed en del
 av problemet. I det här fallet väljer jag ändå att sätta min egen pendling
-först *(förlåt, du som inte fick biljett en dag jag hade bokat men inte åkte)*.
+först *(förlåt till dig som inte fick biljett en dag jag hade bokat men inte 
+åkte)*.
 
 ## Verktyget
 
-Det här verktyget löser inte SJ:s problem, men det gör det lättare att leva med.
+Det här verktyget löser inte SJ:s problem, men jag kan åtminstone säkerställa
+att jag kan boka upp biljetter för alla resor jag tänkt göra, veckor och månader
+i förväg..
 
 Det bokar dina resor på samma sätt som appen på sj.se gör, fast för många dagar
 på en gång. Enskilda resor kan också bokas interaktivt. Du anger:
