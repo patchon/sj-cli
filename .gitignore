@@ -20,3 +20,4 @@ config.toml
 curl-traces/
 *.log
 docs/
+*.cast
