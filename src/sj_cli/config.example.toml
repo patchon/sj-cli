@@ -1,39 +1,131 @@
-# Copy to ~/.config/sj-cli/config.toml (or $XDG_CONFIG_HOME/sj-cli/config.toml)
-# and fill in your own values. See SPEC.md §4 for validation rules.
+# sj-cli configuration.
+#
+# Copy this file to ~/.config/sj-cli/config.toml (or, when XDG_CONFIG_HOME is
+# set, to $XDG_CONFIG_HOME/sj-cli/config.toml) and fill in your own values.
+# Every field is validated before any network call and all problems are
+# reported at once; the full rules are in SPEC.md, section 4.3. Preview a run
+# with `sj-cli --book --dry-run` before booking for real.
+#
+# The file holds your SJ password: keep it readable by you only (chmod 600).
 
+# Your sj.se account. Needed by every operation.
 [auth]
+
+# The email address you log in to sj.se with. Required.
 email = "user@example.com"
+
+# The password of that account. Required. A backslash or a double quote
+# inside the value must be written TOML-style, as \\ and \".
 password = "your-password"
 
+# The commute to book. Needed by --book, --book-journey, --cancel-date,
+# --change-seat-date and --upgrade-class; --login, the --list-* modes and
+# --cancel-booking work with [auth] alone. --book-journey asks for its own
+# date and route and uses the values here only as defaults.
 [search_parameters]
-# Which days to book: dates (YYYY-MM-DD), ISO weeks (W43; 2027-W02 for another year),
-# comma-separated, with inclusive START..END ranges (W45..46). Days already gone are
-# skipped — put your own window here: a selection entirely in the past is rejected.
+
+# Which days --book should book. Required for --book only.
+# A comma-separated list of dates (YYYY-MM-DD) and ISO weeks (W43 for week 43
+# of this year, 2027-W02 for another year), each optionally an inclusive
+# START..END range: "2026-09-01..2026-10-30", "W36, W38..40", "2027-W02..03".
+# A week means Monday to Sunday. Days already gone are skipped at run time, so
+# a standing selection keeps working from one run to the next; a selection
+# that lies entirely in the past is an error.
 dates = "2026-09-01..2026-10-30"
-# or, by week:  dates = "W36, W38..40"
+
+# Preferred departure time of the outbound leg: HH:MM, 24-hour, Swedish local
+# time (an unquoted TOML time with seconds, 05:29:00, is accepted too).
+# Required. select_closest_ticket_available sets how strictly it is applied.
 time_leave = "05:29"
+
+# Preferred departure time of the return leg, same format. Required when
+# roundtrip = true, unused otherwise.
 time_return = "17:22"
+
+# The two ends of the route. Required. Both must be in the tool's station map:
+# Stockholm, Göteborg, Malmö, Uppsala, Lund or Linköping, written as
+# "<City> Central" or "<City> C" (case-insensitive).
 station_from = "Göteborg Central"
 station_to = "Stockholm Central"
-comfort_class = "2 class calm"    # "1 class", "2 class", "2 class calm"
-flexibility = "FULLFLEX"          # FULLFLEX, SEMIFLEX, NOFLEX
-roundtrip = true
-select_closest_ticket_available = true
-allow_class_fallback = true       # optional, defaults to true
-book_partial = false              # optional; book the return leg alone if the outbound is unavailable (SPEC §6.5)
-skip_weekends = true              # optional, defaults to true
-skip_holidays = true              # optional, defaults to true — Swedish red days incl. Midsommar-/Jul-/Nyårsafton
-service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
-# Valid: ALL, SJ_HIGH, SJ_IC, SJ_REG, SJ_NT, X_TRAINOPS, X_PTA, X_EXPBUS
 
-# seat_preference — optional. Omit it and SJ assigns the seat.
-#   "ask"                              prompt for every leg of every day
-#   ["window", "table", "forward"]     ranked wish list, best free seat wins
-# Words: window, aisle, table, solo, single, easy access, no animals, forward, backward
-#   solo is SJ's first-class "Singelplats" product; single is any seat with no
-#   neighbour, computed from the 2+1 carriage layout — not the same thing
-# Any word can be negated as "avoid <word>": it pushes those seats last
-#   (best-effort — one is still taken when nothing else is free)
-# (an earlier word outranks every later one; a word and its own negation are rejected)
-#seat_preference = ["window", "table"]
+# The comfort class to book. Required. One of "1 class", "2 class" or
+# "2 class calm" (the quiet carriage). See allow_class_fallback.
+comfort_class = "2 class calm"
+
+# The ticket flexibility to book. Required. One of FULLFLEX, SEMIFLEX or
+# NOFLEX. Together with comfort_class it selects the travel-pass offer: a leg
+# is booked only when the departure has a 0-price offer matching both.
+flexibility = "FULLFLEX"
+
+# Book a return leg too? Required. true books the outbound and the return leg
+# in one booking (one booking number, like the SJ app); false books the
+# outbound only.
+roundtrip = true
+
+# How strictly time_leave and time_return are applied. Required.
+#   true   book the departure closest to the configured time, earlier or
+#          later; when it has no travel-pass offer, one alternative is tried
+#          (an earlier train for the outbound, a later one for the return)
+#   false  book only a departure at exactly the configured time; when there
+#          is none, or it has no travel-pass offer, the leg is skipped
+select_closest_ticket_available = true
+
+# Fall back to another class when comfort_class is unavailable? Optional,
+# defaults to true. The chain is comfort_class, then "2 class calm", then
+# "2 class"; every fallback is reported on the day card. false books the
+# exact class or nothing.
+allow_class_fallback = true
+
+# What to do on a round trip when the outbound leg cannot be booked.
+# Optional, defaults to false. true books the return leg alone, as its own
+# booking; false skips the day. A return leg that cannot be booked never
+# blocks the outbound: that is booked one-way regardless. See SPEC.md 6.5.
+book_partial = false
+
+# Skip Saturdays and Sundays in the dates selection? Optional, defaults to
+# true. A skipped day costs no API call.
+skip_weekends = true
+
+# Skip Swedish public holidays (red days)? Optional, defaults to true.
+# Midsommarafton, Julafton and Nyårsafton count as holidays too.
+skip_holidays = true
+
+# Restrict the search to these train types. Optional: omit the key, or set
+# ["ALL"], for no filter. "ALL" cannot be combined with other values.
+#   SJ_HIGH     SJ high-speed trains
+#   SJ_IC       SJ InterCity
+#   SJ_REG      SJ regional trains
+#   SJ_NT       SJ night trains
+#   X_TRAINOPS  other train operators
+#   X_PTA       public transport
+#   X_EXPBUS    express buses
+service_types = ["SJ_HIGH", "SJ_IC"]
+
+# Which seat to take on each booked leg. Optional: omit the key and SJ
+# assigns the seat. Required by --change-seat-date and --change-seat-booking,
+# which have nothing to do without it.
+#
+# Either the literal "ask", which prompts for a seat on every leg of every
+# day (needs a terminal), or a ranked wish list: the best free seat by the
+# list wins, and an earlier word outweighs every later one combined, so
+# ["window", "table"] takes a plain window seat over an aisle seat at a
+# table. Words that look like opposites are a fallback order, not a
+# conflict: ["aisle", "window"] means aisle seats first, window seats next.
+#
+# Words: window, aisle, table, solo, single, easy access, no animals,
+# forward, backward.
+#   solo    SJ's first-class "Singelplats" product
+#   single  any seat with no neighbour, computed from the 2+1 carriage
+#           layout; not the same thing as solo
+# Any word can be negated as "avoid <word>", which pushes those seats last.
+# Rejected: a word listed twice, a word together with its own negation, and
+# forward together with backward.
+#
+# A wish is never a guarantee: when nothing matches, the best remaining seat
+# is taken anyway and a "!" line names the wish that was missed. A seat is
+# only changed when a free one is strictly better by the list; a leg already
+# on its best seat is left alone. SJ's seat map can differ from the train
+# that actually arrives.
+#seat_preference = "ask"
+#seat_preference = ["window", "table", "forward"]
 #seat_preference = ["avoid table", "single", "aisle", "window", "forward"]
