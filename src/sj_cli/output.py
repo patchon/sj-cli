@@ -80,6 +80,39 @@ def indented(prefix: str = "  "):
         _indent = previous
 
 
+class _WeekBlock:
+    """One week_headers() block: where its week lines go, and the last week printed."""
+
+    def __init__(self, base: str) -> None:
+        self.base = base
+        self.last: tuple[int, int] | None = None
+
+
+_week_block: _WeekBlock | None = None
+
+
+@contextmanager
+def week_headers():
+    """
+    Group the day cards printed inside the block under bold `W42` week lines.
+
+    Inside the block the card openers (print_day_header, print_day_note,
+    print_bookings_table) print a `W<n>` line whenever the ISO week of the
+    card differs from the previous card's, and indent every card of that
+    week one level beneath it. The week line sits at the indent current on
+    entry; the block prints no blank lines of its own — callers keep their
+    blank after or between cards. Exit restores the indent. Outside a block
+    the card openers print exactly as before.
+    """
+    global _indent, _week_block  # noqa: PLW0603
+    previous_block, previous_indent = _week_block, _indent
+    _week_block = _WeekBlock(previous_indent)
+    try:
+        yield
+    finally:
+        _week_block, _indent = previous_block, previous_indent
+
+
 @contextmanager
 def spinner(msg: str, interval: float = 0.08, trail: bool = True):
     """
@@ -350,6 +383,38 @@ def _format_date_label(date_str: str) -> str:
         return date_str or "\u2014"
 
 
+def _iso_week(date_str: str) -> tuple[int, int] | None:
+    """(ISO year, ISO week) of a YYYY-MM-DD string; None when it does not parse."""
+    try:
+        cal = datetime.strptime(date_str, "%Y-%m-%d").isocalendar()
+    except (ValueError, TypeError):
+        return None
+    return cal.year, cal.week
+
+
+def week_line(date_str: str, dim: bool = False) -> str:
+    """'W42' for a YYYY-MM-DD date's ISO week, bold (dim when dim); '' if it does not parse."""
+    week = _iso_week(date_str)
+    if week is None:
+        return ""
+    return style(f"W{week[1]}", DIM if dim else BOLD)
+
+
+def _week_break(date_str: str, dim: bool = False) -> None:
+    """Inside week_headers(): print the week line and re-indent when the ISO week changes."""
+    global _indent  # noqa: PLW0603
+    block = _week_block
+    if block is None:
+        return
+    week = _iso_week(date_str)
+    if week is None or week == block.last:
+        return
+    _indent = block.base
+    _emit(week_line(date_str, dim))
+    _indent = block.base + "  "
+    block.last = week
+
+
 def _reverse_route(route: str) -> str:
     """'A → B' becomes 'B → A'; anything else is returned unchanged."""
     parts = [x.strip() for x in route.split("\u2192")]
@@ -382,11 +447,13 @@ def day_header(date_str: str, detail: str = "", dim: bool = False) -> str:
 
 def print_day_header(date_str: str, route: str) -> None:
     """Start a day card: bold date + route, e.g. 'tue 15 sep 2026   A ⇄ B'."""
+    _week_break(date_str)
     _emit(day_header(date_str, route))
 
 
 def print_day_note(date_str: str, note: str) -> None:
     """A one-line day card for a day that needs no work: bold date + dim note."""
+    _week_break(date_str)
     _emit(f"{style(_format_date_label(date_str), BOLD)}   {style(note, DIM)}")
 
 

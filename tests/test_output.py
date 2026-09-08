@@ -134,6 +134,51 @@ def test_day_header_and_note(capsys):
     assert capsys.readouterr().out == " sat 19 sep 2026   weekend\n"
 
 
+def test_week_line_bold_dim_and_unparsable(monkeypatch):
+    from sj_cli.output import week_line
+
+    assert week_line("2026-10-12") == "W42"
+    assert week_line("2027-01-04") == "W1"  # no zero padding, no year
+    assert week_line("nonsense") == "" and week_line("") == ""
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    assert week_line("2026-10-12") == "\x1b[1mW42\x1b[0m"
+    assert week_line("2026-10-12", dim=True) == "\x1b[2mW42\x1b[0m"
+
+
+def test_week_headers_group_cards_by_iso_week(capsys):
+    from sj_cli.output import blank, print_day_header, week_headers
+
+    with week_headers():
+        print_day_header("2026-10-12", "A ⇄ B")
+        with indented():
+            pinfo("leg")
+        blank()
+        print_day_note("2026-10-13", "weekend")  # same week: no line
+        blank()
+        print_day_header("2026-10-19", "A ⇄ B")  # next week: line at the base indent
+    print_day_header("2026-10-20", "A ⇄ B")  # outside the block: as before
+    assert capsys.readouterr().out == (
+        " W42\n"
+        "   mon 12 oct 2026   A ⇄ B\n"
+        "     leg\n"
+        "\n"
+        "   tue 13 oct 2026   weekend\n"
+        "\n"
+        " W43\n"
+        "   mon 19 oct 2026   A ⇄ B\n"
+        " tue 20 oct 2026   A ⇄ B\n"
+    )
+
+
+def test_week_headers_nest_under_the_current_indent_and_skip_unparsable_dates(capsys):
+    from sj_cli.output import print_day_header, week_headers
+
+    with indented(), week_headers():
+        print_day_header("—", "A ⇄ B")  # no week to name: no line, no re-indent
+        print_day_header("2026-10-12", "A ⇄ B")
+    assert capsys.readouterr().out == "   —   A ⇄ B\n   W42\n     mon 12 oct 2026   A ⇄ B\n"
+
+
 def test_bookings_card_groups_by_day_and_infers_return_arrow(capsys):
     legs = [
         {
