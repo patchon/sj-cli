@@ -6,6 +6,7 @@ import pytest
 from sj_cli import output
 from sj_cli.errors import SJError
 from sj_cli.output import (
+    _format_date_label,
     _read_key,
     _reverse_route,
     _week_line,
@@ -136,6 +137,7 @@ def test_day_header_and_note(capsys):
     assert day_header("2026-09-15", "A ⇄ B") == "tue 15 sep 2026   A ⇄ B"
     print_day_note("2026-09-19", "weekend")
     assert capsys.readouterr().out == " sat 19 sep 2026   weekend\n"
+    assert _format_date_label("nonsense") == "nonsense"
 
 
 def test_week_line_bold_dim_and_unparsable(monkeypatch):
@@ -236,14 +238,49 @@ def test_bookings_card_groups_by_day_and_infers_return_arrow(capsys):
     ]
     print_bookings_table(legs)
     out = capsys.readouterr().out
-    # card-first: no title, no leading blank
-    assert out.startswith(" tue 01 sep 2026   A ⇄ B")
-    assert "→ 06:59 – 11:36" in out
-    assert "← 17:22 – 21:53" in out
+    # card-first: no title, no leading blank — the week line is the headline,
+    # the day card one level beneath it, the legs one more
+    assert out.startswith(" W36\n   tue 01 sep 2026   A ⇄ B\n     → 06:59 – 11:36")
+    assert "\n     ← 17:22 – 21:53" in out
     # footer: no emoji, no leg count
     assert "\n ● 1 day(s) · 1 booking(s)\n" in out
     assert "leg(s)" not in out
     assert "🚆" not in out
+
+
+def test_bookings_table_dims_a_week_only_when_every_leg_in_it_is_past(monkeypatch, capsys):
+    def leg(date, number, past):
+        return {
+            "date": date,
+            "departure": "06:59",
+            "arrival": "10:04",
+            "route": "A → B",
+            "booking_number": number,
+            "past": past,
+        }
+
+    legs = [
+        leg("2026-08-18", "OLD1", "Y"),
+        leg("2026-08-19", "OLD2", "Y"),
+        leg("2026-08-31", "NEW1", "N"),
+    ]
+    print_bookings_table(legs)
+    out = capsys.readouterr().out
+    # colour off: the week line stays plain; only the day headers say past
+    assert out.startswith(" W34\n   tue 18 aug 2026   A → B   past\n")
+    assert "\n\n W36\n   mon 31 aug 2026   A → B\n     → 06:59 – 10:04" in out
+    assert out.count("   past\n") == 2
+    assert "\n ● 3 day(s) · 3 booking(s) · 2 in the past\n" in out
+
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    print_bookings_table(legs)
+    out = capsys.readouterr().out
+    assert out.startswith(" \x1b[2mW34\x1b[0m\n")  # every leg of W34 is past: dim
+    assert "\n \x1b[1mW36\x1b[0m\n" in out  # W36 holds a future leg: bold
+
+    legs[1] = leg("2026-08-20", "NEW0", "N")  # W34 now holds a future leg too
+    print_bookings_table(legs)
+    assert capsys.readouterr().out.startswith(" \x1b[1mW34\x1b[0m\n")
 
 
 def test_travelpass_cards(capsys):

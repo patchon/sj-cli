@@ -101,8 +101,8 @@ def week_headers():
     card differs from the previous card's, and indent every card of that
     week one level beneath it. The week line sits at the indent current on
     entry. Card openers must be called at the block's base indent: a card
-    printed inside a further `indented()` loses that level, and the level
-    is not restored for the cards after it. The block prints no blank
+    printed inside a further `indented()` loses that level, and so do the
+    lines after it inside that block. The block prints no blank
     lines of its own — callers keep their blank after or between cards.
     Exit restores the indent. Outside a block the card openers print
     exactly as before.
@@ -571,12 +571,15 @@ def print_seat_choices(seats: list[Seat], comforts: dict[str, str] | None = None
 
 def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
     """
-    Print bookings as one card per travel day, legs indented beneath.
+    Print bookings as one card per travel day, legs indented beneath, weeks above.
 
-    Card-first: no title and no leading blank — the first day header is the
-    headline. Grouping is by date rather than booking number because with
-    `book_partial` each leg is its own booking; the booking number is shown
-    on every leg line so it is always visible for cancellation.
+    Card-first: no title and no leading blank — the first week line is the
+    headline, the first day card sits beneath it. Grouping is by date
+    rather than booking number because with `book_partial` each leg is its
+    own booking; the booking number is shown on every leg line so it is
+    always visible for cancellation. A week whose legs have all departed is
+    dimmed like its day headers (no `past` tag of its own — the day headers
+    carry it).
 
     Args:
         bookings: Leg rows (sorted by departure) with keys: date, direction,
@@ -585,43 +588,45 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
         summary: Print the "N day(s) · N booking(s) · …" footer line.
 
     """
-    # Group legs by date, preserving first-seen order
-    groups: dict[str, list[dict]] = {}
-    for leg in bookings:
-        groups.setdefault(leg.get("date", "\u2014"), []).append(leg)
-
     # Column widths across all legs so cards line up with each other: pad
     # every row's values to the global width before rendering.
     widths = {
         c: max((visible_len(_cell(leg, c)) for leg in bookings), default=0) for c in _LEG_COLUMNS
     }
-    padded_groups: dict[str, list[dict]] = {}
+    groups: dict[str, list[dict]] = {}
     for leg in bookings:
         padded = {**leg, **{c: pad(str(leg[c]), widths[c]) for c in _LEG_COLUMNS if leg.get(c)}}
-        padded_groups.setdefault(leg.get("date", "\u2014"), []).append(padded)
+        groups.setdefault(leg.get("date", "\u2014"), []).append(padded)
 
-    lines: list[str] = []
+    # A week is past when every card in it is, so it is judged over the
+    # whole week before its first card is printed.
+    week_past: dict[tuple[int, int] | None, bool] = {}
+    for date_str, legs in groups.items():
+        week = _iso_week(date_str)
+        week_past[week] = week_past.get(week, True) and all(leg.get("past") == "Y" for leg in legs)
+
     past_legs = 0
-    for i, (date_str, legs) in enumerate(padded_groups.items()):
-        if i:
-            lines.append("")
-        all_past = all(leg.get("past") == "Y" for leg in legs)
-        header = day_header(date_str, group_route(legs), dim=all_past)
-        if all_past and not color_enabled():
-            header += "   past"  # dimming is invisible here, so say it
-        lines.append(header)
-        past_legs += sum(leg.get("past") == "Y" for leg in legs)
-        lines += [f"  {line}" for line in leg_lines(legs)]
+    with week_headers():
+        for i, (date_str, legs) in enumerate(groups.items()):
+            if i:
+                blank()
+            _week_break(date_str, dim=week_past[_iso_week(date_str)])
+            all_past = all(leg.get("past") == "Y" for leg in legs)
+            header = day_header(date_str, group_route(legs), dim=all_past)
+            if all_past and not color_enabled():
+                header += "   past"  # dimming is invisible here, so say it
+            _emit(header)
+            past_legs += sum(leg.get("past") == "Y" for leg in legs)
+            with indented():
+                print_leg_lines(legs)
 
     if summary:
         n_bookings = len({leg.get("booking_number") for leg in bookings})
         footer = f"{len(groups)} day(s) \u00b7 {n_bookings} booking(s)"
         if past_legs:
             footer += f" \u00b7 {past_legs} in the past"
-        lines.append("")
-        lines.append(_status_line(None, footer))
-    for line in lines:
-        _emit(line)
+        blank()
+        pstatus(None, footer)
 
 
 def _format_tp_date(iso_str: str | None, exclusive: bool = False) -> str:
