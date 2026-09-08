@@ -359,9 +359,10 @@ W36
 When `seat_preference` (§4.3) is a ranked word list, a leg whose seat map holds a strictly better free seat gets a further `· could take <n> · <words>` appended, naming that seat's number and its own words in the same vocabulary — e.g. `carriage 3 seat 21 · aisle, backward · could take 47 · single, window, forward`, so it is obvious at a glance which tickets are worth re-seating (`--change-seat-date`/`--change-seat-booking`, §5.4, apply the change). "Better" is judged by the exact ranking `best_seat` uses to choose a seat (§4.3, §5.4) — never by whether the two seats merely differ, since `best_seat` is best-effort and can return the lowest-numbered free seat even when it satisfies no wish at all. The hint needs a wish list to judge "better" against, so it stays silent whenever `seat_preference` is `"ask"` or absent (`[search_parameters]` itself may be entirely absent from a config valid for `--list-bookings`, which does not require it) — and, like the plain seat cell, silent for a leg already on its best seat, one with nothing free, one already departed, or a map that will not load:
 
 ```
- fri 28 aug 2026   Linköping Central ⇄ Stockholm Central
-   → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 34 · window, table, forward   2 class calm   FULLFLEX   EPPE0XKQ
-   ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 19 · aisle, backward · could take 47 · single, window, forward   2 class calm   FULLFLEX   EPPE0XKQ
+ W35
+   fri 28 aug 2026   Linköping Central ⇄ Stockholm Central
+     → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 34 · window, table, forward   2 class calm   FULLFLEX   EPPE0XKQ
+     ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 19 · aisle, backward · could take 47 · single, window, forward   2 class calm   FULLFLEX   EPPE0XKQ
 ```
 
 ### 5.6 Upgrade-class mode
