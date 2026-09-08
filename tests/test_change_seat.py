@@ -99,6 +99,11 @@ def a_known_current_seat(current_codes, free, number="39", reversed_=False):
     return m
 
 
+def noted(out: str, text: str) -> bool:
+    """Is `text` printed as a note line — a cyan `i` mark, the informative-outcome glyph?"""
+    return any(line.lstrip().startswith("i ") and text in line for line in out.splitlines())
+
+
 def test_change_seat_by_date_patches_the_confirmed_endpoint():
     c = FakeClient()
     c.bookings_list = [booking_item()]
@@ -336,6 +341,7 @@ def test_a_seat_no_free_one_outranks_is_kept(capsys):
     out = capsys.readouterr().out
     assert "keeping carriage 3 seat 39 ·" in out
     assert "nothing free outranks it" in out
+    assert noted(out, "keeping carriage 3 seat 39 ·")  # an informative outcome: i mark
     # The keep comes before the missed-wish warning: nothing was taken, so
     # there is no unhonoured wish to report.
     assert "could not avoid" not in out
@@ -352,7 +358,7 @@ def test_an_equally_good_free_seat_is_not_taken(capsys):
 
     assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE]) is True
     assert not c.seat_updates
-    assert "keeping carriage 3 seat 39 ·" in capsys.readouterr().out
+    assert noted(capsys.readouterr().out, "keeping carriage 3 seat 39 ·")
 
 
 def test_a_dry_run_does_not_propose_an_equally_good_seat(capsys):
@@ -365,7 +371,7 @@ def test_a_dry_run_does_not_propose_an_equally_good_seat(capsys):
 
     assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE], dry_run=True) is True
     out = capsys.readouterr().out
-    assert "keeps carriage 3 seat 39 ·" in out
+    assert noted(out, "keeps carriage 3 seat 39 ·")
     assert "would take" not in out
     assert "● dry run · nothing to change" in out
 
@@ -418,5 +424,5 @@ def test_a_dry_run_that_would_change_nothing_says_so(capsys):
 
     assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE], dry_run=True) is True
     out = capsys.readouterr().out
-    assert "keeps carriage 3 seat 39 ·" in out
+    assert noted(out, "keeps carriage 3 seat 39 ·")
     assert "● dry run · nothing to change" in out

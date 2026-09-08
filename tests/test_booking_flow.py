@@ -121,7 +121,7 @@ def test_outbound_no_offer_uses_closest_earlier_alternative(capsys):
     assert creates[:3] == [("offers", "o-best"), ("offers", "o-early"), ("create", "OFF-calm")]
     out = capsys.readouterr().out
     assert "! no valid offer for outbound at 06:59, trying closest alternative" in out
-    assert "found offer at alternative departure 06:30" in out
+    assert "i found offer at alternative departure 06:30" in out
     # The alternative flag reaches the provisional, not just the message above.
     assert "creating booking with alternative outbound at 06:30" in out
 
@@ -137,7 +137,7 @@ def test_outbound_alternative_falls_back_a_class(capsys):
     assert result["legs"] == ["outbound", "return"]
     assert ("create", "OFF-second") in c.calls
     out = capsys.readouterr().out
-    assert "found offer at alternative departure 06:30" in out
+    assert "i found offer at alternative departure 06:30" in out
     assert "class fallback: 2 class calm → 2 class" in out
 
 
@@ -446,6 +446,10 @@ def test_book_mode_prints_day_cards_notes_and_summary(capsys):
     assert out.startswith(" W36\n   fri 04 sep 2026   Göteborg Central ⇄ Stockholm Central\n")
     assert "\n\n W37\n   mon 07 sep 2026   tickets already booked\n" in out
     assert [line for line in out.splitlines() if line.startswith(" W")] == [" W36", " W37"]
+    # one-line days condense: no blank between sat and sun; a note after a
+    # card, a week line and a full card after a note each get their blank
+    assert "NUM1\n\n   sat 05 sep 2026   weekend\n   sun 06 sep 2026   weekend\n\n W37\n" in out
+    assert "   mon 07 sep 2026   tickets already booked\n\n   tue 08 sep 2026   Göteborg" in out
 
 
 def test_book_mode_card_for_failed_day(capsys):
@@ -674,7 +678,9 @@ def test_book_mode_keeps_the_assigned_seat_when_nothing_free_outranks_it(capsys)
     assert counts["booked"] == 1
     assert not [call for call in c.calls if call[0] == "seats"]
     out = capsys.readouterr().out
-    assert "outbound: keeping carriage 3 seat 39 · aisle, forward · nothing free outranks it" in out
+    assert (
+        "i outbound: keeping carriage 3 seat 39 · aisle, forward · nothing free outranks it" in out
+    )
     assert "✓ checking out booking" in out
 
 

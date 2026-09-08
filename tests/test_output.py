@@ -181,6 +181,19 @@ def test_week_headers_nest_under_the_current_indent_and_skip_unparsable_dates(ca
     assert capsys.readouterr().out == "   —   A ⇄ B\n   W42\n     mon 12 oct 2026   A ⇄ B\n"
 
 
+def test_starts_new_week_answers_what_the_next_card_would_do(capsys):
+    from sj_cli.output import starts_new_week
+
+    assert starts_new_week("2026-10-12") is False  # outside a block: never
+    with week_headers():
+        assert starts_new_week("2026-10-12") is True  # the first card opens its week
+        assert starts_new_week("nonsense") is False  # no week to open
+        print_day_header("2026-10-12", "A")
+        assert starts_new_week("2026-10-13") is False  # same week
+        assert starts_new_week("2026-10-19") is True  # next week
+    capsys.readouterr()
+
+
 def test_week_headers_expect_the_card_openers_at_the_base_indent(capsys):
     # The contract: the opener sets the indent from the block's base, so an
     # indented() level around it is lost — callers open cards at loop level.
@@ -437,6 +450,16 @@ def test_pwarn_yellow_mark_dim_text(monkeypatch, capsys):
     monkeypatch.setattr(output, "color_enabled", lambda: True)
     output.pwarn("careful")
     assert capsys.readouterr().out == " \x1b[93m!\x1b[0m \x1b[2mcareful\x1b[0m\n"
+
+
+def test_pnote_cyan_mark_dim_text(monkeypatch, capsys):
+    from sj_cli import output
+
+    output.pnote("found offer at alternative departure 06:30")
+    assert capsys.readouterr().out == " i found offer at alternative departure 06:30\n"
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    output.pnote("kept")
+    assert capsys.readouterr().out == " \x1b[96mi\x1b[0m \x1b[2mkept\x1b[0m\n"
 
 
 def test_pstatus_dot_by_outcome(monkeypatch, capsys):

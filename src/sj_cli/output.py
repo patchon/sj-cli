@@ -235,6 +235,18 @@ def pwarn(msg: str) -> None:
     _emit(f"{style('!', YELLOW)} {style(msg, DIM)}")
 
 
+def pnote(msg: str) -> None:
+    """
+    Note line: cyan 'i' mark, dim text — an informative outcome.
+
+    For what a step found rather than the step itself: neither a trail
+    line (a step done) nor a deviation (`pwarn`) — an alternative offer
+    found, a seat kept because nothing free outranks it. The consequence
+    of a failure stays a quiet `pdim` under the `!`/`✗` that caused it.
+    """
+    _emit(f"{style('i', CYAN)} {style(msg, DIM)}")
+
+
 def blank() -> None:
     """Print an empty line (never indented)."""
     _emit("")
@@ -411,19 +423,31 @@ def _week_line(date_str: str, dim: bool = False) -> str:
     return style(f"W{week[1]}", DIM if dim else BOLD)
 
 
+def starts_new_week(date_str: str) -> bool:
+    """
+    Would a card on this date open a new week line?
+
+    True only inside week_headers(), for a date that parses and whose ISO
+    week differs from the last card's. Callers that manage blank lines
+    ask it to give a coming week line its blank.
+    """
+    block = _week_block
+    if block is None:
+        return False
+    week = _iso_week(date_str)
+    return week is not None and week != block.last
+
+
 def _week_break(date_str: str, dim: bool = False) -> None:
     """Inside week_headers(): print the week line and re-indent when the ISO week changes."""
     global _indent  # noqa: PLW0603
     block = _week_block
-    if block is None:
-        return
-    week = _iso_week(date_str)
-    if week is None or week == block.last:
+    if block is None or not starts_new_week(date_str):
         return
     _indent = block.base
     _emit(_week_line(date_str, dim))
     _indent = block.base + "  "
-    block.last = week
+    block.last = _iso_week(date_str)
 
 
 def _reverse_route(route: str) -> str:

@@ -332,7 +332,7 @@ def test_upgrade_releases_one_journey_then_rebooks_the_same_departure(monkeypatc
 
     out = capsys.readouterr().out
     assert "✓ creating booking with the same departure at " in out
-    assert "upgraded to 2 class calm · new booking NUM1" in out
+    assert "i upgraded to 2 class calm · new booking NUM1" in out
     assert "1 leg(s) attempted" in out and "1 upgraded to 2 class calm" in out
     # Both the probe card and the re-book card sit one level under a week
     # line: count, not "in" — the two cards share the same week, so an

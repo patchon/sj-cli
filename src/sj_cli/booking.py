@@ -31,6 +31,7 @@ from sj_cli.output import (
     leg_lines,
     pdim,
     pinfo,
+    pnote,
     print_bookings_table,
     print_day_header,
     print_day_note,
@@ -40,6 +41,7 @@ from sj_cli.output import (
     pwarn,
     spinner,
     split_product_name,
+    starts_new_week,
     week_headers,
 )
 from sj_cli.seats import (
@@ -762,7 +764,7 @@ def _try_alternative_departure(
     if leg is None:
         pwarn(f"alternative departure {_departure_time(dep)} also unavailable, skipping")
         return None
-    pinfo(f"found offer at alternative departure {leg['departure']}")
+    pnote(f"found offer at alternative departure {leg['departure']}")
     if leg["comfort_class"] != valid_class:
         pinfo(f"class fallback: {valid_class} → {leg['comfort_class']}")
     leg["alternative"] = True
@@ -1420,7 +1422,7 @@ def _choose_seat(seatmap: dict, preference: list[str] | str, label: str) -> Seat
         # wish nothing free meets) or swap two equally good seats for
         # nothing. A current seat the carriage layout does not know gives
         # nothing to compare against, and the best free one is taken as before.
-        pdim(f"{label}: keeping {describe_seat(current)} · nothing free outranks it")
+        pnote(f"{label}: keeping {describe_seat(current)} · nothing free outranks it")
         return None
     # best_seat is best-effort — name the top wish it could not honour
     missed = [w for w in wishes if not satisfies(seat, w)]
@@ -2080,6 +2082,23 @@ def process_date_range(
         pwarn(f"{dropped} selected day(s) have passed, starting from {dates[0].isoformat()}")
         blank()
 
+    printed = False  # a day on screen already, so the next one needs its blank
+    last_was_note = False
+
+    def open_day(date_str: str, note: bool) -> None:
+        """
+        The blank line before a day.
+
+        Every day gets one, except a one-line day (weekend, red day,
+        tickets already booked) right after another one-line day in the
+        same week: those condense into one block. A full card and a week
+        line always get their blank.
+        """
+        nonlocal printed, last_was_note
+        if printed and not (note and last_was_note and not starts_new_week(date_str)):
+            blank()
+        printed, last_was_note = True, note
+
     with week_headers():
         for i, day in enumerate(dates):
             date_str = day.isoformat()
@@ -2087,8 +2106,8 @@ def process_date_range(
 
             reason = skip_reason(day, skip_weekends, skip_holidays)
             if reason:
+                open_day(date_str, note=True)
                 print_day_note(date_str, reason)
-                blank()
                 count("skipped")
                 continue
 
@@ -2098,30 +2117,31 @@ def process_date_range(
             try:
                 access_token = ensure_valid_token(client, token_manager, access_token)
             except SJAuthError as e:
+                open_day(date_str, note=False)
                 print_day_header(date_str, "")
                 with indented():
                     pinfo(f"error: {error_text(e)}")
                     pwarn("stopping: no valid session for the remaining dates")
                 count("error")
-                blank()
                 break
 
             try:
                 need_outbound, need_inbound = plan_day(client, params, existing_bookings, date_str)
             except Exception as e:
                 logger.error(f"error planning {date_str}: {e}")
+                open_day(date_str, note=False)
                 print_day_header(date_str, "")
                 with indented():
                     pinfo(f"error: {error_text(e)}")
                 count("error")
-                blank()
                 continue
             if not (need_outbound or need_inbound):
+                open_day(date_str, note=True)
                 print_day_note(date_str, "tickets already booked")
-                blank()
                 count("already")
                 continue
 
+            open_day(date_str, note=False)
             print_day_header(date_str, day_route(params, need_outbound, need_inbound))
             with indented():
                 try:
@@ -2178,12 +2198,12 @@ def process_date_range(
                 else:
                     pdim("nothing booked")
                     count("unavailable")
-            blank()
 
             if i + 1 < len(dates):
                 with spinner("waiting before next date", trail=False):
                     time.sleep(2)
 
+    blank()
     pstatus(_run_outcome(counts, dry_run), _run_summary(counts, dry_run))
     return counts
 
@@ -2590,7 +2610,7 @@ def _preview_seats(
         if current is not None and wish_rank(current, wishes) <= wish_rank(seat, wishes):
             # _choose_seat's rule, in the present tense: only a strictly
             # better free seat is worth proposing.
-            pdim(f"{label}: keeps {describe_seat(current)} · nothing free outranks it")
+            pnote(f"{label}: keeps {describe_seat(current)} · nothing free outranks it")
             continue
         pinfo(f"{label}: would take {describe_seat(seat)}")
         would_change += 1
@@ -3152,7 +3172,7 @@ def _upgrade_one_leg(
     number = booked["booking_number"]
     got_code = COMFORT_CODES.get(booked["class"])
     if got_code == wanted_code:
-        pinfo(f"upgraded to {booked['class']} · new booking {number}")
+        pnote(f"upgraded to {booked['class']} · new booking {number}")
     elif got_code == target["code"]:
         pwarn(f"no gain: re-booked in {booked['class']} again · new booking {number}")
     else:

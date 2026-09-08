@@ -169,13 +169,9 @@ $ > sj-cli --book
       ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 11   2 class calm   FULLFLEX   ERU0HWB2
 
     wed 16 sep 2026   tickets already booked
-
     thu 17 sep 2026   tickets already booked
-
     fri 18 sep 2026   tickets already booked
-
     sat 19 sep 2026   weekend
-
     sun 20 sep 2026   weekend
 
   ● 6 day(s) · 1 booked · 3 already booked · 2 skipped
