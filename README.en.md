@@ -156,31 +156,34 @@ $ > sj-cli --book
   times     out 04:01 · back 17:22
   ticket    2 class calm · FULLFLEX · SJ High-speed train
 
-  tue 15 sep 2026   Malmö Central ⇄ Stockholm Central
-    ✓ searching outbound at 04:01
-    ✓ checking offers for outbound at 04:01
-    ✓ creating booking with outbound at 04:01
-    ✓ searching return at 17:22
-    ✓ checking offers for return at 17:22
-    ✓ adding return leg at 17:22
-    ✓ checking out booking ERU0HWB2
-    → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 45   2 class calm   FULLFLEX   ERU0HWB2
-    ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 11   2 class calm   FULLFLEX   ERU0HWB2
+  W38
+    tue 15 sep 2026   Malmö Central ⇄ Stockholm Central
+      ✓ searching outbound at 04:01
+      ✓ checking offers for outbound at 04:01
+      ✓ creating booking with outbound at 04:01
+      ✓ searching return at 17:22
+      ✓ checking offers for return at 17:22
+      ✓ adding return leg at 17:22
+      ✓ checking out booking ERU0HWB2
+      → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 45   2 class calm   FULLFLEX   ERU0HWB2
+      ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 11   2 class calm   FULLFLEX   ERU0HWB2
 
-  wed 16 sep 2026   tickets already booked
+    wed 16 sep 2026   tickets already booked
 
-  thu 17 sep 2026   tickets already booked
+    thu 17 sep 2026   tickets already booked
 
-  fri 18 sep 2026   tickets already booked
+    fri 18 sep 2026   tickets already booked
 
-  sat 19 sep 2026   weekend
+    sat 19 sep 2026   weekend
 
-  sun 20 sep 2026   weekend
+    sun 20 sep 2026   weekend
 
   ● 6 day(s) · 1 booked · 3 already booked · 2 skipped
 ```
 
 ### List bookings
+
+Cards are grouped by ISO week (`W42`), the same week number `--cancel-date W42` takes.
 
 ```bash
 $ > sj-cli --list-bookings
@@ -191,15 +194,21 @@ $ > sj-cli --list-bookings
   │  holder       Jane Doe           │
   ╰──────────────────────────────────╯
 
-  mon 12 oct 2026   Malmö Central ⇄ Stockholm Central
-    → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 67   2 class calm   FULLFLEX   WXYZ1234
-    ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 11   2 class calm   FULLFLEX   WXYZ1234
+  W42
+    mon 12 oct 2026   Malmö Central ⇄ Stockholm Central
+      → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 67   2 class calm   FULLFLEX   WXYZ1234
+      ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 11   2 class calm   FULLFLEX   WXYZ1234
 
-  tue 13 oct 2026   Malmö Central ⇄ Stockholm Central
-    → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 27   2 class calm   FULLFLEX   W3ST1234
-    ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 27   2 class calm   FULLFLEX   W3ST1234
+    tue 13 oct 2026   Malmö Central ⇄ Stockholm Central
+      → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 27   2 class calm   FULLFLEX   W3ST1234
+      ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 27   2 class calm   FULLFLEX   W3ST1234
 
-  ● 2 day(s) · 2 booking(s)
+  W43
+    mon 19 oct 2026   Malmö Central ⇄ Stockholm Central
+      → 04:01 – 08:38   4h 37m   X 2000 520   carriage 3 seat 40   2 class calm   FULLFLEX   K2PQ1234
+      ← 17:22 – 21:53   4h 31m   X 2000 543   carriage 3 seat 12   2 class calm   FULLFLEX   K2PQ1234
+
+  ● 3 day(s) · 3 booking(s)
 ```
 
 ### Other

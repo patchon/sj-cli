@@ -178,7 +178,7 @@ Report all validation errors at once (don't stop at the first one).
 sj-cli --book
 ```
 
-Reads config, authenticates, and books tickets for every selected date (`dates`, §4.3). No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only` — a contiguous selection renders as `1 sep – 30 oct 2026`, anything else as `W43, W45..46 (19 oct – 15 nov 2026)`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date (the same card shape as `--list-bookings`, §5.5): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): ● coloured by outcome — green when the run booked something, dim when it changed nothing (a dry run, or every day already booked or skipped), red when a day failed or errored — and dim summary text.
+Reads config, authenticates, and books tickets for every selected date (`dates`, §4.3). No confirmation prompt — the config is the source of truth. Output opens with the **header box** (`print_header_box`): a rounded dim-bordered box holding dim-labelled rows — `operation` (bold value, `booking tickets`; dry run prefixes `dry run · `), `account` (config email), `travelpass` and `holder` (real casing) — then a blank line and the run's config as dim-labelled facts in the shared card grammar: `route`, `days` (span + day filter, e.g. `weekdays only` — a contiguous selection renders as `1 sep – 30 oct 2026`, anything else as `W43, W45..46 (19 oct – 15 nov 2026)`), `times`, and `ticket` (class, flexibility, train filter, and any non-default switches such as `exact time only`, `no class fallback`, `partial ok`). Then one **day card** per date, grouped under a bold `W<n>` line per ISO week (the same card shape and grouping as `--list-bookings`, §5.5): a bold date + route header, the progress trail and any messages indented beneath it, then the booked legs, and a blank line. Days that need no work are a single line (bold date + dim reason). The run closes with a status line (`pstatus`): ● coloured by outcome — green when the run booked something, dim when it changed nothing (a dry run, or every day already booked or skipped), red when a day failed or errored — and dim summary text.
 
 ```
 ╭──────────────────────────────────╮
@@ -193,25 +193,27 @@ Reads config, authenticates, and books tickets for every selected date (`dates`,
   times     out 06:59 · back 17:22
   ticket    2 class calm · FULLFLEX · SJ High-speed train
 
-tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
-  ✓ searching outbound at 06:59
-  ✓ checking offers for outbound at 06:59
-  ✓ creating booking with outbound at 06:59
-  ✓ searching return at 17:22
-  ✓ checking offers for return at 17:22
-  ✓ adding return leg at 17:22
-  ✓ checking out booking ERU0HWB2
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   ERU0HWB2
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 class calm   FULLFLEX   ERU0HWB2
+W38
+  tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
+    ✓ searching outbound at 06:59
+    ✓ checking offers for outbound at 06:59
+    ✓ creating booking with outbound at 06:59
+    ✓ searching return at 17:22
+    ✓ checking offers for return at 17:22
+    ✓ adding return leg at 17:22
+    ✓ checking out booking ERU0HWB2
+    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   ERU0HWB2
+    ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 66   2 class calm   FULLFLEX   ERU0HWB2
 
-wed 16 sep 2026   tickets already booked
+  wed 16 sep 2026   tickets already booked
 
-sat 19 sep 2026   weekend
+  sat 19 sep 2026   weekend
 
-thu 24 sep 2026   Göteborg Central ⇄ Stockholm Central
-  ✓ searching outbound at 06:59
-  no departure found for outbound
-  nothing booked
+W39
+  thu 24 sep 2026   Göteborg Central ⇄ Stockholm Central
+    ✓ searching outbound at 06:59
+    no departure found for outbound
+    nothing booked
 
 ● 4 day(s) · 1 booked · 1 already booked · 1 not booked · 2 skipped
 ```
@@ -239,15 +241,16 @@ sj-cli --book --dry-run
   times     out 06:59 · back 17:22
   ticket    2 class calm · FULLFLEX · SJ High-speed train
 
-fri 18 sep 2026   Göteborg Central ⇄ Stockholm Central
-  ✓ searching outbound at 06:59
-  ✓ checking offers for outbound at 06:59
-  ✓ searching return at 17:22
-  ✓ checking offers for return at 17:22
-  → 06:59 – 10:04   3h 05m   X 2000 520   2 class calm   FULLFLEX
-  ← 17:22 – 20:28   3h 06m   X 2000 543   2 class calm   no 0-price offer
+W38
+  fri 18 sep 2026   Göteborg Central ⇄ Stockholm Central
+    ✓ searching outbound at 06:59
+    ✓ checking offers for outbound at 06:59
+    ✓ searching return at 17:22
+    ✓ checking offers for return at 17:22
+    → 06:59 – 10:04   3h 05m   X 2000 520   2 class calm   FULLFLEX
+    ← 17:22 – 20:28   3h 06m   X 2000 543   2 class calm   no 0-price offer
 
-sat 19 sep 2026   weekend
+  sat 19 sep 2026   weekend
 
 ● dry run · 2 day(s) · 1 partly bookable · 1 skipped
 ```
@@ -273,8 +276,9 @@ For each matching booking: show its day card (same shape as §5.5, no title), th
 
 ✓ searching for booking ERU0HWB2
 
-tue 15 sep 2026   Göteborg Central → Stockholm Central
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   ERU0HWB2
+W38
+  tue 15 sep 2026   Göteborg Central → Stockholm Central
+    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 17   2 class calm   FULLFLEX   ERU0HWB2
 
 ? cancel booking ERU0HWB2? [y/n]: y
 ✓ cancelling booking ERU0HWB2
@@ -304,9 +308,10 @@ A segment that has already departed is skipped before any seat map is read (`alr
 │  holder       John Doe           │
 ╰──────────────────────────────────╯
 
-tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ERU0HWB2
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 7 seat 12   2 class calm   FULLFLEX   ERU0HWB2
+W38
+  tue 15 sep 2026   Göteborg Central ⇄ Stockholm Central
+    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ERU0HWB2
+    ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 7 seat 12   2 class calm   FULLFLEX   ERU0HWB2
 
 ● 2 seat(s) changed
 ```
@@ -322,21 +327,24 @@ sj-cli --list-bookings
 Fetches all active bookings within the travel pass validity period and displays them as one card per travel day, legs indented beneath:
 
 ```
-tue 18 aug 2026   Göteborg Central ⇄ Stockholm Central   past
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ZR8C6RT1
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 22   2 class calm   FULLFLEX   ZR8C6RT1
+W34
+  tue 18 aug 2026   Göteborg Central ⇄ Stockholm Central   past
+    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ZR8C6RT1
+    ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 22   2 class calm   FULLFLEX   ZR8C6RT1
 
-wed 19 aug 2026   Göteborg Central ⇄ Stockholm Central
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 30   2 class calm   FULLFLEX   TBRS43MG
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 55   2 class calm   FULLFLEX   TBRS43MG
+  wed 19 aug 2026   Göteborg Central ⇄ Stockholm Central
+    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 30   2 class calm   FULLFLEX   TBRS43MG
+    ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 55   2 class calm   FULLFLEX   TBRS43MG
 
-mon 31 aug 2026   Göteborg Central ⇄ Stockholm Central
-  → 06:59 – 10:04   3h 05m   X 2000 520   carriage 7 seat 32   2 class        FULLFLEX   3RK7YJU4
-  ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 21   2 class calm   FULLFLEX   K883DH2T
+W36
+  mon 31 aug 2026   Göteborg Central ⇄ Stockholm Central
+    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 7 seat 32   2 class        FULLFLEX   3RK7YJU4
+    ← 17:22 – 20:28   3h 06m   X 2000 543   carriage 3 seat 21   2 class calm   FULLFLEX   K883DH2T
 
 ● 3 day(s) · 4 booking(s) · 2 in the past
 ```
 
+- Cards are grouped under a bold `W<n>` line naming the ISO week (`week_headers` in `output.py`), the cards of that week indented one level beneath it; the first week line is the first line of the listing. A week whose legs have all departed is dimmed like its day headers, with no `past` tag of its own. The same grouping applies wherever a mode walks days in order: the `--book`/`--dry-run` run (§5.1), the cancel previews (§5.3), `--change-seat-*` (§5.4), the `--upgrade-class` cards (§5.6) and the `--book-journey` summary and result cards. The week number is the one the `dates` grammar and `--cancel-date W42` use, so a header can be typed straight back in (a bare `W1` resolves against today's ISO year, so around New Year type the year form, `2027-W1`).
 - Header per day: date, route (`A ⇄ B` when both directions are present, otherwise the distinct routes), and a `past` tag when every leg has departed.
 - Leg line: direction arrow, departure – arrival, duration, train (brand + number), carriage/seat, class, flexibility, booking number. The arrow is inferred from the route (reverse of the day's first leg → `←`) because the API reports a standalone return booking as `OUTBOUND`.
 - Grouped by date rather than booking number: a return leg booked via the `book_partial` fallback (§6.5) is its own booking, so the booking number is shown per leg. Legs are sorted by departure time.
@@ -406,9 +414,10 @@ Guards, none of them optional:
 │  holder       John Doe           │
 ╰──────────────────────────────────╯
 
-tue 15 sep 2026   Göteborg Central → Stockholm Central
-  X 2000 520 · ERU0HWB2 · holds 2 class
-    2 class calm: seats exist (SJ sells them) — an upgrade may be possible
+W38
+  tue 15 sep 2026   Göteborg Central → Stockholm Central
+    X 2000 520 · ERU0HWB2 · holds 2 class
+      2 class calm: seats exist (SJ sells them) — an upgrade may be possible
 
 1 leg(s) to upgrade to 2 class calm:
   tue 15 sep 2026   X 2000 520 · ERU0HWB2 · holds 2 class
@@ -416,15 +425,16 @@ tue 15 sep 2026   Göteborg Central → Stockholm Central
 ! each ticket is cancelled before the new one is searched · if the pass gets no offer after that, the leg ends with no ticket
 ? upgrade 1 leg(s) to 2 class calm, cancelling each ticket first? [y/n]: y
 
-tue 15 sep 2026   Göteborg Central → Stockholm Central
-  X 2000 520 · ERU0HWB2 · holds 2 class
-    ✓ releasing this journey from booking ERU0HWB2
-    ✓ searching the same departure with the travel pass
-    ✓ checking offers for the same departure at 06:59
-    ✓ booking 2 class calm
-    ✓ checking out booking ZSVV7EML
-    upgraded to 2 class calm · new booking ZSVV7EML
-    → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ZSVV7EML
+W38
+  tue 15 sep 2026   Göteborg Central → Stockholm Central
+    X 2000 520 · ERU0HWB2 · holds 2 class
+      ✓ releasing this journey from booking ERU0HWB2
+      ✓ searching the same departure with the travel pass
+      ✓ checking offers for the same departure at 06:59
+      ✓ booking 2 class calm
+      ✓ checking out booking ZSVV7EML
+      upgraded to 2 class calm · new booking ZSVV7EML
+      → 06:59 – 10:04   3h 05m   X 2000 520   carriage 3 seat 34   2 class calm   FULLFLEX   ZSVV7EML
 
 ● 1 leg(s) attempted · 1 upgraded to 2 class calm
 ```
@@ -675,7 +685,7 @@ Everything the user sees goes through `output.py` and prints regardless of log l
 
 - `pinfo()` plain message, `pdim()` dimmed context, `spinner()` progress with a dim `✓`/`✗` trail line (or none with `trail=False`), `print_day_header()` / `print_day_note()` / `print_leg_lines()` for cards, `indented()` to nest everything printed inside a block under a day header.
 - **Casing convention**: prose is lowercase (`no departure found for outbound`, `✓ checking offers…`), identifiers keep their case — booking numbers upper-case (`ERU0HWB2`), station names as SJ writes them (`Göteborg Central`), train names as given. Operation values (`booking tickets`, `listing bookings`) are lowercase; the header box's travelpass/holder values keep their real casing. Nothing is lowercased automatically any more; `pinfo` prints what it is given.
-- Two output families share one vocabulary. **Pass-scoped modes** (book, dry-run, cancel, list-bookings, list-travelpasses): open with the header box (`print_header_box`, rounded dim borders): `operation` (bold: `booking tickets` / `dry run · booking tickets` / `cancelling bookings` / `listing bookings` / `listing travel passes`), `account` (the configured login email — always the second row, app-wide), `travelpass`, `holder` (account+owner only for travel passes — the passes are the content). Book/dry-run follow with the `describe_run` facts block (`route`/`days`/`times`/`ticket`, card grammar), then dim progress trail (routine fetches are silent: spinner only), cards, and a closing ● status line (`pstatus`: green when something changed / dim when the run only reported — list footers and dry runs / red failed-or-aborted-or-nothing-found, dim text — cancel outcomes like `● booking X cancelled` / `● cancellation aborted` use the same line). **Auth modes** (login, logout, login-status): session-scoped and offline-capable, so no pass header — they open with a session-scoped header box instead (`operation` + `account`: config email for `--login`, cached profile_info email for `--logout`/`--login-status`), then any trail steps, then the status card (`print_status_card`: green/red dot + bold verdict, blank line, dim 7-char-padded labels with plain values, §5.8; `--login` ends by rendering the same card `--login-status` shows); travel passes render pass cards in the same fact grammar. No emoji anywhere in the output. Colour/bold/dim only on a TTY without `NO_COLOR`; the palette is the terminal's own bright ANSI slots (`91` red, `92` green, `93` yellow, `95` magenta, `96` cyan), never hardcoded RGB, so the output follows whatever theme the user runs. Every printed line starts with a one-space left margin (`_MARGIN` in `output`) so output sits off the terminal edge; blank lines stay empty.
+- Two output families share one vocabulary. **Pass-scoped modes** (book, dry-run, cancel, list-bookings, list-travelpasses): open with the header box (`print_header_box`, rounded dim borders): `operation` (bold: `booking tickets` / `dry run · booking tickets` / `cancelling bookings` / `listing bookings` / `listing travel passes`), `account` (the configured login email — always the second row, app-wide), `travelpass`, `holder` (account+owner only for travel passes — the passes are the content). Book/dry-run follow with the `describe_run` facts block (`route`/`days`/`times`/`ticket`, card grammar), then dim progress trail (routine fetches are silent: spinner only), cards — day cards grouped under bold `W<n>` ISO-week lines wherever days are walked in order (§5.5) — and a closing ● status line (`pstatus`: green when something changed / dim when the run only reported — list footers and dry runs / red failed-or-aborted-or-nothing-found, dim text — cancel outcomes like `● booking X cancelled` / `● cancellation aborted` use the same line). **Auth modes** (login, logout, login-status): session-scoped and offline-capable, so no pass header — they open with a session-scoped header box instead (`operation` + `account`: config email for `--login`, cached profile_info email for `--logout`/`--login-status`), then any trail steps, then the status card (`print_status_card`: green/red dot + bold verdict, blank line, dim 7-char-padded labels with plain values, §5.8; `--login` ends by rendering the same card `--login-status` shows); travel passes render pass cards in the same fact grammar. No emoji anywhere in the output. Colour/bold/dim only on a TTY without `NO_COLOR`; the palette is the terminal's own bright ANSI slots (`91` red, `92` green, `93` yellow, `95` magenta, `96` cyan), never hardcoded RGB, so the output follows whatever theme the user runs. Every printed line starts with a one-space left margin (`_MARGIN` in `output`) so output sits off the terminal edge; blank lines stay empty.
 - Prompts accept `y`/`yes` for confirmation, any case. Every input prompt is inline (answer typed on the same line) and marked with a cyan `?` — the SMS prompt via `prompt()`, all interactive choices/confirmations via `ask()` (both in `output`). A `?` question that asks about a block above it (a card or numbered list) is separated from that block by a blank line; a prompt that is itself a trail step (the SMS code) stays attached to its trail. Trail lines use human step names (`✓ performing login`, `✓ sending sms code`, `✓ completing login` — not OAuth plumbing terms) with the mark coloured — green `✓` on success, red `✗` on failure — and the step text dim. Glyph colours form one quartet: cyan `?` input needed, green `✓` step succeeded, red `✗` step failed, yellow `!` deviation worth noticing (`pwarn`: class fallbacks, time deviations, alternative-departure attempts, rejected SMS codes, checkout failures, missing departures, unmet seat wishes) — plus the `●` on verdict cards (green/red) and on every operation's closing status line (`pstatus`: green changed something, dim only reported, red failed). Marks are coloured, message text stays dim. A blank line separates a login trail from the card or title that follows.
 - **Seat selection** (`seat_preference`, §4.3), shared by `--book` and the change-seat modes (§5.4): in `"ask"` mode, before prompting, `print_seat_choices` lists the free seats grouped by carriage — a dim `free in carriage N · <comfort> · N seats` header, then three per line as `number words` in the same vocabulary the config uses (e.g. `34 window, forward`) — followed by an inline `?`-marked prompt with the current seat as the default (`outbound seat [17]: `). An empty answer keeps that seat; typing a number not on the list re-asks (`! seat 12 is not free, pick one from the list`); Ctrl-D keeps the current seat and stops asking for the rest of the run; no terminal at all does the same for the whole run in one line (`! seat selection needs a terminal, keeping the seats SJ assigned`) and is the default outcome for a cron/`</dev/null` run. A ranked-list preference that cannot be fully honoured still takes the best remaining seat, naming the top wish it missed (`! outbound: no window seat free, taking carriage 3 seat 70 · table, forward`; a negated wish reads the other way round, `! outbound: could not avoid table, taking carriage 3 seat 70 · table, forward`); a seat map that will not load, a segment with nothing free to choose from, and an API response naming a different seat than the one asked for are each their own `!` line too. None of this ever fails a day, a booking or the run: a seat is never worth losing a booking over, so every failure here keeps whatever seat SJ assigned and moves on. `--list-bookings --seat-details` (§5.5) reads the same vocabulary read-only, to show what was assigned rather than to choose it — and, when `seat_preference` is a ranked word list, names a strictly better free seat when `best_seat`'s own ranking finds one, so it is obvious which legs are worth `--change-seat-date`/`--change-seat-booking`.
 
