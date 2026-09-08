@@ -5,9 +5,7 @@
 Command-line tool that books SJ (Swedish Railways) trips for you on a travel
 pass, e.g. an *SJ Årskort* (annual pass) or *SJ 30-dagarskort* (30-day pass).
 
-This tool is entirely *vibe-coded*: all of the code was written by
-[Claude](https://claude.ai), from my instructions. I directed, reviewed and
-tested; I did not write the code.
+Bip bop, *vibe-coded* by [Claude](https://claude.ai) 🤖 🚀
 
 ![sj-cli demo](demo.gif)
 

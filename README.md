@@ -5,9 +5,7 @@
 Ett kommandoradsverktyg som bokar resor med SJ åt dig som har periodkort, till
 exempel *SJ Årskort* eller *SJ 30-dagarskort*.
 
-Det här verktyget är helt *vibe-kodat*: all kod är skriven av
-[Claude](https://claude.ai), utifrån mina instruktioner. Jag har styrt, granskat
-och testat, inte skrivit koden.
+Bip bop, *vibe-kodat* av [Claude](https://claude.ai) 🤖 🚀
 
 ![demo av sj-cli](demo.gif)
 
