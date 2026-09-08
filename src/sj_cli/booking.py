@@ -40,6 +40,7 @@ from sj_cli.output import (
     pwarn,
     spinner,
     split_product_name,
+    week_headers,
 )
 from sj_cli.seats import (
     AVOID,
@@ -2079,106 +2080,109 @@ def process_date_range(
         pwarn(f"{dropped} selected day(s) have passed, starting from {dates[0].isoformat()}")
         blank()
 
-    for i, day in enumerate(dates):
-        date_str = day.isoformat()
-        counts["days"] += 1
+    with week_headers():
+        for i, day in enumerate(dates):
+            date_str = day.isoformat()
+            counts["days"] += 1
 
-        reason = skip_reason(day, skip_weekends, skip_holidays)
-        if reason:
-            print_day_note(date_str, reason)
-            blank()
-            count("skipped")
-            continue
+            reason = skip_reason(day, skip_weekends, skip_holidays)
+            if reason:
+                print_day_note(date_str, reason)
+                blank()
+                count("skipped")
+                continue
 
-        # Mid-run token refresh. Without a session nothing more can be
-        # booked: report it on this day's card and stop, so the summary line
-        # and the exit code still tell what happened.
-        try:
-            access_token = ensure_valid_token(client, token_manager, access_token)
-        except SJAuthError as e:
-            print_day_header(date_str, "")
-            with indented():
-                pinfo(f"error: {error_text(e)}")
-                pwarn("stopping: no valid session for the remaining dates")
-            count("error")
-            blank()
-            break
-
-        try:
-            need_outbound, need_inbound = plan_day(client, params, existing_bookings, date_str)
-        except Exception as e:
-            logger.error(f"error planning {date_str}: {e}")
-            print_day_header(date_str, "")
-            with indented():
-                pinfo(f"error: {error_text(e)}")
-            count("error")
-            blank()
-            continue
-        if not (need_outbound or need_inbound):
-            print_day_note(date_str, "tickets already booked")
-            blank()
-            count("already")
-            continue
-
-        print_day_header(date_str, day_route(params, need_outbound, need_inbound))
-        with indented():
+            # Mid-run token refresh. Without a session nothing more can be
+            # booked: report it on this day's card and stop, so the summary line
+            # and the exit code still tell what happened.
             try:
-                result = process_booking_flow(
-                    client,
-                    access_token,
-                    cfg,
-                    day,
-                    tp_product_id,
-                    tp_token_id,
-                    need_outbound,
-                    need_inbound,
-                    dry_run,
-                )
-            except Exception as e:
-                logger.error(f"error processing {date_str}: {e}")
-                pinfo(f"error: {error_text(e)}")
-                result = None
-                errored = True
-            else:
-                errored = False
-
-            if errored:
+                access_token = ensure_valid_token(client, token_manager, access_token)
+            except SJAuthError as e:
+                print_day_header(date_str, "")
+                with indented():
+                    pinfo(f"error: {error_text(e)}")
+                    pwarn("stopping: no valid session for the remaining dates")
                 count("error")
-            elif dry_run:
-                rows = dry_run_rows(result or {}, date_str)
-                print_leg_lines(rows)
-                offers = sum(r["has_offer"] for r in rows)
-                if rows and offers == len(rows):
-                    count("booked")
-                else:
-                    count("partial" if offers else "unavailable")
-            elif result:
-                # The booking exists whatever the rendering does: an odd
-                # shape in the booking object must not turn a booked day
-                # into a crashed run.
-                number = result.get("booking_number") or result.get("booking_id")
-                try:
-                    booked = booked_rows(result.get("booking") or {}, result["booking_number"])
-                    print_leg_lines(booked)
-                except Exception as e:
-                    logger.error(f"could not render the legs of booking {number}: {e}")
-                    pwarn(f"booked as {number}, but the legs could not be shown ({error_text(e)})")
-                if not result.get("checked_out"):
-                    # The cause already printed its own "!" line; this is the
-                    # consequence, so it stays quiet under it.
-                    pdim("checkout failed, provisional left (cleaned up on next --book run)")
-                    count("failed")
-                else:
-                    wanted = int(need_outbound) + int(need_inbound)
-                    count("booked" if len(result.get("legs") or []) >= wanted else "partial")
-            else:
-                pdim("nothing booked")
-                count("unavailable")
-        blank()
+                blank()
+                break
 
-        if i + 1 < len(dates):
-            with spinner("waiting before next date", trail=False):
-                time.sleep(2)
+            try:
+                need_outbound, need_inbound = plan_day(client, params, existing_bookings, date_str)
+            except Exception as e:
+                logger.error(f"error planning {date_str}: {e}")
+                print_day_header(date_str, "")
+                with indented():
+                    pinfo(f"error: {error_text(e)}")
+                count("error")
+                blank()
+                continue
+            if not (need_outbound or need_inbound):
+                print_day_note(date_str, "tickets already booked")
+                blank()
+                count("already")
+                continue
+
+            print_day_header(date_str, day_route(params, need_outbound, need_inbound))
+            with indented():
+                try:
+                    result = process_booking_flow(
+                        client,
+                        access_token,
+                        cfg,
+                        day,
+                        tp_product_id,
+                        tp_token_id,
+                        need_outbound,
+                        need_inbound,
+                        dry_run,
+                    )
+                except Exception as e:
+                    logger.error(f"error processing {date_str}: {e}")
+                    pinfo(f"error: {error_text(e)}")
+                    result = None
+                    errored = True
+                else:
+                    errored = False
+
+                if errored:
+                    count("error")
+                elif dry_run:
+                    rows = dry_run_rows(result or {}, date_str)
+                    print_leg_lines(rows)
+                    offers = sum(r["has_offer"] for r in rows)
+                    if rows and offers == len(rows):
+                        count("booked")
+                    else:
+                        count("partial" if offers else "unavailable")
+                elif result:
+                    # The booking exists whatever the rendering does: an odd
+                    # shape in the booking object must not turn a booked day
+                    # into a crashed run.
+                    number = result.get("booking_number") or result.get("booking_id")
+                    try:
+                        booked = booked_rows(result.get("booking") or {}, result["booking_number"])
+                        print_leg_lines(booked)
+                    except Exception as e:
+                        logger.error(f"could not render the legs of booking {number}: {e}")
+                        pwarn(
+                            f"booked as {number}, but the legs could not be shown ({error_text(e)})"
+                        )
+                    if not result.get("checked_out"):
+                        # The cause already printed its own "!" line; this is the
+                        # consequence, so it stays quiet under it.
+                        pdim("checkout failed, provisional left (cleaned up on next --book run)")
+                        count("failed")
+                    else:
+                        wanted = int(need_outbound) + int(need_inbound)
+                        count("booked" if len(result.get("legs") or []) >= wanted else "partial")
+                else:
+                    pdim("nothing booked")
+                    count("unavailable")
+            blank()
+
+            if i + 1 < len(dates):
+                with spinner("waiting before next date", trail=False):
+                    time.sleep(2)
 
     pstatus(_run_outcome(counts, dry_run), _run_summary(counts, dry_run))
     return counts
@@ -2704,67 +2708,71 @@ def handle_change_seat(
     would_change_total = 0
     now = sweden_now()
 
-    for item, booking, matched_date in targets:
-        booking_number = booking.get("bookingNumber") or "—"
-        booking_id = _booking_id(item, booking)
-        all_segs = [
-            seg
-            for journey in booking.get("journeys") or []
-            for seg in journey.get("segments") or []
-        ]
-        # A date target scopes to that day's segments only — the booking's
-        # other days are kept, exactly like --cancel-date's only_date.
-        scoped = [
-            seg
-            for seg in all_segs
-            if not matched_date or _segment_date(seg.get("departureDateTime", "")) == matched_date
-        ]
-        if not scoped:
-            continue  # the journey that matched is gone by the time we re-read it
+    with week_headers():
+        for item, booking, matched_date in targets:
+            booking_number = booking.get("bookingNumber") or "—"
+            booking_id = _booking_id(item, booking)
+            all_segs = [
+                seg
+                for journey in booking.get("journeys") or []
+                for seg in journey.get("segments") or []
+            ]
+            # A date target scopes to that day's segments only — the booking's
+            # other days are kept, exactly like --cancel-date's only_date.
+            scoped = [
+                seg
+                for seg in all_segs
+                if not matched_date
+                or _segment_date(seg.get("departureDateTime", "")) == matched_date
+            ]
+            if not scoped:
+                continue  # the journey that matched is gone by the time we re-read it
 
-        dated = sorted(scoped, key=lambda s: s.get("departureDateTime") or "")
-        header_date = matched_date or _segment_date(dated[0].get("departureDateTime", ""))
-        print_day_header(header_date, _route_label(scoped))
-        with indented():
-            workable = []
-            for seg in scoped:
-                row = _segment_to_display_row(seg, booking_number, now)
-                if row["past"] == "Y":
-                    pdim(f"{_train_label(seg, all_segs)}: already departed, skipped")
+            dated = sorted(scoped, key=lambda s: s.get("departureDateTime") or "")
+            header_date = matched_date or _segment_date(dated[0].get("departureDateTime", ""))
+            print_day_header(header_date, _route_label(scoped))
+            with indented():
+                workable = []
+                for seg in scoped:
+                    row = _segment_to_display_row(seg, booking_number, now)
+                    if row["past"] == "Y":
+                        pdim(f"{_train_label(seg, all_segs)}: already departed, skipped")
+                        continue
+                    workable.append(seg)
+
+                if not workable:
+                    pdim("nothing to change")
+                    blank()
                     continue
-                workable.append(seg)
 
-            if not workable:
-                pdim("nothing to change")
-                blank()
-                continue
-
-            target_booking = {"journeys": [{"segments": workable}]}
-            try:
-                if dry_run:
-                    would_change_total += _preview_seats(
-                        client, access_token, booking_id, target_booking, preference
-                    )
-                else:
-                    updated, changed = _apply_seat_preference(
-                        client,
-                        access_token,
-                        booking_id,
-                        target_booking,
-                        preference,
-                        provisional=False,
-                        label_fn=_train_label,
-                    )
-                    if changed:
-                        seats_changed_total += changed
-                        print_leg_lines(booked_rows(_scoped_to(updated, workable), booking_number))
+                target_booking = {"journeys": [{"segments": workable}]}
+                try:
+                    if dry_run:
+                        would_change_total += _preview_seats(
+                            client, access_token, booking_id, target_booking, preference
+                        )
                     else:
-                        pdim("no seats changed")
-            except Exception as e:
-                logger.error(f"seat change failed for booking {booking_number}: {e}")
-                pwarn(f"seat change failed for booking {booking_number}: {error_text(e)}")
-                ok = False
-        blank()
+                        updated, changed = _apply_seat_preference(
+                            client,
+                            access_token,
+                            booking_id,
+                            target_booking,
+                            preference,
+                            provisional=False,
+                            label_fn=_train_label,
+                        )
+                        if changed:
+                            seats_changed_total += changed
+                            print_leg_lines(
+                                booked_rows(_scoped_to(updated, workable), booking_number)
+                            )
+                        else:
+                            pdim("no seats changed")
+                except Exception as e:
+                    logger.error(f"seat change failed for booking {booking_number}: {e}")
+                    pwarn(f"seat change failed for booking {booking_number}: {error_text(e)}")
+                    ok = False
+            blank()
 
     if seats_changed_total:
         pstatus(True, f"{seats_changed_total} seat(s) changed")
@@ -3238,98 +3246,103 @@ def handle_upgrade_class(
     worth_trying = 0
     candidates: list[dict] = []
 
-    for day in dates:
-        with spinner(f"fetching bookings for {day}", trail=False):
-            day_bookings = fetch_all_bookings(client, access_token, day, day)
+    with week_headers():
+        for day in dates:
+            with spinner(f"fetching bookings for {day}", trail=False):
+                day_bookings = fetch_all_bookings(client, access_token, day, day)
 
-        # Legs on the configured route (either direction), that date, not
-        # yet departed — same journey-then-segment scoping as
-        # handle_change_seat's date path, so a booking spanning other days
-        # only contributes the day being processed right now.
-        legs: list[dict] = []
-        for item in day_bookings:
-            booking = item.get("booking") or {}
-            if not is_active_booking(booking):
+            # Legs on the configured route (either direction), that date, not
+            # yet departed — same journey-then-segment scoping as
+            # handle_change_seat's date path, so a booking spanning other days
+            # only contributes the day being processed right now.
+            legs: list[dict] = []
+            for item in day_bookings:
+                booking = item.get("booking") or {}
+                if not is_active_booking(booking):
+                    continue
+                for journey in booking.get("journeys") or []:
+                    j_origin, j_dest, j_date = _journey_endpoints(journey)
+                    if j_date != day:
+                        continue
+                    if (j_origin, j_dest) not in {(origin_id, dest_id), (dest_id, origin_id)}:
+                        continue
+                    for seg in journey.get("segments") or []:
+                        row = _segment_to_display_row(seg, booking.get("bookingNumber") or "", now)
+                        if row["date"] != day or row["past"] == "Y":
+                            continue
+                        legs.append(
+                            {
+                                "date": day,
+                                "booking": booking,
+                                "booking_id": _booking_id(item, booking),
+                                "booking_number": booking.get("bookingNumber") or "—",
+                                "journey": journey,
+                                "segment": seg,
+                            }
+                        )
+
+            if not legs:
                 continue
-            for journey in booking.get("journeys") or []:
-                j_origin, j_dest, j_date = _journey_endpoints(journey)
-                if j_date != day:
-                    continue
-                if (j_origin, j_dest) not in {(origin_id, dest_id), (dest_id, origin_id)}:
-                    continue
-                for seg in journey.get("segments") or []:
-                    row = _segment_to_display_row(seg, booking.get("bookingNumber") or "", now)
-                    if row["date"] != day or row["past"] == "Y":
-                        continue
-                    legs.append(
-                        {
-                            "date": day,
-                            "booking": booking,
-                            "booking_id": _booking_id(item, booking),
-                            "booking_number": booking.get("bookingNumber") or "—",
-                            "journey": journey,
-                            "segment": seg,
-                        }
-                    )
+            any_target = True
 
-        if not legs:
-            continue
-        any_target = True
+            to_check = []
+            for leg in legs:
+                code = _leg_comfort_code(leg["segment"], leg["booking"])
+                if code == wanted_code:
+                    continue  # already the wanted class: nothing to upgrade
+                leg["code"] = code
+                leg["held_name"] = COMFORT_NAMES.get(code or "", "an unknown class")
+                to_check.append(leg)
 
-        to_check = []
-        for leg in legs:
-            code = _leg_comfort_code(leg["segment"], leg["booking"])
-            if code == wanted_code:
-                continue  # already the wanted class: nothing to upgrade
-            leg["code"] = code
-            leg["held_name"] = COMFORT_NAMES.get(code or "", "an unknown class")
-            to_check.append(leg)
+            if not to_check:
+                continue
+            to_check.sort(key=lambda leg: leg["segment"].get("departureDateTime") or "")
 
-        if not to_check:
-            continue
-        to_check.sort(key=lambda leg: leg["segment"].get("departureDateTime") or "")
-
-        print_day_header(day, _route_label([leg["segment"] for leg in to_check]))
-        with indented():
-            for leg in to_check:
-                not_in_class += 1
-                seg = leg["segment"]
-                all_segs = [
-                    s for j in leg["booking"].get("journeys") or [] for s in j.get("segments") or []
-                ]
-                leg["label"] = _train_label(seg, all_segs)
-                pinfo(f"{leg['label']} · {leg['booking_number']} · holds {leg['held_name']}")
-                with indented():
-                    try:
-                        purchasable = _probe_upgrade(
-                            client, access_token, seg, wanted_code, service_types
+            print_day_header(day, _route_label([leg["segment"] for leg in to_check]))
+            with indented():
+                for leg in to_check:
+                    not_in_class += 1
+                    seg = leg["segment"]
+                    all_segs = [
+                        s
+                        for j in leg["booking"].get("journeys") or []
+                        for s in j.get("segments") or []
+                    ]
+                    leg["label"] = _train_label(seg, all_segs)
+                    pinfo(f"{leg['label']} · {leg['booking_number']} · holds {leg['held_name']}")
+                    with indented():
+                        try:
+                            purchasable = _probe_upgrade(
+                                client, access_token, seg, wanted_code, service_types
+                            )
+                        except Exception as e:
+                            logger.warning(f"upgrade probe failed for {leg['booking_number']}: {e}")
+                            pwarn(f"{wanted_class}: could not check ({error_text(e)})")
+                            ok = False
+                            continue
+                        if purchasable is None:
+                            pwarn(
+                                f"{wanted_class}: could not find this departure "
+                                "in a pass-free search"
+                            )
+                            continue
+                        if not purchasable:
+                            pdim(f"{wanted_class}: no seats on this departure")
+                            continue
+                        worth_trying += 1
+                        pinfo(
+                            f"{wanted_class}: seats exist (SJ sells them) — an upgrade may "
+                            "be possible"
                         )
-                    except Exception as e:
-                        logger.warning(f"upgrade probe failed for {leg['booking_number']}: {e}")
-                        pwarn(f"{wanted_class}: could not check ({error_text(e)})")
-                        ok = False
-                        continue
-                    if purchasable is None:
-                        pwarn(
-                            f"{wanted_class}: could not find this departure in a pass-free search"
-                        )
-                        continue
-                    if not purchasable:
-                        pdim(f"{wanted_class}: no seats on this departure")
-                        continue
-                    worth_trying += 1
-                    pinfo(
-                        f"{wanted_class}: seats exist (SJ sells them) — an upgrade may be possible"
-                    )
-                    if dry_run:
-                        continue
-                    if not seg.get("serviceIdentifier"):
-                        # Nothing to put in a cancel payload: the ticket
-                        # cannot be released, so it is left exactly as it is.
-                        pwarn("this leg carries no journey id, so it cannot be released")
-                        continue
-                    candidates.append(leg)
-        blank()
+                        if dry_run:
+                            continue
+                        if not seg.get("serviceIdentifier"):
+                            # Nothing to put in a cancel payload: the ticket
+                            # cannot be released, so it is left exactly as it is.
+                            pwarn("this leg carries no journey id, so it cannot be released")
+                            continue
+                        candidates.append(leg)
+            blank()
 
     if not any_target:
         pstatus(
@@ -3374,28 +3387,29 @@ def handle_upgrade_class(
 
     outcomes: list[str] = []
     last_day = ""
-    for leg in candidates:
-        if leg["date"] != last_day:
-            if last_day:
-                blank()
-            last_day = leg["date"]
-            same_day = [x["segment"] for x in candidates if x["date"] == last_day]
-            print_day_header(last_day, _route_label(same_day))
-        with indented():
-            pinfo(f"{leg['label']} · {leg['booking_number']} · holds {leg['held_name']}")
+    with week_headers():
+        for leg in candidates:
+            if leg["date"] != last_day:
+                if last_day:
+                    blank()
+                last_day = leg["date"]
+                same_day = [x["segment"] for x in candidates if x["date"] == last_day]
+                print_day_header(last_day, _route_label(same_day))
             with indented():
-                outcomes.append(
-                    _upgrade_one_leg(
-                        client,
-                        access_token,
-                        cfg,
-                        leg,
-                        wanted_code,
-                        tp_product_id,
-                        tp_token_id,
-                        service_types,
+                pinfo(f"{leg['label']} · {leg['booking_number']} · holds {leg['held_name']}")
+                with indented():
+                    outcomes.append(
+                        _upgrade_one_leg(
+                            client,
+                            access_token,
+                            cfg,
+                            leg,
+                            wanted_code,
+                            tp_product_id,
+                            tp_token_id,
+                            service_types,
+                        )
                     )
-                )
     blank()
 
     lost = [leg for leg, outcome in zip(candidates, outcomes, strict=True) if outcome == "lost"]

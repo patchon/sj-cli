@@ -273,6 +273,12 @@ def test_bookings_table_dims_a_week_only_when_every_leg_in_it_is_past(monkeypatc
     assert out.count("   past\n") == 2
     assert "\n ● 3 day(s) · 3 booking(s) · 2 in the past\n" in out
 
+    half = [leg("2026-09-01", "N1", "Y"), {**leg("2026-09-01", "N1", "N"), "route": "B → A"}]
+    print_bookings_table(half)
+    out = capsys.readouterr().out
+    assert "   past" not in out  # one leg still to come: the day is not past
+    assert "· 1 in the past\n" in out
+
     monkeypatch.setattr(output, "color_enabled", lambda: True)
     print_bookings_table(legs)
     out = capsys.readouterr().out

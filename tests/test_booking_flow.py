@@ -442,6 +442,10 @@ def test_book_mode_prints_day_cards_notes_and_summary(capsys):
     # no date/route repetition inside the card, no 'done', summary footer instead
     assert "searching 2026-09-04" not in out and "done" not in out
     assert "\n ● 5 day(s) · 2 booked · 1 already booked · 2 skipped" in out
+    # week lines: W36 holds fri..sun, W37 mon..tue; every card one level beneath its week
+    assert out.startswith(" W36\n   fri 04 sep 2026   Göteborg Central ⇄ Stockholm Central\n")
+    assert "\n\n W37\n   mon 07 sep 2026   tickets already booked\n" in out
+    assert [line for line in out.splitlines() if line.startswith(" W")] == [" W36", " W37"]
 
 
 def test_book_mode_card_for_failed_day(capsys):
@@ -449,10 +453,10 @@ def test_book_mode_card_for_failed_day(capsys):
     run_range(c, base_cfg(), dry_run=False)
     out = capsys.readouterr().out
     assert (
-        "tue 01 sep 2026   Göteborg Central ⇄ Stockholm Central\n   ✓ searching outbound at 06:59\n"
-        in out
+        " W36\n   tue 01 sep 2026   Göteborg Central ⇄ Stockholm Central\n"
+        "     ✓ searching outbound at 06:59\n" in out
     )
-    assert "  ! no departure found for outbound\n   nothing booked\n" in out
+    assert "     ! no departure found for outbound\n     nothing booked\n" in out
     assert "\n ● 1 day(s) · 1 not booked" in out
 
 

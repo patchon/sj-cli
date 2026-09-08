@@ -599,7 +599,9 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
 
     # A week is past when every card in it is, so it is judged over the
     # whole week before its first card is printed.
-    day_past = {d: all(leg.get("past") == "Y" for leg in legs) for d, legs in groups.items()}
+    day_past = {
+        date_str: all(leg.get("past") == "Y" for leg in legs) for date_str, legs in groups.items()
+    }
     week_past: dict[tuple[int, int] | None, bool] = {}
     for date_str, past in day_past.items():
         week = _iso_week(date_str)

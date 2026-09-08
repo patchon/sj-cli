@@ -42,6 +42,7 @@ from sj_cli.output import (
     select_filtered,
     select_list,
     spinner,
+    week_headers,
 )
 from sj_cli.stations import Station, StationIndex, parse_stations
 
@@ -426,14 +427,15 @@ def _summary_rows(chosen: list[tuple[str, str, Leg]], flexibility: str) -> list[
 
 
 def _print_cards(rows: list[dict]) -> None:
-    """One day card per date in the rows, in date order."""
+    """One day card per date in the rows, in date order, under their week lines."""
     days: dict[str, list[dict]] = {}
     for row in rows:
         days.setdefault(row.get("date") or "—", []).append(row)
-    for day in sorted(days):
-        print_day_header(day, group_route(days[day]))
-        with indented():
-            print_leg_lines(days[day])
+    with week_headers():
+        for day in sorted(days):
+            print_day_header(day, group_route(days[day]))
+            with indented():
+                print_leg_lines(days[day])
 
 
 def _aborted() -> bool:
