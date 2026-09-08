@@ -102,10 +102,9 @@ def week_headers():
     week one level beneath it. The week line sits at the indent current on
     entry. Card openers must be called at the block's base indent: a card
     printed inside a further `indented()` loses that level, and so do the
-    lines after it inside that block. The block prints no blank
-    lines of its own — callers keep their blank after or between cards.
-    Exit restores the indent. Outside a block the card openers print
-    exactly as before.
+    lines after it inside that block. The block prints no blank lines of its
+    own — callers keep their blank after or between cards. Exit restores the
+    indent. Outside a block the card openers print exactly as before.
     """
     global _indent, _week_block  # noqa: PLW0603
     previous_block, previous_indent = _week_block, _indent
@@ -600,10 +599,11 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
 
     # A week is past when every card in it is, so it is judged over the
     # whole week before its first card is printed.
+    day_past = {d: all(leg.get("past") == "Y" for leg in legs) for d, legs in groups.items()}
     week_past: dict[tuple[int, int] | None, bool] = {}
-    for date_str, legs in groups.items():
+    for date_str, past in day_past.items():
         week = _iso_week(date_str)
-        week_past[week] = week_past.get(week, True) and all(leg.get("past") == "Y" for leg in legs)
+        week_past[week] = week_past.get(week, True) and past
 
     past_legs = 0
     with week_headers():
@@ -611,7 +611,7 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
             if i:
                 blank()
             _week_break(date_str, dim=week_past[_iso_week(date_str)])
-            all_past = all(leg.get("past") == "Y" for leg in legs)
+            all_past = day_past[date_str]
             header = day_header(date_str, group_route(legs), dim=all_past)
             if all_past and not color_enabled():
                 header += "   past"  # dimming is invisible here, so say it

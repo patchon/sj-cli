@@ -138,6 +138,7 @@ def test_day_header_and_note(capsys):
     print_day_note("2026-09-19", "weekend")
     assert capsys.readouterr().out == " sat 19 sep 2026   weekend\n"
     assert _format_date_label("nonsense") == "nonsense"
+    assert _format_date_label("") == "—"
 
 
 def test_week_line_bold_dim_and_unparsable(monkeypatch):
@@ -281,6 +282,45 @@ def test_bookings_table_dims_a_week_only_when_every_leg_in_it_is_past(monkeypatc
     legs[1] = leg("2026-08-20", "NEW0", "N")  # W34 now holds a future leg too
     print_bookings_table(legs)
     assert capsys.readouterr().out.startswith(" \x1b[1mW34\x1b[0m\n")
+
+
+def test_bookings_table_without_summary_restores_the_indent_and_skips_undated_cards(capsys):
+    from sj_cli.output import pdim
+
+    legs = [
+        {
+            "date": "2026-09-01",
+            "departure": "06:59",
+            "arrival": "10:04",
+            "route": "A → B",
+            "booking_number": "N1",
+            "past": "N",
+        },
+        {
+            "date": "—",
+            "departure": "17:22",
+            "arrival": "20:28",
+            "route": "B → A",
+            "booking_number": "N1",
+            "past": "N",
+        },
+    ]
+    print_bookings_table(legs, summary=False)
+    pdim("1 other journey in booking N1 on other dates is kept")  # the cancel preview's trailer
+    out = capsys.readouterr().out
+    assert out == (
+        " W36\n"
+        "   tue 01 sep 2026   A → B\n"
+        "     → 06:59 – 10:04   N1\n"
+        "\n"
+        "   —   B → A\n"  # no week to name: no line, stays under the current week
+        # its own date group of one: leg_lines has no other row to infer
+        # a return against, so it prints as its own outbound (→)
+        "     → 17:22 – 20:28   N1\n"
+        " 1 other journey in booking N1 on other dates is kept\n"
+    )
+    print_bookings_table([])
+    assert capsys.readouterr().out == "\n ● 0 day(s) · 0 booking(s)\n"
 
 
 def test_travelpass_cards(capsys):
