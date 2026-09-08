@@ -8,6 +8,8 @@ from sj_cli.errors import SJError
 from sj_cli.output import (
     _read_key,
     _reverse_route,
+    _week_line,
+    blank,
     confirm,
     day_header,
     departure_choice_lines,
@@ -18,6 +20,7 @@ from sj_cli.output import (
     pad,
     pinfo,
     print_bookings_table,
+    print_day_header,
     print_day_note,
     select_filtered,
     select_list,
@@ -25,6 +28,7 @@ from sj_cli.output import (
     split_product_name,
     style,
     visible_len,
+    week_headers,
 )
 
 
@@ -135,19 +139,16 @@ def test_day_header_and_note(capsys):
 
 
 def test_week_line_bold_dim_and_unparsable(monkeypatch):
-    from sj_cli.output import week_line
-
-    assert week_line("2026-10-12") == "W42"
-    assert week_line("2027-01-04") == "W1"  # no zero padding, no year
-    assert week_line("nonsense") == "" and week_line("") == ""
+    assert _week_line("2026-10-12") == "W42"
+    assert _week_line("2027-01-04") == "W1"  # no zero padding, no year
+    assert _week_line("nonsense") == ""
+    assert _week_line("") == ""
     monkeypatch.setattr(output, "color_enabled", lambda: True)
-    assert week_line("2026-10-12") == "\x1b[1mW42\x1b[0m"
-    assert week_line("2026-10-12", dim=True) == "\x1b[2mW42\x1b[0m"
+    assert _week_line("2026-10-12") == "\x1b[1mW42\x1b[0m"
+    assert _week_line("2026-10-12", dim=True) == "\x1b[2mW42\x1b[0m"
 
 
 def test_week_headers_group_cards_by_iso_week(capsys):
-    from sj_cli.output import blank, print_day_header, week_headers
-
     with week_headers():
         print_day_header("2026-10-12", "A ⇄ B")
         with indented():
@@ -171,12 +172,39 @@ def test_week_headers_group_cards_by_iso_week(capsys):
 
 
 def test_week_headers_nest_under_the_current_indent_and_skip_unparsable_dates(capsys):
-    from sj_cli.output import print_day_header, week_headers
-
     with indented(), week_headers():
         print_day_header("—", "A ⇄ B")  # no week to name: no line, no re-indent
         print_day_header("2026-10-12", "A ⇄ B")
     assert capsys.readouterr().out == "   —   A ⇄ B\n   W42\n     mon 12 oct 2026   A ⇄ B\n"
+
+
+def test_week_headers_expect_the_card_openers_at_the_base_indent(capsys):
+    # The contract: the opener sets the indent from the block's base, so an
+    # indented() level around it is lost — callers open cards at loop level.
+    with week_headers(), indented():
+        print_day_header("2026-10-12", "A")
+        pinfo("leg")
+    assert capsys.readouterr().out == " W42\n   mon 12 oct 2026   A\n   leg\n"
+
+
+def test_week_headers_restore_the_indent_after_an_exception_and_nest(capsys):
+    def _boom():
+        with week_headers():
+            print_day_header("2026-10-12", "A")
+            raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):
+        _boom()
+    pinfo("after")  # back at the margin
+    with week_headers():
+        print_day_header("2026-10-12", "A")
+        with week_headers():  # an inner block starts from the shifted indent
+            print_day_header("2026-10-19", "B")
+        print_day_header("2026-10-13", "C")  # the outer block still knows W42
+    assert capsys.readouterr().out == (
+        " W42\n   mon 12 oct 2026   A\n after\n"
+        " W42\n   mon 12 oct 2026   A\n   W43\n     mon 19 oct 2026   B\n   tue 13 oct 2026   C\n"
+    )
 
 
 def test_bookings_card_groups_by_day_and_infers_return_arrow(capsys):

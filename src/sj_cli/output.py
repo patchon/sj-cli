@@ -100,9 +100,12 @@ def week_headers():
     print_bookings_table) print a `W<n>` line whenever the ISO week of the
     card differs from the previous card's, and indent every card of that
     week one level beneath it. The week line sits at the indent current on
-    entry; the block prints no blank lines of its own — callers keep their
-    blank after or between cards. Exit restores the indent. Outside a block
-    the card openers print exactly as before.
+    entry. Card openers must be called at the block's base indent: a card
+    printed inside a further `indented()` loses that level, and the level
+    is not restored for the cards after it. The block prints no blank
+    lines of its own — callers keep their blank after or between cards.
+    Exit restores the indent. Outside a block the card openers print
+    exactly as before.
     """
     global _indent, _week_block  # noqa: PLW0603
     previous_block, previous_indent = _week_block, _indent
@@ -375,24 +378,32 @@ def split_product_name(raw_name: str) -> tuple[str, str | None]:
     return class_name, _FLEX_NAMES.get(tail.casefold(), tail)
 
 
+def _parse_card_date(date_str: str) -> datetime | None:
+    """The datetime of a card's YYYY-MM-DD date, None when it does not parse (or is None)."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+
+
 def _format_date_label(date_str: str) -> str:
     """Turn 2026-08-18 into 'tue 18 aug 2026'; fall back to the raw string."""
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%a %d %b %Y").lower()
-    except (ValueError, TypeError):
+    parsed = _parse_card_date(date_str)
+    if parsed is None:
         return date_str or "\u2014"
+    return parsed.strftime("%a %d %b %Y").lower()
 
 
 def _iso_week(date_str: str) -> tuple[int, int] | None:
     """(ISO year, ISO week) of a YYYY-MM-DD string; None when it does not parse."""
-    try:
-        cal = datetime.strptime(date_str, "%Y-%m-%d").isocalendar()
-    except (ValueError, TypeError):
+    parsed = _parse_card_date(date_str)
+    if parsed is None:
         return None
+    cal = parsed.isocalendar()
     return cal.year, cal.week
 
 
-def week_line(date_str: str, dim: bool = False) -> str:
+def _week_line(date_str: str, dim: bool = False) -> str:
     """'W42' for a YYYY-MM-DD date's ISO week, bold (dim when dim); '' if it does not parse."""
     week = _iso_week(date_str)
     if week is None:
@@ -410,7 +421,7 @@ def _week_break(date_str: str, dim: bool = False) -> None:
     if week is None or week == block.last:
         return
     _indent = block.base
-    _emit(week_line(date_str, dim))
+    _emit(_week_line(date_str, dim))
     _indent = block.base + "  "
     block.last = week
 
