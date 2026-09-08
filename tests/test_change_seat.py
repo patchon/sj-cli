@@ -1,6 +1,6 @@
 """Tests for handle_change_seat: re-seating existing bookings by date or booking number."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 
@@ -201,6 +201,8 @@ def test_change_seat_by_date_touches_and_shows_only_that_day(capsys):
     assert "06:00" in out and "09:00" not in out  # the card shows one day, not the booking
     assert "carriage 3 seat 70" in out
     assert "● 1 seat(s) changed" in out
+    week = date.fromisoformat(FUTURE_DATE).isocalendar().week
+    assert f" W{week}\n   " in out  # the card sits one level under its week line
 
 
 @pytest.mark.parametrize("preference", ["ask", "  ASK  "])

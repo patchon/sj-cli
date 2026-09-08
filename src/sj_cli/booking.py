@@ -3331,8 +3331,8 @@ def handle_upgrade_class(
                             continue
                         worth_trying += 1
                         pinfo(
-                            f"{wanted_class}: seats exist (SJ sells them) — an upgrade may "
-                            "be possible"
+                            f"{wanted_class}: seats exist (SJ sells them) "
+                            "— an upgrade may be possible"
                         )
                         if dry_run:
                             continue

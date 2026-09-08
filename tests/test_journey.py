@@ -304,6 +304,10 @@ def test_roundtrip_with_every_default_reproduces_the_commute(monkeypatch, capsys
     assert "✓ adding return leg at 17:22" in out
     assert "NUM1" in out
     assert out.rstrip().endswith(" ● booked NUM1")
+    # the summary card sits under the picked date's week line, the booked
+    # card under the fixture departure's (this file's OUT/IN dates)
+    assert f" W{TODAY.isocalendar().week}\n   " in out
+    assert f" W{FUTURE.isocalendar().week}\n   " in out
 
 
 def test_one_way_on_another_route_and_date(monkeypatch, capsys):

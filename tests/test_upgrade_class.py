@@ -9,7 +9,7 @@ seats, never a cancel of anything but the one journey being upgraded, and
 never a cancel that is not followed straight away by its own re-book.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 
@@ -97,6 +97,8 @@ def test_fallback_leg_with_purchasable_seats_is_worth_trying(capsys):
     assert "seats exist" in out
     assert "1 leg(s) not in 2 class calm" in out and "1 worth trying" in out
     _assert_no_writes(c)
+    week = date.fromisoformat(FUTURE_DATE).isocalendar().week
+    assert f" W{week}\n   " in out  # the probe card sits one level under its week line
 
 
 def test_fallback_leg_with_no_seats_is_not_possible(capsys):
@@ -332,6 +334,11 @@ def test_upgrade_releases_one_journey_then_rebooks_the_same_departure(monkeypatc
     assert "✓ creating booking with the same departure at " in out
     assert "upgraded to 2 class calm · new booking NUM1" in out
     assert "1 leg(s) attempted" in out and "1 upgraded to 2 class calm" in out
+    # Both the probe card and the re-book card sit one level under a week
+    # line: count, not "in" — the two cards share the same week, so an
+    # unwrapped re-book loop alone would still leave one copy behind.
+    week = date.fromisoformat(FUTURE_DATE).isocalendar().week
+    assert out.count(f" W{week}\n   ") == 2
 
 
 def test_the_other_journey_of_a_roundtrip_booking_is_left_alone(monkeypatch, capsys):
