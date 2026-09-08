@@ -244,7 +244,7 @@ the next login then needs the SMS step again.
 
 ```bash
 ./venv/bin/pip install -e . --group dev
-./venv/bin/pytest                                             # ~589 tests, <1 s, no network (scripted fake client)
+./venv/bin/pytest                                             # ~596 tests, <1 s, no network (scripted fake client)
 ./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatting
 ./venv/bin/mypy                                               # type check
 ```

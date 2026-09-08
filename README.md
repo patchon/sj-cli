@@ -249,7 +249,7 @@ båda cacharna - nästa inloggning kräver då SMS igen.
 
 ```bash
 ./venv/bin/pip install -e . --group dev
-./venv/bin/pytest                                             # ~589 tester, <1 s, utan nätverk (skriptad fejkklient)
+./venv/bin/pytest                                             # ~596 tester, <1 s, utan nätverk (skriptad fejkklient)
 ./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatering
 ./venv/bin/mypy                                               # typkontroll
 ```

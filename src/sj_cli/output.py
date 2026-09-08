@@ -96,15 +96,16 @@ def week_headers():
     """
     Group the day cards printed inside the block under bold `W42` week lines.
 
-    Inside the block the card openers (print_day_header, print_day_note,
-    print_bookings_table) print a `W<n>` line whenever the ISO week of the
-    card differs from the previous card's, and indent every card of that
-    week one level beneath it. The week line sits at the indent current on
-    entry. Card openers must be called at the block's base indent: a card
-    printed inside a further `indented()` loses that level, and so do the
-    lines after it inside that block. The block prints no blank lines of its
-    own — callers keep their blank after or between cards. Exit restores the
-    indent. Outside a block the card openers print exactly as before.
+    Inside the block the card openers (print_day_header, print_day_note;
+    print_bookings_table opens a block of its own) print a `W<n>` line
+    whenever the ISO week of the card differs from the previous card's, and
+    indent every card of that week one level beneath it. The week line sits
+    at the indent current on entry. Card openers must be called at the
+    block's base indent: a card printed inside a further `indented()` loses
+    that level, and so do the lines after it inside that block. The block
+    prints no blank lines of its own — callers keep their blank after or
+    between cards. Exit restores the indent. Outside a block the card
+    openers print exactly as before.
     """
     global _indent, _week_block  # noqa: PLW0603
     previous_block, previous_indent = _week_block, _indent
