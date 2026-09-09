@@ -2,9 +2,10 @@
 
 from datetime import timedelta
 
+from sj_cli import output
 from sj_cli.booking import handle_list_bookings
 from sj_cli.dates import sweden_now
-from tests.fakes import FakeClient, seatmap
+from tests.fakes import FakeClient, TtyOut, seatmap
 
 # Computed from the real clock at test-run time so these dates are never
 # accidentally in the past (a past leg is deliberately excluded from the
@@ -160,6 +161,61 @@ def test_the_same_map_is_fetched_once_when_two_legs_share_it():
     handle_list_bookings(c, "TOKEN", {}, seat_details=True)
 
     assert c.calls.count(("seatmap", "ID-NUM1", "SM-SHARED")) == 1
+
+
+def test_seat_details_counts_the_legs_in_the_spinner(monkeypatch):
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+    c = FakeClient()
+    for tag in ("D1", "D2", "D3"):
+        c.seatmaps[f"SM-{tag}"] = seatmap(assigned=("3", "39"), assigned_codes=["WINDOW"])
+    segments = [
+        _segment(FUTURE_DATE, "D1"),
+        _segment(FUTURE_DATE, "D2", dep_time="09:00"),
+        _segment(FUTURE_DATE_2, "D3"),
+    ]
+    c.bookings_list = [_booking_item("NUM1", segments)]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True)
+
+    text = out.getvalue()
+    assert "fetching seat details · 1 of 3" in text
+    assert "fetching seat details · 2 of 3" in text
+    assert "fetching seat details · 0 of 3" not in text  # nothing to report before the first leg
+    assert "fetching seat details · 3 of 3" not in text  # the last leg ends the step instead
+    assert sum(1 for call in c.calls if call[0] == "seatmap") == 3  # fetch count unchanged
+
+
+def test_seat_details_counts_legs_not_fetches(monkeypatch):
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+    c = FakeClient()
+    c.seatmaps["SM-SHARED"] = seatmap(assigned=("3", "39"), assigned_codes=["WINDOW"])
+    c.seatmaps["SM-D3"] = seatmap(assigned=("3", "39"), assigned_codes=["WINDOW"])
+    segments = [
+        _segment(FUTURE_DATE, "SHARED"),
+        _segment(FUTURE_DATE, "SHARED", dep_time="09:00"),  # same map: served from the cache
+        _segment(FUTURE_DATE_2, "D3"),
+    ]
+    c.bookings_list = [_booking_item("NUM1", segments)]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True)
+
+    # the cached leg still ticks: the count follows the legs, not the requests
+    assert "fetching seat details · 2 of 3" in out.getvalue()
+    assert c.calls.count(("seatmap", "ID-NUM1", "SM-SHARED")) == 1
+
+
+def test_seat_details_for_a_single_leg_shows_no_count(monkeypatch):
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = seatmap(assigned=("3", "39"), assigned_codes=["WINDOW"])
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True)
+
+    assert "fetching seat details ·" not in out.getvalue()
 
 
 # --- the "could take N" hint (seat_preference ranked lists only) -----------

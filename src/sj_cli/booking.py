@@ -3592,7 +3592,8 @@ def _add_seat_details(
 
     Appends " · <words>" to that row's seat cell, for --seat-details, plus
     " · could take <n> · <words>" (see _seat_hint) when seat_preference is a
-    ranked wish list and a strictly better free seat exists.
+    ranked wish list and a strictly better free seat exists. The spinner
+    counts the legs as it goes (live-only, while legs remain).
 
     Args:
         client: The SJ HTTP client.
@@ -3616,8 +3617,11 @@ def _add_seat_details(
     wishes = seat_preference if isinstance(seat_preference, list) else None
     cache: dict[tuple[str, str], dict | None] = {}
     failures = 0
-    with spinner("fetching seat details", trail=False):
-        for row, booking_id, search_id in tasks:
+    total = len(tasks)
+    with spinner("fetching seat details", trail=False) as update:
+        for done, (row, booking_id, search_id) in enumerate(tasks):
+            if done:  # legs handled so far, only while more remain: never `0 of n`, never `n of n`
+                update(f"fetching seat details · {done} of {total}")
             key = (booking_id, search_id)
             if key not in cache:
                 try:
