@@ -178,6 +178,7 @@ class FakeClient:
         self.seatmap_error: Exception | None = None
         self.seat_update_error: Exception | None = None
         self.bookings_list: list[dict] = []
+        self.page_size: int | None = None  # None: everything in one page, like the tests expect
         self.cancel_payloads: list[tuple] = []  # (booking_id, payload) per PATCH
         self.cancel_error: Exception | None = None
         self.finalize_error: Exception | None = None
@@ -322,9 +323,22 @@ class FakeClient:
 
     def get_bookings(self, token, start_date, end_date, page=0):
         self.calls.append(("bookings", start_date, end_date))
-        # fetch_all_bookings reads "bookings" and paginates on "nextPage";
-        # omitting nextPage ends the loop after one page.
-        return {"bookings": self.bookings_list}
+        # fetch_all_bookings reads "bookings" and paginates on "nextPage",
+        # reporting "totalCount" while pages remain. Without a page_size the
+        # whole list comes back with no nextPage, which ends the loop.
+        if self.page_size is None:
+            return {"bookings": self.bookings_list}
+        start = page * self.page_size
+        more = start + self.page_size < len(self.bookings_list)
+        return {
+            "bookings": self.bookings_list[start : start + self.page_size],
+            "nextPage": page + 1 if more else None,
+            "prevPage": page - 1 if page else None,
+            "totalCount": len(self.bookings_list),
+            # what the live API returned on every page of a 42-booking account
+            # (2026-09-09); nothing in src/ reads it.
+            "filteredCount": 0,
+        }
 
     def get_seatmap(self, token, booking_id, seatmap_search_id):
         self.calls.append(("seatmap", booking_id, seatmap_search_id))

@@ -881,7 +881,14 @@ def check_existing_booking(bookings: list, origin_id: str, dest_id: str, date_st
     return False
 
 
-def fetch_all_bookings(client: SJClient, access_token: str, start_date: str, end_date: str) -> list:
+def fetch_all_bookings(
+    client: SJClient,
+    access_token: str,
+    start_date: str,
+    end_date: str,
+    *,
+    progress: Callable[[int, int | None], None] | None = None,
+) -> list:
     """
     Fetch all bookings with pagination.
 
@@ -890,6 +897,9 @@ def fetch_all_bookings(client: SJClient, access_token: str, start_date: str, end
         access_token: Valid access token.
         start_date: Start date string (YYYY-MM-DD).
         end_date: End date string (YYYY-MM-DD).
+        progress: Called after every page that another page follows, with
+            (bookings fetched so far, the response's ``totalCount`` or None).
+            A single-page fetch never calls it: there is no progress to show.
 
     Returns:
         List of all booking items across all pages.
@@ -899,17 +909,46 @@ def fetch_all_bookings(client: SJClient, access_token: str, start_date: str, end
     page = 0
     while True:
         bookings_resp = client.get_bookings(access_token, start_date, end_date, page)
-        page_bookings = bookings_resp.get("bookings") or []
-        bookings_list.extend(page_bookings)
+        bookings_list.extend(bookings_resp.get("bookings") or [])
 
         next_page = bookings_resp.get("nextPage")
         if next_page is None or next_page == page:
             break
 
+        if progress is not None:
+            total = bookings_resp.get("totalCount")
+            progress(len(bookings_list), total if isinstance(total, int) else None)
         page = next_page
         time.sleep(0.5)
 
     return bookings_list
+
+
+def fetch_bookings_with_spinner(
+    client: SJClient,
+    access_token: str,
+    start_date: str,
+    end_date: str,
+    label: str,
+    *,
+    trail: bool = True,
+) -> list:
+    """
+    ``fetch_all_bookings`` under a spinner that counts the pages as they arrive.
+
+    While pages remain the live text reads ``label · 20 of 42`` (the API's
+    ``totalCount``; ``label · 20 so far`` should it be missing). A single
+    page never changes the text, and the trail line, unless ``trail=False``,
+    keeps the bare label: the count is live-only, the closing status line is
+    where a total belongs.
+    """
+    with spinner(label, trail=trail) as update:
+
+        def counting(fetched: int, total: int | None) -> None:
+            tail = f"{fetched} of {total}" if total is not None else f"{fetched} so far"
+            update(f"{label} · {tail}")
+
+        return fetch_all_bookings(client, access_token, start_date, end_date, progress=counting)
 
 
 def _on_route(booking: dict, route: tuple[str, str] | None) -> bool:
