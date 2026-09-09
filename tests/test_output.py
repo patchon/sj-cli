@@ -31,6 +31,7 @@ from sj_cli.output import (
     visible_len,
     week_headers,
 )
+from tests.fakes import TtyOut
 
 
 def test_format_duration():
@@ -134,8 +135,6 @@ def test_pinfo_keeps_case_and_indents_inside_block(capsys):
 
 
 def test_spinner_update_redraws_the_frame_and_the_trail_keeps_the_step_name(monkeypatch):
-    from tests.fakes import TtyOut
-
     out = TtyOut()
     monkeypatch.setattr(output.sys, "stdout", out)
     with spinner("fetching bookings", interval=60) as update:
@@ -164,8 +163,6 @@ def test_spinner_update_is_inert_without_a_tty(capsys):
 
 
 def test_spinner_update_then_failure_keeps_the_step_name_in_the_trail(monkeypatch):
-    from tests.fakes import TtyOut
-
     out = TtyOut()
     monkeypatch.setattr(output.sys, "stdout", out)
 
