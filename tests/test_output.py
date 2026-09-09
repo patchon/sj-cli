@@ -133,6 +133,52 @@ def test_pinfo_keeps_case_and_indents_inside_block(capsys):
     assert capsys.readouterr().out == " booking ERU0HWB2 cancelled\n   inner\n   ✓ step\n outer\n"
 
 
+def test_spinner_update_redraws_the_frame_and_the_trail_keeps_the_step_name(monkeypatch):
+    from tests.fakes import TtyOut
+
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+    with spinner("fetching bookings", interval=60) as update:
+        update("fetching bookings · 10 of 42")
+    text = out.getvalue()
+    assert (
+        "\r\x1b[2K ⠋ fetching bookings · 10 of 42" in text
+    )  # redrawn at once, not on the next tick
+    assert text.count("\r") == text.count(
+        "\r\x1b[2K"
+    )  # every redraw erases first: a shorter text leaves no tail
+    assert text.endswith("\r\x1b[2K ✓ fetching bookings\n")  # frame erased, plain trail
+    assert "✓ fetching bookings ·" not in text
+    before = out.getvalue()
+    update("late")
+    assert out.getvalue() == before
+
+
+def test_spinner_update_is_inert_without_a_tty(capsys):
+    with spinner("fetching bookings") as update:
+        update("fetching bookings · 10 of 42")
+    assert capsys.readouterr().out == " ✓ fetching bookings\n"
+    with spinner("quiet", trail=False) as update:
+        update("quiet · 1 of 2")
+    assert capsys.readouterr().out == ""
+
+
+def test_spinner_update_then_failure_keeps_the_step_name_in_the_trail(monkeypatch):
+    from tests.fakes import TtyOut
+
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+
+    def _fail():
+        with spinner("fetching bookings", interval=60) as update:
+            update("fetching bookings · 10 of 42")
+            raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):
+        _fail()
+    assert out.getvalue().endswith("\r\x1b[2K ✗ fetching bookings\n")
+
+
 def test_day_header_and_note(capsys):
     assert day_header("2026-09-15", "A ⇄ B") == "tue 15 sep 2026   A ⇄ B"
     print_day_note("2026-09-19", "weekend")

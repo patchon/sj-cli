@@ -1,5 +1,14 @@
 """Test doubles and builders shared by the suites (no network, no sleeping)."""
 
+import io
+
+
+class TtyOut(io.StringIO):
+    """A captured stdout that claims to be a terminal, so the spinner draws its frames into it."""
+
+    def isatty(self) -> bool:
+        return True
+
 
 def dep(dep_id: str, date: str, dep_time: str, arr_time: str, props=("COMFORT-B", "COMFORT-CALM")):
     """Build a minimal departure dict as returned by the search-results API."""

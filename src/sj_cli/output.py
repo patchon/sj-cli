@@ -117,7 +117,9 @@ def week_headers():
 
 
 @contextmanager
-def spinner(msg: str, interval: float = 0.08, trail: bool = True):
+def spinner(
+    msg: str, interval: float = 0.08, trail: bool = True
+) -> Iterator[Callable[[str], None]]:
     """
     Context manager that shows a braille spinner while work runs.
 
@@ -125,34 +127,55 @@ def spinner(msg: str, interval: float = 0.08, trail: bool = True):
         with spinner("fetching bookings"):
             do_slow_work()
 
+        with spinner("fetching bookings") as update:  # optional: swap the live text
+            do_slow_work()
+            update("fetching bookings · 10 of 42")
+
+    The block receives ``update(text)``, which redraws the live frame with
+    the new text at once (a paged fetch counts with it). The trail line
+    always carries the original ``msg``: a count is live-only.
+
     The spinner line is erased when the block completes and, when ``trail``
     is true, replaced by a dim trail line: "✓ msg" on success, "✗ msg" if the
-    block raised. When stdout is not a TTY the spinner is skipped and only
-    the trail line is printed. Text is printed as given (no case changes).
+    block raised. When stdout is not a TTY the spinner is skipped, ``update``
+    does nothing and only the trail line is printed. Text is printed as
+    given (no case changes).
 
     """
     stop = threading.Event()
     text = msg
     prefix = _indent
+    frame = _BRAILLE_FRAMES[0]
 
     if not sys.stdout.isatty():
         try:
-            yield
+            yield lambda _text: None
         except BaseException:
             if trail:
-                _emit(_trail_line(False, text))
+                _emit(_trail_line(False, msg))
             raise
         if trail:
-            _emit(_trail_line(True, text))
+            _emit(_trail_line(True, msg))
         return
 
-    def _spin():
+    def _draw() -> None:
+        with _stdout_lock:
+            sys.stdout.write(f"\r\033[2K{_MARGIN}{prefix}{frame} {text}")
+            sys.stdout.flush()
+
+    def update(new_text: str) -> None:
+        nonlocal text
+        if stop.is_set():
+            return
+        text = new_text
+        _draw()
+
+    def _spin() -> None:
+        nonlocal frame
         i = 0
         while not stop.is_set():
             frame = _BRAILLE_FRAMES[i % len(_BRAILLE_FRAMES)]
-            with _stdout_lock:
-                sys.stdout.write(f"\r{_MARGIN}{prefix}{frame} {text}")
-                sys.stdout.flush()
+            _draw()
             i += 1
             stop.wait(interval)
         # Erase the spinner line
@@ -166,7 +189,7 @@ def spinner(msg: str, interval: float = 0.08, trail: bool = True):
     t.start()
     ok = True
     try:
-        yield
+        yield update
     except BaseException:
         ok = False
         raise
@@ -175,7 +198,7 @@ def spinner(msg: str, interval: float = 0.08, trail: bool = True):
         t.join()
         _spinner_active = False
         if trail:
-            _emit(_trail_line(ok, text))
+            _emit(_trail_line(ok, msg))
 
 
 def _trail_line(ok: bool, text: str) -> str:
