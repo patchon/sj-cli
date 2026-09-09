@@ -119,7 +119,9 @@ def test_cancel_date_with_nothing_to_cancel_is_not_a_failure(monkeypatch, capsys
 
     monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: [])
     assert handle_cancel_mode(FakeClient(), "tok", base_cfg(), "2026-10-05") is True
-    assert "no bookings found for 2026-10-05" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "✓ fetching bookings for 2026-10-05" in out  # the wrapper's trail line keeps the label
+    assert "no bookings found for 2026-10-05" in out
 
 
 class RefusingCancelClient:
@@ -145,6 +147,7 @@ def test_cancel_failures_name_the_cause(monkeypatch, capsys):
     _answers(monkeypatch, "a", "y")
     assert handle_cancel_booking(RefusingCancelClient(), "tok", {}, "NUM1") is False
     out = capsys.readouterr().out
+    assert "✓ searching for booking NUM1" in out
     assert "✗ cancelling booking NUM1" in out
     assert "● failed to cancel booking NUM1: E42 · segment already departed" in out
 

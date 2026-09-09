@@ -13,7 +13,7 @@ from sj_cli.booking import (
     booking_date_range,
     describe_departure,
     drop_departed,
-    fetch_all_bookings,
+    fetch_bookings_with_spinner,
     get_departure_time_minutes,
     is_active_booking,
     pass_validity,
@@ -163,8 +163,13 @@ def _held_segments(
     fetch is only a note.
     """
     try:
-        with spinner("fetching existing bookings", trail=False):
-            items = fetch_all_bookings(client, access_token, *booking_date_range(active_pass))
+        items = fetch_bookings_with_spinner(
+            client,
+            access_token,
+            *booking_date_range(active_pass),
+            label="fetching existing bookings",
+            trail=False,
+        )
     except Exception as e:
         logger.error(f"could not check existing bookings: {e}")
         pwarn(f"could not check existing bookings: {error_text(e)}")

@@ -14,7 +14,7 @@ from sj_cli.booking import (
     booking_date_range,
     cleanup_stale_provisionals,
     describe_run,
-    fetch_all_bookings,
+    fetch_bookings_with_spinner,
     handle_cancel_booking,
     handle_cancel_mode,
     handle_change_seat,
@@ -49,7 +49,6 @@ from sj_cli.output import (
     print_travelpasses,
     pstatus,
     pwarn,
-    spinner,
     style,
 )
 from sj_cli.tokens import TokenManager
@@ -872,8 +871,14 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
             # the selection may start today, and today's stale provisional must be
             # visible to the cleanup too.
             b_start, b_end = booking_date_range(active_pass)
-            with spinner("fetching existing bookings", trail=False):
-                bookings_list = fetch_all_bookings(client, access_token, b_start, b_end)
+            bookings_list = fetch_bookings_with_spinner(
+                client,
+                access_token,
+                b_start,
+                b_end,
+                label="fetching existing bookings",
+                trail=False,
+            )
 
             # Cleanup stale provisionals (never in a dry run: no mutations),
             # only our own: on the configured route and not brand new.

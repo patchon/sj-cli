@@ -87,7 +87,7 @@ def test_spinner_counts_while_pages_remain_and_the_trail_keeps_the_label(monkeyp
     monkeypatch.setattr(output.sys, "stdout", out)
     client = _paged(3, 1)
     got = fetch_bookings_with_spinner(
-        client, "tok", "2026-09-09", "2027-08-04", "fetching bookings"
+        client, "tok", "2026-09-09", "2027-08-04", label="fetching bookings"
     )
     text = out.getvalue()
     assert got == _items(3)
@@ -101,15 +101,15 @@ def test_spinner_counts_while_pages_remain_and_the_trail_keeps_the_label(monkeyp
 def test_spinner_counts_so_far_without_a_total(monkeypatch):
     out = TtyOut()
     monkeypatch.setattr(output.sys, "stdout", out)
-    fetch_bookings_with_spinner(_NoTotal(), "tok", "d", "d", "fetching bookings")
+    fetch_bookings_with_spinner(_NoTotal(), "tok", "d", "d", label="fetching bookings")
     assert "fetching bookings · 1 so far" in out.getvalue()
 
 
 def test_spinner_wrapper_without_a_tty_prints_only_the_trail(capsys):
     got = fetch_bookings_with_spinner(
-        _paged(2, 1), "tok", "d", "d", "fetching bookings", trail=False
+        _paged(2, 1), "tok", "d", "d", label="fetching bookings", trail=False
     )
     assert got == _items(2)
     assert capsys.readouterr().out == ""
-    fetch_bookings_with_spinner(_paged(2, 1), "tok", "d", "d", "fetching bookings")
+    fetch_bookings_with_spinner(_paged(2, 1), "tok", "d", "d", label="fetching bookings")
     assert capsys.readouterr().out == " ✓ fetching bookings\n"

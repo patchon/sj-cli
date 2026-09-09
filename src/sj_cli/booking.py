@@ -929,8 +929,8 @@ def fetch_bookings_with_spinner(
     access_token: str,
     start_date: str,
     end_date: str,
-    label: str,
     *,
+    label: str,
     trail: bool = True,
 ) -> list:
     """
@@ -2272,8 +2272,13 @@ def handle_cancel_mode(
     origin_id = client.resolve_station(origin_name)
     dest_id = client.resolve_station(dest_name)
 
-    with spinner(f"fetching bookings for {cancel_date}"):
-        bookings = fetch_all_bookings(client, access_token, cancel_date, cancel_date)
+    bookings = fetch_bookings_with_spinner(
+        client,
+        access_token,
+        cancel_date,
+        cancel_date,
+        label=f"fetching bookings for {cancel_date}",
+    )
 
     # Find booking numbers with a journey on the route (either direction)
     # that day — whole journeys, so a connection still matches.
@@ -2351,8 +2356,9 @@ def handle_cancel_booking(
         all_bookings = prefetched_bookings
     else:
         b_start, b_end = booking_date_range(travel_pass)
-        with spinner(f"searching for booking {booking_number}"):
-            all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
+        all_bookings = fetch_bookings_with_spinner(
+            client, access_token, b_start, b_end, label=f"searching for booking {booking_number}"
+        )
 
     # Find the booking matching the booking number
     matched_item = None
@@ -2718,8 +2724,9 @@ def handle_change_seat(
         origin_id = client.resolve_station(params["station_from"])
         dest_id = client.resolve_station(params["station_to"])
         for day in dates:
-            with spinner(f"fetching bookings for {day}", trail=False):
-                day_bookings = fetch_all_bookings(client, access_token, day, day)
+            day_bookings = fetch_bookings_with_spinner(
+                client, access_token, day, day, label=f"fetching bookings for {day}", trail=False
+            )
             # Same matching as handle_cancel_mode: whole journeys (a change
             # still matches), on the route in either direction, that date.
             matched_numbers = set()
@@ -2742,8 +2749,9 @@ def handle_change_seat(
 
     if booking_numbers:
         b_start, b_end = booking_date_range(travel_pass)
-        with spinner("fetching bookings", trail=False):
-            all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
+        all_bookings = fetch_bookings_with_spinner(
+            client, access_token, b_start, b_end, label="fetching bookings", trail=False
+        )
         by_number: dict[str, tuple[dict, dict]] = {}
         for item in all_bookings:
             booking = item.get("booking") or {}
@@ -3307,8 +3315,9 @@ def handle_upgrade_class(
 
     with week_headers():
         for day in dates:
-            with spinner(f"fetching bookings for {day}", trail=False):
-                day_bookings = fetch_all_bookings(client, access_token, day, day)
+            day_bookings = fetch_bookings_with_spinner(
+                client, access_token, day, day, label=f"fetching bookings for {day}", trail=False
+            )
 
             # Legs on the configured route (either direction), that date, not
             # yet departed — same journey-then-segment scoping as
@@ -3658,8 +3667,9 @@ def handle_list_bookings(
     """
     b_start, b_end = booking_date_range(travel_pass)
 
-    with spinner("fetching bookings", trail=False):
-        all_bookings = fetch_all_bookings(client, access_token, b_start, b_end)
+    all_bookings = fetch_bookings_with_spinner(
+        client, access_token, b_start, b_end, label="fetching bookings", trail=False
+    )
 
     # Transform raw API items into display rows
     now = sweden_now()

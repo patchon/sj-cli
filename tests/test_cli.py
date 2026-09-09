@@ -416,7 +416,7 @@ def _logged_in_with_config(tmp_path, monkeypatch, **overrides):
     monkeypatch.setattr(cli, "CfgManager", lambda: CfgManager(tmp_path / "config.toml"))
     monkeypatch.setattr(cli, "TokenManager", lambda: TokenManager(tmp_path / "token.json"))
     monkeypatch.setattr(cli, "ensure_authenticated", lambda *_a: ("tok", "cached"))
-    monkeypatch.setattr(cli, "fetch_all_bookings", lambda *_a, **_k: [])
+    monkeypatch.setattr(cli, "fetch_bookings_with_spinner", lambda *_a, **_k: [])
     monkeypatch.setattr(cli, "cleanup_stale_provisionals", lambda *_a, **_k: [])
     return cli
 
