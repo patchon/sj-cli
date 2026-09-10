@@ -3543,6 +3543,9 @@ def _seat_hint(current: Seat | None, seatmap: dict, wishes: list[str]) -> str:
     """
     ' · could take <n> · <words>' when a free seat meets more of the wishes.
 
+    ' · nothing free in this class' when the map offers none, ' · cannot be
+    changed' when SJ has locked the map.
+
     Compares by `seats.rank` — the exact lexicographic ranking `best_seat`
     uses to choose a seat for --book/--change-seat — never by seat identity.
     `best_seat` is deliberately best-effort: it returns the lowest-numbered
@@ -3564,19 +3567,32 @@ def _seat_hint(current: Seat | None, seatmap: dict, wishes: list[str]) -> str:
             call this.
 
     Returns:
-        The suffix to append to the seat cell, or "" when there is no
-        assigned seat to compare, nothing is free to move to, or the best
+        The suffix to append to the seat cell: the suggestion, " · nothing
+        free in this class" when the map offers no selectable seat, " ·
+        cannot be changed" when `_seats_locked` says SJ refuses a re-seat at
+        all, or "" when there is no assigned seat to compare or the best
         free seat does not outrank what is already assigned.
 
     """
     if current is None:
         return ""
+    if _seats_locked(seatmap):
+        # SJ will not re-seat this ticket at all, so neither a suggestion nor
+        # a "nothing free" reading of the empty list would name the real cause.
+        # The write paths refuse the same map with "seat cannot be changed".
+        return " · cannot be changed"
     candidate = best_seat(seatmap, wishes)
+    if candidate is None:
+        # The assigned carriage was found in the layout yet SJ offers no seat
+        # to move to: say so, or a missing suggestion reads as "already on the
+        # best seat". The selectable list is filtered to the ticket's
+        # inventory class, so this means that class is full, not the train.
+        return " · nothing free in this class"
     # Compare wish satisfaction only: `rank` also tie-breaks on carriage and
     # seat number, which would advertise seat 15 to someone already in seat 19
     # when both meet exactly the same wishes — a move that gains the traveller
     # nothing. Only a materially better match is worth reporting.
-    if candidate is None or wish_rank(candidate, wishes) >= wish_rank(current, wishes):
+    if wish_rank(candidate, wishes) >= wish_rank(current, wishes):
         return ""
     return f" · could take {candidate['number']} · {', '.join(seat_words(candidate))}"
 

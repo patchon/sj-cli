@@ -310,6 +310,98 @@ def test_no_seat_preference_never_shows_a_hint_and_does_not_crash(capsys):
     assert "could take" not in out
 
 
+# --- "· nothing free": the map offers no seat at all ------------------------
+
+_WISHES = ["avoid table", "avoid easy access", "single", "window"]
+
+
+def _full_map(assigned_in_layout=True):
+    """A map whose only layout seat is the assigned one and whose selectable lists are empty."""
+    layout = (("39", ["AISLE"], False),) if assigned_in_layout else ()
+    sm = seatmap(
+        free=layout,
+        assigned=("3", "39"),
+        assigned_codes=["AISLE", "ODR"],
+        extra=(("5", (), ("SECOND",)),),
+    )
+    sm["seatsPossibleToSelect"] = {"3": [], "5": []}
+    return sm
+
+
+def test_nothing_free_is_said_when_the_map_offers_no_seat(capsys):
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = _full_map()
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=_WISHES)
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, backward · nothing free in this class" in out
+    assert "seat details unavailable" not in out  # an empty map is a reported state, not a failure
+
+
+def test_nothing_free_stays_silent_for_an_unlocatable_seat(capsys):
+    # The assigned seat is missing from the layout: the words come from the
+    # fallback path and the map is not understood well enough to judge it.
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = _full_map(assigned_in_layout=False)
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=_WISHES)
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, backward" in out
+    assert "nothing free" not in out
+
+
+def test_nothing_free_needs_a_ranked_preference(capsys):
+    for preference in ("ask", None):
+        c = FakeClient()
+        c.seatmaps["SM-D1"] = _full_map()
+        c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+        handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=preference)
+
+        out = capsys.readouterr().out
+        assert "carriage 3 seat 39 · aisle, backward" in out
+        assert "nothing free" not in out
+
+
+def test_free_seats_that_do_not_outrank_stay_silent(capsys):
+    # A free seat exists but is no better: neither a suggestion nor "nothing free".
+    # (A real map never offers the passenger their own seat back, so seat 39
+    # stays in the layout — assigned_seat() must still find it — but only
+    # seat 40 is actually offered.)
+    c = FakeClient()
+    m = seatmap(free=(("39", ["AISLE"], False), ("40", ["AISLE"], True)), assigned=("3", "39"))
+    m["seatsPossibleToSelect"]["3"] = ["40"]
+    c.seatmaps["SM-D1"] = m
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=_WISHES)
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, backward" in out
+    assert "could take" not in out
+    assert "nothing free" not in out
+
+
+def test_a_locked_map_says_it_cannot_be_changed(capsys):
+    # canChangeSeat: false — SJ refuses a re-seat, so neither a suggestion nor
+    # "nothing free" would name the cause (the write paths refuse it too).
+    c = FakeClient()
+    sm = _full_map()
+    sm["canChangeSeat"] = False
+    c.seatmaps["SM-D1"] = sm
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, seat_preference=_WISHES)
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39 · aisle, backward · cannot be changed" in out
+    assert "nothing free" not in out
+
+
 def test_a_departed_segment_is_not_fetched_even_with_seat_preference(capsys):
     c = FakeClient()
     c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
