@@ -181,7 +181,7 @@ Install into the venv with `./venv/bin/pip install -e . --group dev` (editable i
 ## Tests and lint
 
 ```bash
-./venv/bin/pytest               # ~624 tests, <1s, no network
+./venv/bin/pytest               # ~629 tests, <1s, no network
 ./venv/bin/ruff check .         # lint (pyproject selects ALL with documented ignores; tests have their own)
 ./venv/bin/ruff format --check . # formatting (run `ruff format .` to apply)
 ./venv/bin/mypy                 # type check (the package fully, tests' annotated parts)

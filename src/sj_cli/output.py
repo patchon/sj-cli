@@ -713,6 +713,20 @@ def _days_remaining(end_iso: str | None) -> str:
         return "\u2014"
 
 
+def group_code(code: str) -> str:
+    """
+    A travel-pass number in groups of four, `1234 5678 9012 3456`.
+
+    Only an all-digit code longer than four is grouped; anything else (an
+    em dash placeholder, a future alphanumeric format) is returned as it
+    came, since the grouping would be a guess about a shape we have not
+    seen.
+    """
+    if not code.isascii() or not code.isdigit() or len(code) <= 4:
+        return code
+    return " ".join(code[i : i + 4] for i in range(0, len(code), 4))
+
+
 def print_travelpasses(
     travel_passes: list[dict], receipt_info: dict[str, dict] | None = None
 ) -> None:
@@ -735,7 +749,7 @@ def print_travelpasses(
     for i, tp in enumerate(travel_passes):
         if i:
             blank()
-        _emit(f"{style(tp.get('name', '\u2014'), BOLD)}   {tp.get('code', '\u2014')}")
+        _emit(f"{style(tp.get('name') or '\u2014', BOLD)}   {group_code(tp.get('code') or '\u2014')}")
 
         holder_data = tp.get("holder") or {}
         name = " ".join(p for p in (holder_data.get("firstName"), holder_data.get("lastName")) if p)

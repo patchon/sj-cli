@@ -385,6 +385,26 @@ def test_bookings_table_without_summary_restores_the_indent_and_skips_undated_ca
     assert capsys.readouterr().out == "\n ● 0 day(s) · 0 booking(s)\n"
 
 
+def test_group_code_groups_an_all_digit_code_in_fours():
+    from sj_cli.output import group_code
+
+    assert group_code("1234567890123456") == "1234 5678 9012 3456"
+
+
+def test_group_code_leaves_a_remainder_at_the_end():
+    from sj_cli.output import group_code
+
+    assert group_code("123456789012345") == "1234 5678 9012 345"
+
+
+def test_group_code_leaves_short_or_non_digit_codes_unchanged():
+    from sj_cli.output import group_code
+
+    assert group_code("1234") == "1234"
+    assert group_code("—") == "—"
+    assert group_code("AB12CD34") == "AB12CD34"
+
+
 def test_travelpass_cards(capsys):
     from sj_cli.output import print_travelpasses
 
@@ -399,7 +419,7 @@ def test_travelpass_cards(capsys):
     print_travelpasses([tp], {"B1": {"amount": 51250, "currency": "SEK"}})
     out = capsys.readouterr().out
     assert not out.startswith("\n")  # card-first mode: no title above, no extra blank
-    assert out.startswith(" SJ Årskort Silver   1234567890123456")
+    assert out.startswith(" SJ Årskort Silver   1234 5678 9012 3456")
     assert "  holder    John Doe (p@x.se)" in out
     assert "  valid     2026-08-02 – 2027-08-01 (" in out  # exclusive end date
     assert "days left)" in out
@@ -416,6 +436,16 @@ def test_travelpass_card_omits_unknown_facts(capsys):
     assert "SJ Årskort   123" in out
     assert "holder" not in out
     assert "price" not in out
+
+
+def test_travelpass_card_survives_a_null_code_and_name(capsys):
+    # The API writes explicit null for an absent code/name; .get(key, default)
+    # never fires on a present-but-null key, so group_code(None) used to raise.
+    from sj_cli.output import print_travelpasses
+
+    print_travelpasses([{"name": None, "code": None}])
+    out = capsys.readouterr().out
+    assert "—   —" in out
 
 
 def test_status_card_with_plain_lines(capsys):
