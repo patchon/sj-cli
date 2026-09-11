@@ -517,7 +517,15 @@ def print_day_note(date_str: str, note: str) -> None:
 
 # Leg-line columns after the time range, in display order (row keys). A
 # row's "note" (why it cannot be booked) is shown dimmed in the flexibility cell.
-_LEG_COLUMNS = ("duration", "train", "seat", "comfort_class", "flexibility", "booking_number")
+_LEG_COLUMNS = (
+    "duration",
+    "train",
+    "seat",
+    "comfort_class",
+    "flexibility",
+    "booking_number",
+    "cancelled",
+)
 
 
 def _cell(row: dict, col: str) -> str:
@@ -536,9 +544,14 @@ def leg_lines(rows: list[dict]) -> list[str]:
     Render legs as aligned lines (no indent): "-> 04:01 - 08:38   4h 37m   X 2000 520   ...".
 
     Row keys: departure, arrival, route, and optionally duration, train, seat,
-    comfort_class, flexibility, note, booking_number, past ("Y"/"N"). Columns
-    that are empty on every row are omitted, so the same renderer serves
-    bookings (train/seat/number), dry runs (flexibility/note) and cancels.
+    comfort_class, flexibility, note, booking_number, cancelled, past
+    ("Y"/"N"). Columns that are empty on every row are omitted, so the same
+    renderer serves bookings (train/seat/number), dry runs (flexibility/note)
+    and cancels. "cancelled" (set to the literal "cancelled" or "") renders
+    as a further column after the booking number, e.g. "… ABCD1234   cancelled";
+    an uncancelled leg shows nothing there, not the em-dash placeholder
+    — used by --list-bookings --since for a leg read from a booking's
+    cancelledJourneys.
     The arrow is inferred from the route: a leg whose route is the reverse of
     the first leg's is a return (←); the API reports a standalone return
     booking as OUTBOUND, so the direction field alone is not enough.
@@ -567,16 +580,38 @@ def leg_lines(rows: list[dict]) -> list[str]:
             if c == "flexibility" and row.get("note"):
                 val = style(val, DIM)
             cells.append(pad(val, widths[c]))
-        number = cells.pop() if "booking_number" in cols else None
+        # booking_number and cancelled render outside the joined body (bold
+        # number, plain marker after it) rather than as ordinary columns, so
+        # they are pulled out here by name — not position — so a column
+        # added later between them is never silently printed as the wrong
+        # one. Highest cells-index first so an earlier pop cannot shift the
+        # index a later one still needs (+1: cells[0] is the leading time
+        # range, not a column). An uncancelled leg drops the marker
+        # entirely rather than showing the em-dash placeholder the other
+        # columns use — absence here is the normal state, not a missing
+        # value, and in a mixed listing most legs are uncancelled.
+        tail_names = [n for n in ("booking_number", "cancelled") if n in cols]
+        picked: dict[str, str] = {}
+        for name in sorted(tail_names, key=cols.index, reverse=True):
+            picked[name] = cells.pop(cols.index(name) + 1)
+        number = picked.get("booking_number")
+        marker = picked.get("cancelled")
+        if not row.get("cancelled"):
+            marker = None
         body = "   ".join(cells)
         if is_past:
             arrow = style(_ANSI_RE.sub("", arrow), DIM)
             body = style(_ANSI_RE.sub("", body), DIM)
             if number is not None:
                 number = style(_ANSI_RE.sub("", number), DIM)
+            if marker is not None:
+                marker = style(_ANSI_RE.sub("", marker), DIM)
         elif number is not None:
             number = style(number, BOLD)
-        line = f"{arrow} {body}" + (f"   {number}" if number is not None else "")
+        tail = (f"   {number}" if number is not None else "") + (
+            f"   {marker}" if marker is not None else ""
+        )
+        line = f"{arrow} {body}{tail}"
         lines.append(line.rstrip())
     return lines
 
@@ -631,7 +666,8 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
     Args:
         bookings: Leg rows (sorted by departure) with keys: date, direction,
                   departure, arrival, duration, comfort_class, route,
-                  booking_number, past ("Y"/"N"), and optionally train, seat.
+                  booking_number, past ("Y"/"N"), and optionally train, seat,
+                  cancelled ("cancelled" or "").
         summary: Print the "N day(s) · N booking(s) · …" footer line.
 
     """
@@ -675,6 +711,9 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
         footer = f"{len(groups)} day(s) \u00b7 {n_bookings} booking(s)"
         if past_legs:
             footer += f" \u00b7 {past_legs} in the past"
+        cancelled_legs = sum(1 for leg in bookings if leg.get("cancelled"))
+        if cancelled_legs:
+            footer += f" \u00b7 {cancelled_legs} cancelled"
         blank()
         pstatus(None, footer)
 
@@ -713,7 +752,7 @@ def _days_remaining(end_iso: str | None) -> str:
         return "\u2014"
 
 
-def group_code(code: str) -> str:
+def _group_code(code: str) -> str:
     """
     A travel-pass number in groups of four, `1234 5678 9012 3456`.
 
@@ -749,7 +788,9 @@ def print_travelpasses(
     for i, tp in enumerate(travel_passes):
         if i:
             blank()
-        _emit(f"{style(tp.get('name') or '\u2014', BOLD)}   {group_code(tp.get('code') or '\u2014')}")
+        _emit(
+            f"{style(tp.get('name') or '\u2014', BOLD)}   {_group_code(tp.get('code') or '\u2014')}"
+        )
 
         holder_data = tp.get("holder") or {}
         name = " ".join(p for p in (holder_data.get("firstName"), holder_data.get("lastName")) if p)

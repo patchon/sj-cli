@@ -1360,7 +1360,13 @@ class SJClient:
         return data
 
     def get_bookings(
-        self, access_token: str, start_date: str, end_date: str, page: int = 0
+        self,
+        access_token: str,
+        start_date: str,
+        end_date: str,
+        page: int = 0,
+        *,
+        include_cancelled: bool = False,
     ) -> dict[str, Any]:
         """
         Fetches the user's bookings within a date range.
@@ -1370,6 +1376,9 @@ class SJClient:
             start_date: Start date (YYYY-MM-DD).
             end_date: End date (YYYY-MM-DD).
             page: The page number to fetch (default 0).
+            include_cancelled: Also return cancelled bookings (their journeys
+                come back in a sibling `cancelledJourneys` list per booking,
+                not `journeys`). Default False, as the API itself defaults.
 
         Returns:
             A dictionary containing the list of bookings and pagination info.
@@ -1381,7 +1390,7 @@ class SJClient:
             "fromPage": str(page),
             "startDate": start_date,  # YYYY-MM-DD
             "endDate": end_date,  # YYYY-MM-DD
-            "includeCancelledBookings": "false",
+            "includeCancelledBookings": "true" if include_cancelled else "false",
         }
 
         headers = {

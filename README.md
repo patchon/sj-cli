@@ -219,6 +219,11 @@ Använd `--dry-run` för att se vad som skulle hända, flaggan förhandsvisar
 Använd `--seat-details` i kombination med `--list-bookings` för att få
 platsinformation.
 
+Använd `--since <datum>` i kombination med `--list-bookings` för att lista
+bokningar bakåt i tiden i stället för från idag, inklusive avbokade (markerade
+`cancelled`). Datumet kan vara ett datum (`2026-06-01`), en ISO-vecka (`W38`,
+`2026-W38`) eller en offset bakåt från idag (`90d`, `6m`).
+
 Du kan också hoppa över kopieringen av konfigurationsfilen: kör `--login` i en
 terminal, så erbjuder sig verktyget att skapa konfigurationen åt dig och frågar
 efter e-post och lösenord. Parametrarna för resan måste dock alltid fyllas i

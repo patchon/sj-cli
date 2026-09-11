@@ -19,21 +19,21 @@ def _paged(n: int, page_size: int | None) -> FakeClient:
 class _NoTotal:
     """Two pages without a totalCount, should the API ever drop it."""
 
-    def get_bookings(self, token, start_date, end_date, page=0):
+    def get_bookings(self, token, start_date, end_date, page=0, *, include_cancelled=False):
         return {"bookings": [{"i": page}], "nextPage": 1 if page == 0 else None}
 
 
 class _EchoPage:
     """A server that answers every page with nextPage == the page asked for."""
 
-    def get_bookings(self, token, start_date, end_date, page=0):
+    def get_bookings(self, token, start_date, end_date, page=0, *, include_cancelled=False):
         return {"bookings": [{"i": page}], "nextPage": page, "totalCount": 1}
 
 
 class _SkipsAhead:
     """Page 0 points at page 7: the loop follows the server's value, not a counter."""
 
-    def get_bookings(self, token, start_date, end_date, page=0):
+    def get_bookings(self, token, start_date, end_date, page=0, *, include_cancelled=False):
         return {"bookings": [{"i": page}], "nextPage": 7 if page == 0 else None, "totalCount": 2}
 
 

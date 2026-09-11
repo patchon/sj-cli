@@ -386,23 +386,23 @@ def test_bookings_table_without_summary_restores_the_indent_and_skips_undated_ca
 
 
 def test_group_code_groups_an_all_digit_code_in_fours():
-    from sj_cli.output import group_code
+    from sj_cli.output import _group_code
 
-    assert group_code("1234567890123456") == "1234 5678 9012 3456"
+    assert _group_code("1234567890123456") == "1234 5678 9012 3456"
 
 
 def test_group_code_leaves_a_remainder_at_the_end():
-    from sj_cli.output import group_code
+    from sj_cli.output import _group_code
 
-    assert group_code("123456789012345") == "1234 5678 9012 345"
+    assert _group_code("123456789012345") == "1234 5678 9012 345"
 
 
 def test_group_code_leaves_short_or_non_digit_codes_unchanged():
-    from sj_cli.output import group_code
+    from sj_cli.output import _group_code
 
-    assert group_code("1234") == "1234"
-    assert group_code("—") == "—"
-    assert group_code("AB12CD34") == "AB12CD34"
+    assert _group_code("1234") == "1234"
+    assert _group_code("—") == "—"
+    assert _group_code("AB12CD34") == "AB12CD34"
 
 
 def test_travelpass_cards(capsys):
@@ -440,7 +440,7 @@ def test_travelpass_card_omits_unknown_facts(capsys):
 
 def test_travelpass_card_survives_a_null_code_and_name(capsys):
     # The API writes explicit null for an absent code/name; .get(key, default)
-    # never fires on a present-but-null key, so group_code(None) used to raise.
+    # never fires on a present-but-null key, so _group_code(None) used to raise.
     from sj_cli.output import print_travelpasses
 
     print_travelpasses([{"name": None, "code": None}])

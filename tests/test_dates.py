@@ -12,6 +12,7 @@ from sj_cli.dates import (
     normalise_date_selection,
     parse_api_datetime,
     parse_date_selection,
+    parse_since,
     selected_dates,
     sweden_now,
     to_sweden,
@@ -236,3 +237,108 @@ def test_selected_and_booking_dates():
     assert booking_dates({"dates": "2099-01-01"}) == [date(2099, 1, 1)]  # default today
     with pytest.raises(SJConfigError, match="dates: 'nope' is not a date"):
         selected_dates({"dates": "nope"}, TODAY)
+
+
+# --- --since: how far back --list-bookings reaches ---------------------------
+
+
+def test_since_accepts_a_date():
+    assert parse_since("2026-06-01", today=TODAY) == (date(2026, 6, 1), None)
+
+
+def test_since_accepts_an_iso_week():
+    assert parse_since("W30", today=TODAY) == (date.fromisocalendar(2026, 30, 1), None)
+    assert parse_since("w30", today=TODAY) == (date.fromisocalendar(2026, 30, 1), None)  # case
+    assert parse_since("2025-W38", today=TODAY) == (date.fromisocalendar(2025, 38, 1), None)
+
+
+def test_since_accepts_an_offset_back_from_today():
+    assert parse_since("90d", today=TODAY) == (TODAY - timedelta(days=90), None)
+    assert parse_since("90D", today=TODAY) == (TODAY - timedelta(days=90), None)  # case
+    assert parse_since("6m", today=TODAY) == (date(2026, 2, 23), None)
+    assert parse_since("6M", today=TODAY) == (date(2026, 2, 23), None)  # case
+
+
+def test_since_month_offset_clamps_to_the_shorter_month():
+    # the exact example from the spec: 31 March minus 1 month is 28 February
+    assert parse_since("1m", today=date(2026, 3, 31)) == (date(2026, 2, 28), None)
+    # a leap year keeps the 29th
+    assert parse_since("1m", today=date(2028, 3, 31)) == (date(2028, 2, 29), None)
+
+
+def test_since_rejects_an_unrecognised_form():
+    _, error = parse_since("banana", today=TODAY)
+    assert error == (
+        "'banana' is not a date (YYYY-MM-DD), a week (W43, 2027-W02) or an offset "
+        "back from today (90d, 6m)"
+    )
+
+
+def test_since_rejects_a_zero_count():
+    _, error = parse_since("0d", today=TODAY)
+    assert error == "'0d': the count must be between 1 and 36525"
+    _, error = parse_since("0m", today=TODAY)
+    assert error == "'0m': the count must be between 1 and 36525"
+
+
+def test_since_rejects_a_count_over_the_upper_bound():
+    # bounded before any date/timedelta arithmetic runs, so an absurd count
+    # never reaches the C-level overflow that raised a raw traceback before
+    _, error = parse_since("36526d", today=TODAY)
+    assert error == "'36526d': the count must be between 1 and 36525"
+    _, error = parse_since("99999m", today=TODAY)
+    assert error == "'99999m': the count must be between 1 and 36525"
+    _, error = parse_since("1000000d", today=TODAY)
+    assert error == "'1000000d': the count must be between 1 and 36525"
+    _, error = parse_since("999999999999d", today=TODAY)
+    assert error == "'999999999999d': the count must be between 1 and 36525"
+    # the boundary itself is still accepted
+    assert parse_since("36525d", today=TODAY) == (TODAY - timedelta(days=36525), None)
+
+
+def test_since_rejects_offsets_other_than_days_and_months():
+    for value in ("5w", "5y"):
+        _, error = parse_since(value, today=TODAY)
+        assert error is not None and "is not a date" in error, value
+
+
+def test_since_rejects_a_nonexistent_week():
+    assert parse_since("2027-W53", today=TODAY) == (None, "2027 has no week 53")
+
+
+def test_since_rejects_a_value_that_resolves_to_the_future():
+    # a bare week early in the year resolves into that year's own numbering,
+    # which can land after today
+    early_year = date(2026, 1, 5)
+    resolved = date.fromisocalendar(2026, 38, 1)
+    _, error = parse_since("W38", today=early_year)
+    assert error == (
+        f"'W38' resolves to {resolved.isoformat()}, which is in the future; "
+        "--since reaches back from today (a bare week means this year's — "
+        "write 2025-W38 for last year's)"
+    )
+    # a plain date says so without repeating itself: it is already the date,
+    # and the week hint is withheld because it would change nothing
+    _, error = parse_since("2026-12-31", today=TODAY)
+    assert error == "'2026-12-31' is in the future; --since reaches back from today"
+    # an explicit week already names its year, so it gets no hint either
+    _, error = parse_since("2026-W38", today=early_year)
+    assert error == (
+        f"'2026-W38' resolves to {resolved.isoformat()}, which is in the future; "
+        "--since reaches back from today"
+    )
+
+
+def test_since_week_hint_uses_the_iso_year_not_the_calendar_year():
+    # 29 dec 2025 is calendar year 2025 but already ISO year 2026 (week 1 of
+    # 2026): the bare week resolves against the ISO year (today.isocalendar().
+    # year), so the "last year's" hint must be computed from that, not
+    # today.year, or it would suggest one year too far back.
+    boundary = date(2025, 12, 29)
+    resolved = date.fromisocalendar(2026, 38, 1)
+    _, error = parse_since("W38", today=boundary)
+    assert error == (
+        f"'W38' resolves to {resolved.isoformat()}, which is in the future; "
+        "--since reaches back from today (a bare week means this year's — "
+        "write 2025-W38 for last year's)"
+    )

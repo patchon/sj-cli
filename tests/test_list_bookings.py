@@ -1,6 +1,6 @@
-"""Tests for handle_list_bookings, including the --seat-details modifier."""
+"""Tests for handle_list_bookings, including the --seat-details and --since modifiers."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from sj_cli import output
 from sj_cli.booking import handle_list_bookings
@@ -37,6 +37,20 @@ def _booking_item(number, segments):
             "bookingId": f"ID-{number}",
             "bookingStatus": "CONFIRMED",
             "journeys": [{"segments": segments}],
+        },
+    }
+
+
+def _cancelled_booking_item(number, segments):
+    """A fully cancelled booking: no journeys, its legs in cancelledJourneys instead."""
+    return {
+        "bookingId": f"ID-{number}",
+        "booking": {
+            "bookingNumber": number,
+            "bookingId": f"ID-{number}",
+            "bookingStatus": "CONFIRMED_CANCELLED",
+            "journeys": [],
+            "cancelledJourneys": [{"segments": segments}],
         },
     }
 
@@ -457,6 +471,78 @@ def test_no_hint_when_the_free_seat_meets_exactly_the_same_wishes():
     # now free a paired seat as well: still no gain, so still silent
     m["seatsPossibleToSelect"] = {"3": ["15", "21"]}
     assert _seat_hint(here, m, ["single", "forward"]) == ""
+
+
+def test_since_renders_cancelled_journeys_with_a_marker_and_counts_them(capsys):
+    c = FakeClient()
+    c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, since=date.fromisoformat(PAST_DATE))
+
+    assert c.include_cancelled_calls == [True]  # asked with includeCancelledBookings on
+    out = capsys.readouterr().out
+    assert "NUM1   cancelled" in out
+    assert "1 day(s) · 1 booking(s) · 1 in the past · 1 cancelled" in out
+
+
+def test_without_since_cancelled_journeys_are_not_shown(capsys):
+    c = FakeClient()
+    c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {})
+
+    assert c.include_cancelled_calls == [False]  # asked with includeCancelledBookings off
+    out = capsys.readouterr().out
+    assert "cancelled" not in out
+    assert "no bookings found" in out
+
+
+def test_cancelled_legs_are_never_sent_to_seat_details(capsys):
+    # seatMapAvailable/seatMapSearchId are on the segment and it has not
+    # departed, so a live leg would qualify — a cancelled one must not.
+    c = FakeClient()
+    c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, since=date.fromisoformat(PAST_DATE))
+
+    assert not any(call[0] == "seatmap" for call in c.calls)
+    assert "NUM1   cancelled" in capsys.readouterr().out
+
+
+def _full_segment(tag):
+    """Like _segment, but with every other column filled so none falls back to an em dash."""
+    seg = _segment(FUTURE_DATE, tag)
+    seg["duration"] = "PT4H37M"
+    seg["productFamily"] = {
+        "salesCategoryComfort": "SECOND_CALM",
+        "salesCategoryFlexibility": "FULLFLEX",
+    }
+    seg["serviceBrandNameDescription"] = "X 2000"
+    seg["publicServiceName"] = "520"
+    return seg
+
+
+def test_since_mixed_listing_marks_only_the_cancelled_leg(capsys):
+    # One active and one cancelled booking on the same day: the active leg's
+    # cancelled cell must be dropped rather than shown as an em dash (the
+    # normal placeholder for a missing value elsewhere), the cancelled leg
+    # must end "NUM2   cancelled", and only the active leg's seat map is
+    # fetched under --seat-details.
+    c = FakeClient()
+    c.seatmaps["SM-D1"] = seatmap(assigned=("3", "39"), assigned_codes=["WINDOW"])
+    c.bookings_list = [
+        _booking_item("NUM1", [_full_segment("D1")]),
+        _cancelled_booking_item("NUM2", [_full_segment("D2")]),
+    ]
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, since=date.fromisoformat(PAST_DATE))
+
+    assert c.calls.count(("seatmap", "ID-NUM1", "SM-D1")) == 1
+    assert not any(call[0] == "seatmap" and call[2] == "SM-D2" for call in c.calls)
+    out = capsys.readouterr().out
+    assert "NUM2   cancelled" in out
+    assert "—" not in out
+    assert "1 cancelled" in out
 
 
 def test_the_hint_appears_when_a_free_seat_meets_more_wishes():

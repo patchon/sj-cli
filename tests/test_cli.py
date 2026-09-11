@@ -88,6 +88,42 @@ def test_seat_details_rejected_for_modes_other_than_list_bookings(capsys):
     assert "● --seat-details only applies to --list-bookings" in err
 
 
+def test_since_is_a_modifier_not_an_operation(capsys):
+    # bare --since: no operation given
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--since", "2026-06-01"])
+    assert exc_info.value.code == 1
+    assert "no operation given" in capsys.readouterr().err
+    # composes with --list-bookings
+    args = parse_args(["--list-bookings", "--since", "2026-06-01"])
+    assert args.list_bookings is True and args.since == "2026-06-01"
+    assert parse_args(["--list-bookings"]).since is None
+
+
+def test_since_rejected_for_modes_other_than_list_bookings(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--book", "--since", "2026-06-01"])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "● --since only applies to --list-bookings" in err
+
+
+def test_since_flag_validates_before_running(capsys):
+    from datetime import date
+
+    args = parse_args(["--list-bookings", "--since", "2026-06-01"])
+    assert args.since_date == date(2026, 6, 1)
+    assert parse_args(["--list-bookings"]).since_date is None
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--list-bookings", "--since", "not-a-value"])
+    assert exc_info.value.code == 1
+    # a bad *value* reports like --cancel-date's, a styled card on stdout;
+    # stderr with a usage dump is for argparse-level misuse (--since on --book)
+    out = capsys.readouterr().out
+    assert "● invalid --since" in out
+    assert "'not-a-value' is not a date (YYYY-MM-DD)" in out
+
+
 def test_book_flag_parses():
     args = parse_args(["--book"])
     assert args.book is True
@@ -651,6 +687,19 @@ def test_seat_details_flag_is_passed_through_to_handle_list_bookings(tmp_path, m
     assert captured["seat_details"] is True
     cli._run(parse_args(["--list-bookings"]), _StubClient())
     assert captured["seat_details"] is False
+
+
+def test_since_appears_in_the_header_box_only_with_the_flag(tmp_path, monkeypatch, capsys):
+    # 90d/6m resolve relative to whenever the run happens, so the window a
+    # --since run covered should be visible in the saved output.
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "handle_list_bookings", lambda *_a, **_k: None)
+    cli._run(parse_args(["--list-bookings", "--since", "2026-06-01"]), _StubClient())
+    out = capsys.readouterr().out
+    assert "since" in out
+    assert "2026-06-01" in out
+    cli._run(parse_args(["--list-bookings"]), _StubClient())
+    assert "since" not in capsys.readouterr().out
 
 
 def test_list_travelpasses_shows_expired_passes_instead_of_failing(tmp_path, monkeypatch, capsys):

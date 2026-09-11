@@ -215,6 +215,11 @@ Use `--dry-run` to see what would happen: the flag previews `--book`,
 
 Use `--seat-details` together with `--list-bookings` to get seat information.
 
+Use `--since <date>` together with `--list-bookings` to list bookings back to
+a date instead of from today, cancelled bookings included (marked
+`cancelled`). The date can be a date (`2026-06-01`), an ISO week (`W38`,
+`2026-W38`), or an offset back from today (`90d`, `6m`).
+
 You can also skip copying the config file: run `--login` in a terminal and the
 tool offers to create the configuration for you, asking for your email and
 password. The trip parameters must still be filled in by hand.

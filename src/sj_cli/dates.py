@@ -11,8 +11,11 @@ Swedish calendar and date helpers.
   through parse_api_datetime() / to_sweden() so those rules live in one place.
 - The date-selection grammar (parse_date_selection): dates, ISO weeks and
   start..end ranges, shared by the config's dates key and --cancel-date.
+- parse_since: the --list-bookings --since value (a date, an ISO week or an
+  offset back from today), reaching backwards rather than forwards.
 """
 
+import calendar
 import re
 from datetime import date, datetime, timedelta
 from functools import cache
@@ -289,3 +292,89 @@ def booking_dates(params: dict, today: date | None = None) -> list[date]:
     """The dates a --book run walks: the selection from today (Swedish date) on."""
     today = today or sweden_now().date()
     return [d for d in selected_dates(params, today) if d >= today]
+
+
+# --- --since: how far back --list-bookings reaches ---------------------------
+
+_SINCE_OFFSET_SHAPE = re.compile(r"(\d+)([dm])", re.IGNORECASE | re.ASCII)
+_NOT_A_SINCE_VALUE = (
+    "'{}' is not a date (YYYY-MM-DD), a week (W43, 2027-W02) or an offset back from today (90d, 6m)"
+)
+
+
+def _months_before(d: date, months: int) -> date:
+    """`d` minus a whole number of calendar months, the day clamped to the target month's last."""
+    month_index = d.month - 1 - months
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(d.day, last_day))
+
+
+def parse_since(text: str, *, today: date | None = None) -> tuple[date | None, str | None]:
+    """
+    Parse a --list-bookings --since value into the date it reaches back to.
+
+    Three forms: a date (2026-06-01); an ISO week (W38 = week 38 of today's
+    ISO year, 2026-W38 for another year — the same bare-week rule as
+    parse_date_selection), resolving to that week's Monday; or an offset
+    back from today, Nd (days) or Nm (calendar months — the day clamped to
+    the target month's last, so 31 March minus 1 month is 28 February). The
+    unit letter is case-insensitive; only d and m are offsets — no weeks or
+    years (W38 already means a week, and an offset w would be confusing) —
+    and the count must be at least 1.
+
+    --since reaches backwards, so any value that resolves to a date after
+    today is rejected — including a bare week early in the year, which
+    resolves into next year's numbering and so lands in the future.
+
+    Args:
+        text: The --since value as typed.
+        today: The Swedish date offsets and a bare week are relative to
+            (defaults to now).
+
+    Returns:
+        (resolved date, None) or (None, error message).
+
+    """
+    today = today or sweden_now().date()
+    token = text.strip()
+    errors: list[str] = []
+    resolved: date | None = None
+
+    if _DATE_SHAPE.fullmatch(token):
+        resolved = _parse_date(token, errors)
+    elif (m := _WEEK_SHAPE.fullmatch(token)) is not None:
+        span = _week_span(int(m.group(1) or today.isocalendar().year), int(m.group(2)), errors)
+        resolved = span[0] if span else None
+    elif (m := _SINCE_OFFSET_SHAPE.fullmatch(token)) is not None:
+        count = int(m.group(1))
+        if not 1 <= count <= 36525:  # a century back, already far past any travel pass
+            errors.append(f"'{token}': the count must be between 1 and 36525")
+        elif m.group(2).lower() == "d":
+            resolved = today - timedelta(days=count)
+        else:
+            resolved = _months_before(today, count)
+    else:
+        errors.append(_NOT_A_SINCE_VALUE.format(token))
+
+    if errors:
+        return None, errors[0]
+    assert resolved is not None
+    if resolved > today:
+        # Only name the resolution when it is not already what was typed: a
+        # plain date reads better as "'2027-01-01' is in the future", while a
+        # week or an offset needs the date it landed on to make sense.
+        landed = (
+            "" if token == resolved.isoformat() else f" resolves to {resolved.isoformat()}, which"
+        )
+        # The week hint only helps someone who typed a bare week: it means
+        # this year's, so a week that has not arrived yet is in the future and
+        # the fix is to name the year they meant. Appending it to a plain date
+        # or an explicit YYYY-Www would be advice that changes nothing.
+        hint = ""
+        if _WEEK_SHAPE.fullmatch(token) and "-" not in token:
+            earlier = f"{today.isocalendar().year - 1}-{token.upper()}"
+            hint = f" (a bare week means this year's — write {earlier} for last year's)"
+        return None, f"'{token}'{landed} is in the future; --since reaches back from today{hint}"
+    return resolved, None

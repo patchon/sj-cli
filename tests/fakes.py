@@ -179,6 +179,7 @@ class FakeClient:
         self.seat_update_error: Exception | None = None
         self.bookings_list: list[dict] = []
         self.page_size: int | None = None  # None: everything in one page, like the tests expect
+        self.include_cancelled_calls: list[bool] = []  # one entry per get_bookings call
         self.cancel_payloads: list[tuple] = []  # (booking_id, payload) per PATCH
         self.cancel_error: Exception | None = None
         self.finalize_error: Exception | None = None
@@ -321,8 +322,9 @@ class FakeClient:
         if self.finalize_error:
             raise self.finalize_error
 
-    def get_bookings(self, token, start_date, end_date, page=0):
+    def get_bookings(self, token, start_date, end_date, page=0, *, include_cancelled=False):
         self.calls.append(("bookings", start_date, end_date))
+        self.include_cancelled_calls.append(include_cancelled)
         # fetch_all_bookings reads "bookings" and paginates on "nextPage",
         # reporting "totalCount" while pages remain. Without a page_size the
         # whole list comes back with no nextPage, which ends the loop.

@@ -31,6 +31,7 @@ from sj_cli.dates import (
     SWEDEN,
     booking_dates,
     parse_date_selection,
+    parse_since,
     skip_reason,
     sweden_now,
 )
@@ -168,6 +169,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(window, aisle, table, forward/backward). Costs one request per leg."
         ),
     )
+    parser.add_argument(
+        "--since",
+        metavar="DATE",
+        help=(
+            "Modifier for --list-bookings: list from DATE instead of today, including "
+            "cancelled bookings (marked). Takes a date (2026-06-01), an ISO week (W38, "
+            "2026-W38) or an offset back from today (90d, 6m)."
+        ),
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--book",
@@ -254,7 +264,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # which are only modifiers) shows the help and fails. An empty value
     # (`--cancel-date ""`) is an operation with an invalid argument, reported
     # as such below.
-    modifiers = ("dry_run", "seat_details")
+    modifiers = ("dry_run", "seat_details", "since")
     given = [k for k, v in vars(args).items() if k not in modifiers and v not in (None, False)]
     if not given:
         parser.error("no operation given, choose one of the flags above")
@@ -275,6 +285,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     if args.seat_details and not args.list_bookings:
         parser.error("--seat-details only applies to --list-bookings")
+
+    if args.since is not None and not args.list_bookings:
+        parser.error("--since only applies to --list-bookings")
 
     # Validate-first: every cancel date is parsed and checked here, before
     # any auth or API work can start.
@@ -302,6 +315,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.upgrade_class_dates, errors = parse_cancel_dates(args.upgrade_class)
         if errors:
             print_status_card(False, "invalid --upgrade-class", lines=errors)
+            sys.exit(1)
+    args.since_date = None
+    if args.since is not None:
+        args.since_date, since_error = parse_since(args.since, today=sweden_now().date())
+        if since_error:
+            print_status_card(False, "invalid --since", lines=[since_error])
             sys.exit(1)
 
     return args
@@ -748,7 +767,12 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
     # (operation / travelpass / holder); auth modes lead with their cards.
     try:
         if args.list_bookings:
-            print_header_box([("operation", "listing bookings"), *pass_rows])
+            header_rows = [("operation", "listing bookings"), *pass_rows]
+            if args.since_date is not None:
+                # --since resolves 90d/6m relative to whenever the run
+                # happens, so saved output should carry the window it covered.
+                header_rows.append(("since", args.since_date.isoformat()))
+            print_header_box(header_rows)
             blank()
             # --list-bookings validates with require_search=False, so
             # [search_parameters] (and seat_preference within it) may be
@@ -764,6 +788,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 active_pass,
                 seat_details=args.seat_details,
                 seat_preference=seat_preference,
+                since=args.since_date,
             )
 
         elif args.cancel_date is not None:

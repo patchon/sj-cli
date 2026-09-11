@@ -551,7 +551,7 @@ def test_a_cancelled_booking_and_another_day_are_not_named(monkeypatch, capsys):
 
 def test_a_failed_bookings_fetch_is_only_a_note(monkeypatch, capsys):
     class NoBookings(FakeClient):
-        def get_bookings(self, token, start_date, end_date, page=0):
+        def get_bookings(self, token, start_date, end_date, page=0, *, include_cancelled=False):
             self.calls.append(("bookings", start_date, end_date))
             raise RuntimeError("bookings exploded")
 

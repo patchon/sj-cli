@@ -357,7 +357,9 @@ def pass_covers(travel_pass: dict, window: tuple[date, date]) -> bool:
     return first <= window[0] and window[1] <= last
 
 
-def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -> dict:
+def _segment_to_display_row(
+    segment: dict, booking_number: str, now: datetime, *, cancelled: bool = False
+) -> dict:
     """
     Transform a raw booking segment into a display row dict.
 
@@ -365,11 +367,15 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
         segment: Segment dict from the API.
         booking_number: The parent booking number.
         now: Current aware datetime for past-detection (e.g. sweden_now()).
+        cancelled: True for a segment read from a booking's `cancelledJourneys`
+            (the --since listing) rather than its `journeys` — sets the row's
+            "cancelled" marker, empty string otherwise, so the column is
+            uniform across every row a caller builds.
 
     Returns:
         Display row dict with keys: date, direction, departure, arrival,
-        duration, comfort_class, flexibility, route, booking_number, past,
-        train, seat.
+        duration, comfort_class, flexibility, route, booking_number,
+        cancelled, past, train, seat.
 
     """
     # API says OUTBOUND/INBOUND; the UI (and the dry-run table) says Outbound/Return
@@ -427,6 +433,7 @@ def _segment_to_display_row(segment: dict, booking_number: str, now: datetime) -
         "flexibility": flexibility,
         "route": f"{dep_station} → {arr_station}",
         "booking_number": booking_number,
+        "cancelled": "cancelled" if cancelled else "",
         "past": in_past,
         "train": train,
         "seat": seat,
@@ -888,6 +895,7 @@ def fetch_all_bookings(
     end_date: str,
     *,
     progress: Callable[[int, int | None], None] | None = None,
+    include_cancelled: bool = False,
 ) -> list:
     """
     Fetch all bookings with pagination.
@@ -900,6 +908,8 @@ def fetch_all_bookings(
         progress: Called after every page that another page follows, with
             (bookings fetched so far, the response's ``totalCount`` or None).
             A single-page fetch never calls it: there is no progress to show.
+        include_cancelled: Fetch cancelled bookings too, for the historical
+            `--since` listing.
 
     Returns:
         List of all booking items across all pages.
@@ -908,7 +918,9 @@ def fetch_all_bookings(
     bookings_list: list[dict[str, Any]] = []
     page = 0
     while True:
-        bookings_resp = client.get_bookings(access_token, start_date, end_date, page)
+        bookings_resp = client.get_bookings(
+            access_token, start_date, end_date, page, include_cancelled=include_cancelled
+        )
         bookings_list.extend(bookings_resp.get("bookings") or [])
 
         next_page = bookings_resp.get("nextPage")
@@ -934,6 +946,7 @@ def fetch_bookings_with_spinner(
     trail: bool = True,
     nth: tuple[int, int] | None = None,
     unit: Literal["day", "booking"] = "day",
+    include_cancelled: bool = False,
 ) -> list:
     """
     ``fetch_all_bookings`` under a spinner that counts what is left to do.
@@ -951,6 +964,9 @@ def fetch_bookings_with_spinner(
     The trail line, unless ``trail=False``, keeps the bare label: a count
     never lands in a log, and the closing status line is where a total
     belongs.
+
+    include_cancelled: fetch cancelled bookings too, for the historical
+    `--since` listing.
     """
     with spinner(label, trail=trail) as update:
         live = label
@@ -962,7 +978,14 @@ def fetch_bookings_with_spinner(
             tail = f"{fetched} of {total}" if total is not None else f"{fetched} so far"
             update(f"{live} · {tail}")
 
-        return fetch_all_bookings(client, access_token, start_date, end_date, progress=counting)
+        return fetch_all_bookings(
+            client,
+            access_token,
+            start_date,
+            end_date,
+            progress=counting,
+            include_cancelled=include_cancelled,
+        )
 
 
 def _on_route(booking: dict, route: tuple[str, str] | None) -> bool:
@@ -3713,6 +3736,8 @@ def handle_list_bookings(
     travel_pass: dict,
     seat_details: bool = False,
     seat_preference: list[str] | str | None = None,
+    *,
+    since: date | None = None,
 ) -> None:
     """
     Fetch and display all active bookings per SPEC §5.4 (the caller prints the title).
@@ -3730,12 +3755,24 @@ def handle_list_bookings(
             seat_details=True and a word list does a leg with a strictly
             better free seat get a "could take N · <words>" hint appended
             (see _seat_hint) — "ask" and an absent preference never show one.
+        since: With a date, list from there instead of from today, and
+            include cancelled bookings — the API keeps a cancelled journey
+            in a sibling `cancelledJourneys` list rather than `journeys`, so
+            those legs are rendered separately with a "cancelled" marker.
+            None (the default) leaves today's listing exactly as before.
 
     """
-    b_start, b_end = booking_date_range(travel_pass)
+    range_start, b_end = booking_date_range(travel_pass)
+    b_start = since.isoformat() if since is not None else range_start
 
     all_bookings = fetch_bookings_with_spinner(
-        client, access_token, b_start, b_end, label="fetching bookings", trail=False
+        client,
+        access_token,
+        b_start,
+        b_end,
+        label="fetching bookings",
+        trail=False,
+        include_cancelled=since is not None,
     )
 
     # Transform raw API items into display rows
@@ -3762,6 +3799,17 @@ def handle_list_bookings(
                     and row["past"] == "N"
                 ):
                     seat_tasks.append((row, booking_id, search_id))
+
+        # Cancelled journeys sit in a sibling list, same shape as journeys —
+        # only rendered when --since asked for the wider, cancelled-inclusive
+        # window; a cancelled leg has no seat to read, so it never joins
+        # seat_tasks.
+        if since is not None:
+            for journey in booking.get("cancelledJourneys") or []:
+                for segment in journey.get("segments") or []:
+                    row = _segment_to_display_row(segment, booking_number, now, cancelled=True)
+                    row["_sort_key"] = segment.get("departureDateTime") or ""
+                    display_rows.append(row)
 
     if not display_rows:
         pstatus(False, f"no bookings found between {b_start} and {b_end}")
