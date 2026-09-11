@@ -777,7 +777,12 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 if i:
                     blank()
                 ok &= handle_cancel_mode(
-                    client, access_token, cfg, cancel_date, dry_run=args.dry_run
+                    client,
+                    access_token,
+                    cfg,
+                    cancel_date,
+                    dry_run=args.dry_run,
+                    nth_day=(i + 1, len(args.cancel_dates)),
                 )
             if not ok:
                 print()

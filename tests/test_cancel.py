@@ -124,6 +124,19 @@ def test_cancel_date_with_nothing_to_cancel_is_not_a_failure(monkeypatch, capsys
     assert "no bookings found for 2026-10-05" in out
 
 
+def test_cancel_date_forwards_the_day_ordinal(monkeypatch):
+    from sj_cli.booking import handle_cancel_mode
+    from tests.fakes import FakeClient, TtyOut, base_cfg
+
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+    monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: [])
+    assert handle_cancel_mode(FakeClient(), "tok", base_cfg(), "2026-10-05", nth_day=(2, 5)) is True
+    text = out.getvalue()
+    assert "fetching bookings for 2026-10-05 · day 2 of 5" in text
+    assert "\r\x1b[2K ✓ fetching bookings for 2026-10-05\n" in text
+
+
 class RefusingCancelClient:
     """The API refuses the PATCH (or the confirmation) with a typed error."""
 

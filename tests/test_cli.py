@@ -691,6 +691,19 @@ def test_cancel_date_ignores_the_config_dates(tmp_path, monkeypatch):
     cli._run(parse_args(["--cancel-date", "2026-09-15"]), _StubClient())  # exit 0
 
 
+def test_cancel_date_passes_each_date_its_ordinal(tmp_path, monkeypatch):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    seen: list[tuple[int, int] | None] = []
+
+    def _record(*_a, **kwargs):
+        seen.append(kwargs.get("nth_day"))
+        return True
+
+    monkeypatch.setattr(cli, "handle_cancel_mode", _record)
+    cli._run(parse_args(["--cancel-date", "2026-09-15,2026-09-16"]), _StubClient())
+    assert seen == [(1, 2), (2, 2)]
+
+
 def test_pass_validation_uses_the_effective_start(capsys):
     from datetime import date
 

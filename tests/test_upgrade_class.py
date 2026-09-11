@@ -591,3 +591,17 @@ def test_without_a_travel_pass_product_it_refuses_to_touch_anything(monkeypatch,
     assert ok is False
     assert c.calls == []
     assert "no travel pass to re-book with" in capsys.readouterr().out
+
+
+def test_upgrade_class_shows_the_day_ordinal(monkeypatch):
+    from sj_cli import output
+    from tests.fakes import TtyOut
+
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+    c = FakeClient()
+    c.bookings_list = []
+    handle_upgrade_class(c, "tok", base_cfg(), dates=[FUTURE_DATE, FUTURE_DATE_2], dry_run=True)
+    text = out.getvalue()
+    assert f"fetching bookings for {FUTURE_DATE} · day 1 of 2" in text
+    assert f"fetching bookings for {FUTURE_DATE_2} · day 2 of 2" in text

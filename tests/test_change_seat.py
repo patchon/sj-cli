@@ -4,10 +4,10 @@ from datetime import date, timedelta
 
 import pytest
 
-from sj_cli import booking
+from sj_cli import booking, output
 from sj_cli.booking import handle_change_seat
 from sj_cli.dates import to_sweden
-from tests.fakes import FakeClient, base_cfg, seatmap
+from tests.fakes import FakeClient, TtyOut, base_cfg, seatmap
 
 # One fixed instant the whole file shares: the dates below are relative to it,
 # so a "future" booking is never accidentally in the past (a past one is
@@ -208,6 +208,23 @@ def test_change_seat_by_date_touches_and_shows_only_that_day(capsys):
     assert "● 1 seat(s) changed" in out
     week = date.fromisoformat(FUTURE_DATE).isocalendar().week
     assert f" W{week}\n   " in out  # the card sits one level under its week line
+
+
+def test_change_seat_by_date_shows_the_day_ordinal(monkeypatch):
+    """Each day in a multi-date run shows its place in the walk: · day 1 of 2, · day 2 of 2."""
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+    c = FakeClient()
+    c.bookings_list = [two_day_booking()]
+    c.seatmaps = {"SM-D1": seatmap(), "SM-D2": seatmap()}
+    cfg = base_cfg()
+    cfg["search_parameters"]["seat_preference"] = ["window"]
+
+    assert handle_change_seat(c, "TOKEN", cfg, dates=[FUTURE_DATE, FUTURE_DATE_2]) is True
+
+    text = out.getvalue()
+    assert f"fetching bookings for {FUTURE_DATE} · day 1 of 2" in text
+    assert f"fetching bookings for {FUTURE_DATE_2} · day 2 of 2" in text
 
 
 @pytest.mark.parametrize("preference", ["ask", "  ASK  "])

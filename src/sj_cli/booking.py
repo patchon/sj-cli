@@ -932,21 +932,32 @@ def fetch_bookings_with_spinner(
     *,
     label: str,
     trail: bool = True,
+    nth_day: tuple[int, int] | None = None,
 ) -> list:
     """
-    ``fetch_all_bookings`` under a spinner that counts the pages as they arrive.
+    ``fetch_all_bookings`` under a spinner that counts what is left to do.
 
-    While pages remain the live text reads ``label · 20 of 42`` (the API's
-    ``totalCount``; ``label · 20 so far`` should it be missing). A single
-    page never changes the text, and the trail line, unless ``trail=False``,
-    keeps the bare label: the count is live-only, the closing status line is
-    where a total belongs.
+    Two counts share the live text, both live-only. ``nth_day`` is this fetch's
+    1-based place in a run that walks several dates: it renders as
+    ``label · day 3 of 28``, shown from the first frame and omitted for a
+    lone date, where ``day 1 of 1`` is noise. The page count follows it as
+    pages arrive, from the API's ``totalCount`` — composed, the two read
+    ``label · day 3 of 28 · 20 of 42`` (or ``· 20 so far`` should the total
+    be missing); a single page never changes the text.
+
+    The trail line, unless ``trail=False``, keeps the bare label: a count
+    never lands in a log, and the closing status line is where a total
+    belongs.
     """
     with spinner(label, trail=trail) as update:
+        live = label
+        if nth_day is not None and nth_day[1] > 1:  # a lone date shows none: `day 1 of 1` is noise
+            live = f"{label} · day {nth_day[0]} of {nth_day[1]}"
+            update(live)
 
         def counting(fetched: int, total: int | None) -> None:
             tail = f"{fetched} of {total}" if total is not None else f"{fetched} so far"
-            update(f"{label} · {tail}")
+            update(f"{live} · {tail}")
 
         return fetch_all_bookings(client, access_token, start_date, end_date, progress=counting)
 
@@ -2253,12 +2264,22 @@ def handle_cancel_mode(
     cfg: dict,
     cancel_date: str,
     dry_run: bool = False,
+    nth_day: tuple[int, int] | None = None,
 ) -> bool:
     """
     Interactive cancellation for a specific date.
 
     Finds all bookings matching the configured route on the given date,
     then delegates to handle_cancel_booking for each matching booking.
+
+    Args:
+        client: The SJ HTTP client.
+        access_token: Valid access token.
+        cfg: The loaded configuration (its [search_parameters] give the route).
+        cancel_date: Swedish date (YYYY-MM-DD) to cancel journeys on.
+        dry_run: Preview only — never prompt, never call a cancel API.
+        nth_day: This date's place in a multi-date run, shown live as
+            "· day 2 of 5"; None for a lone date.
 
     Returns:
         True when every matching booking was handled successfully, nothing
@@ -2278,6 +2299,7 @@ def handle_cancel_mode(
         cancel_date,
         cancel_date,
         label=f"fetching bookings for {cancel_date}",
+        nth_day=nth_day,
     )
 
     # Find booking numbers with a journey on the route (either direction)
@@ -2723,9 +2745,15 @@ def handle_change_seat(
     if dates:
         origin_id = client.resolve_station(params["station_from"])
         dest_id = client.resolve_station(params["station_to"])
-        for day in dates:
+        for day_index, day in enumerate(dates, 1):
             day_bookings = fetch_bookings_with_spinner(
-                client, access_token, day, day, label=f"fetching bookings for {day}", trail=False
+                client,
+                access_token,
+                day,
+                day,
+                label=f"fetching bookings for {day}",
+                trail=False,
+                nth_day=(day_index, len(dates)),
             )
             # Same matching as handle_cancel_mode: whole journeys (a change
             # still matches), on the route in either direction, that date.
@@ -3314,9 +3342,15 @@ def handle_upgrade_class(
     candidates: list[dict] = []
 
     with week_headers():
-        for day in dates:
+        for day_index, day in enumerate(dates, 1):
             day_bookings = fetch_bookings_with_spinner(
-                client, access_token, day, day, label=f"fetching bookings for {day}", trail=False
+                client,
+                access_token,
+                day,
+                day,
+                label=f"fetching bookings for {day}",
+                trail=False,
+                nth_day=(day_index, len(dates)),
             )
 
             # Legs on the configured route (either direction), that date, not
