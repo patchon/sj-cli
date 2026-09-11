@@ -220,9 +220,13 @@ Använd `--seat-details` i kombination med `--list-bookings` för att få
 platsinformation.
 
 Använd `--since <datum>` i kombination med `--list-bookings` för att lista
-bokningar bakåt i tiden i stället för från idag, inklusive avbokade (markerade
-`cancelled`). Datumet kan vara ett datum (`2026-06-01`), en ISO-vecka (`W38`,
-`2026-W38`) eller en offset bakåt från idag (`90d`, `6m`).
+bokningar bakåt i tiden i stället för från idag. Datumet kan vara ett datum
+(`2026-06-01`), en ISO-vecka (`W38`, `2026-W38`) eller en offset bakåt från
+idag (`90d`, `6m`).
+
+Använd `--show-cancelled` i kombination med `--list-bookings` för att även
+lista avbokade bokningar (markerade `cancelled`). Går att kombinera med
+`--since` för att nå längre bakåt än idag.
 
 Du kan också hoppa över kopieringen av konfigurationsfilen: kör `--login` i en
 terminal, så erbjuder sig verktyget att skapa konfigurationen åt dig och frågar
@@ -250,7 +254,7 @@ båda cacharna - nästa inloggning kräver då SMS igen.
 
 ```bash
 ./venv/bin/pip install -e . --group dev
-./venv/bin/pytest                                             # ~596 tester, <1 s, utan nätverk (skriptad fejkklient)
+./venv/bin/pytest                                             # ~655 tester, <1 s, utan nätverk (skriptad fejkklient)
 ./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatering
 ./venv/bin/mypy                                               # typkontroll
 ```

@@ -368,7 +368,7 @@ def _segment_to_display_row(
         booking_number: The parent booking number.
         now: Current aware datetime for past-detection (e.g. sweden_now()).
         cancelled: True for a segment read from a booking's `cancelledJourneys`
-            (the --since listing) rather than its `journeys` — sets the row's
+            (the `--show-cancelled` listing) rather than its `journeys` — sets the row's
             "cancelled" marker, empty string otherwise, so the column is
             uniform across every row a caller builds.
 
@@ -908,8 +908,8 @@ def fetch_all_bookings(
         progress: Called after every page that another page follows, with
             (bookings fetched so far, the response's ``totalCount`` or None).
             A single-page fetch never calls it: there is no progress to show.
-        include_cancelled: Fetch cancelled bookings too, for the historical
-            `--since` listing.
+        include_cancelled: Fetch cancelled bookings too, for the
+            `--show-cancelled` listing.
 
     Returns:
         List of all booking items across all pages.
@@ -965,8 +965,8 @@ def fetch_bookings_with_spinner(
     never lands in a log, and the closing status line is where a total
     belongs.
 
-    include_cancelled: fetch cancelled bookings too, for the historical
-    `--since` listing.
+    include_cancelled: fetch cancelled bookings too, for the
+    `--show-cancelled` listing.
     """
     with spinner(label, trail=trail) as update:
         live = label
@@ -3738,6 +3738,7 @@ def handle_list_bookings(
     seat_preference: list[str] | str | None = None,
     *,
     since: date | None = None,
+    show_cancelled: bool = False,
 ) -> None:
     """
     Fetch and display all active bookings per SPEC §5.4 (the caller prints the title).
@@ -3755,11 +3756,13 @@ def handle_list_bookings(
             seat_details=True and a word list does a leg with a strictly
             better free seat get a "could take N · <words>" hint appended
             (see _seat_hint) — "ask" and an absent preference never show one.
-        since: With a date, list from there instead of from today, and
-            include cancelled bookings — the API keeps a cancelled journey
-            in a sibling `cancelledJourneys` list rather than `journeys`, so
-            those legs are rendered separately with a "cancelled" marker.
-            None (the default) leaves today's listing exactly as before.
+        since: With a date, list from there instead of from today. None
+            (the default) leaves today's listing start exactly as before.
+        show_cancelled: With True, also list cancelled bookings — the API
+            keeps a cancelled journey in a sibling `cancelledJourneys` list
+            rather than `journeys`, so those legs are rendered separately
+            with a "cancelled" marker. False (the default) leaves cancelled
+            bookings out, as before. Composes with `since`.
 
     """
     range_start, b_end = booking_date_range(travel_pass)
@@ -3772,7 +3775,7 @@ def handle_list_bookings(
         b_end,
         label="fetching bookings",
         trail=False,
-        include_cancelled=since is not None,
+        include_cancelled=show_cancelled,
     )
 
     # Transform raw API items into display rows
@@ -3801,10 +3804,9 @@ def handle_list_bookings(
                     seat_tasks.append((row, booking_id, search_id))
 
         # Cancelled journeys sit in a sibling list, same shape as journeys —
-        # only rendered when --since asked for the wider, cancelled-inclusive
-        # window; a cancelled leg has no seat to read, so it never joins
-        # seat_tasks.
-        if since is not None:
+        # only rendered when --show-cancelled asked for them; a cancelled
+        # leg has no seat to read, so it never joins seat_tasks.
+        if show_cancelled:
             for journey in booking.get("cancelledJourneys") or []:
                 for segment in journey.get("segments") or []:
                     row = _segment_to_display_row(segment, booking_number, now, cancelled=True)

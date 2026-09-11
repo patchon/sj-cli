@@ -1,4 +1,5 @@
-"""Tests for handle_list_bookings, including the --seat-details and --since modifiers."""
+"""Tests for handle_list_bookings, including the --seat-details, --since and
+--show-cancelled modifiers."""
 
 from datetime import date, timedelta
 
@@ -473,19 +474,50 @@ def test_no_hint_when_the_free_seat_meets_exactly_the_same_wishes():
     assert _seat_hint(here, m, ["single", "forward"]) == ""
 
 
-def test_since_renders_cancelled_journeys_with_a_marker_and_counts_them(capsys):
+def test_since_alone_no_longer_shows_cancelled_journeys(capsys):
+    # --since only moves the window now; --show-cancelled is the switch for
+    # cancelled bookings. This is the behaviour change: before the split,
+    # --since alone implied includeCancelledBookings.
     c = FakeClient()
     c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
 
     handle_list_bookings(c, "TOKEN", {}, since=date.fromisoformat(PAST_DATE))
 
+    assert c.include_cancelled_calls == [False]  # includeCancelledBookings stays off
+    assert c.calls[0][:2] == ("bookings", PAST_DATE)  # window still moved by --since
+    out = capsys.readouterr().out
+    assert "cancelled" not in out
+    assert "no bookings found" in out
+
+
+def test_show_cancelled_alone_renders_cancelled_journeys_with_a_marker_and_counts_them(capsys):
+    c = FakeClient()
+    c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, show_cancelled=True)
+
     assert c.include_cancelled_calls == [True]  # asked with includeCancelledBookings on
+    today = sweden_now().date().isoformat()
+    assert c.calls[0][:2] == ("bookings", today)  # window still starts today, not --since
     out = capsys.readouterr().out
     assert "NUM1   cancelled" in out
     assert "1 day(s) · 1 booking(s) · 1 in the past · 1 cancelled" in out
 
 
-def test_without_since_cancelled_journeys_are_not_shown(capsys):
+def test_since_and_show_cancelled_together(capsys):
+    c = FakeClient()
+    c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, since=date.fromisoformat(PAST_DATE), show_cancelled=True)
+
+    assert c.include_cancelled_calls == [True]
+    assert c.calls[0][:2] == ("bookings", PAST_DATE)
+    out = capsys.readouterr().out
+    assert "NUM1   cancelled" in out
+    assert "1 day(s) · 1 booking(s) · 1 in the past · 1 cancelled" in out
+
+
+def test_neither_flag_cancelled_journeys_are_not_shown(capsys):
     c = FakeClient()
     c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
 
@@ -503,7 +535,7 @@ def test_cancelled_legs_are_never_sent_to_seat_details(capsys):
     c = FakeClient()
     c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
 
-    handle_list_bookings(c, "TOKEN", {}, seat_details=True, since=date.fromisoformat(PAST_DATE))
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, show_cancelled=True)
 
     assert not any(call[0] == "seatmap" for call in c.calls)
     assert "NUM1   cancelled" in capsys.readouterr().out
@@ -522,7 +554,7 @@ def _full_segment(tag):
     return seg
 
 
-def test_since_mixed_listing_marks_only_the_cancelled_leg(capsys):
+def test_show_cancelled_mixed_listing_marks_only_the_cancelled_leg(capsys):
     # One active and one cancelled booking on the same day: the active leg's
     # cancelled cell must be dropped rather than shown as an em dash (the
     # normal placeholder for a missing value elsewhere), the cancelled leg
@@ -535,7 +567,7 @@ def test_since_mixed_listing_marks_only_the_cancelled_leg(capsys):
         _cancelled_booking_item("NUM2", [_full_segment("D2")]),
     ]
 
-    handle_list_bookings(c, "TOKEN", {}, seat_details=True, since=date.fromisoformat(PAST_DATE))
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, show_cancelled=True)
 
     assert c.calls.count(("seatmap", "ID-NUM1", "SM-D1")) == 1
     assert not any(call[0] == "seatmap" and call[2] == "SM-D2" for call in c.calls)

@@ -216,9 +216,12 @@ Use `--dry-run` to see what would happen: the flag previews `--book`,
 Use `--seat-details` together with `--list-bookings` to get seat information.
 
 Use `--since <date>` together with `--list-bookings` to list bookings back to
-a date instead of from today, cancelled bookings included (marked
-`cancelled`). The date can be a date (`2026-06-01`), an ISO week (`W38`,
-`2026-W38`), or an offset back from today (`90d`, `6m`).
+a date instead of from today. The date can be a date (`2026-06-01`), an ISO
+week (`W38`, `2026-W38`), or an offset back from today (`90d`, `6m`).
+
+Use `--show-cancelled` together with `--list-bookings` to also list cancelled
+bookings (marked `cancelled`). Combine it with `--since` to reach back past
+today.
 
 You can also skip copying the config file: run `--login` in a terminal and the
 tool offers to create the configuration for you, asking for your email and
@@ -245,7 +248,7 @@ the next login then needs the SMS step again.
 
 ```bash
 ./venv/bin/pip install -e . --group dev
-./venv/bin/pytest                                             # ~596 tests, <1 s, no network (scripted fake client)
+./venv/bin/pytest                                             # ~655 tests, <1 s, no network (scripted fake client)
 ./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatting
 ./venv/bin/mypy                                               # type check
 ```

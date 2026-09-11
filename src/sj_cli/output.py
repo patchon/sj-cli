@@ -550,7 +550,7 @@ def leg_lines(rows: list[dict]) -> list[str]:
     and cancels. "cancelled" (set to the literal "cancelled" or "") renders
     as a further column after the booking number, e.g. "… ABCD1234   cancelled";
     an uncancelled leg shows nothing there, not the em-dash placeholder
-    — used by --list-bookings --since for a leg read from a booking's
+    — used by --list-bookings --show-cancelled for a leg read from a booking's
     cancelledJourneys.
     The arrow is inferred from the route: a leg whose route is the reverse of
     the first leg's is a return (←); the API reports a standalone return

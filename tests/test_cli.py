@@ -124,6 +124,26 @@ def test_since_flag_validates_before_running(capsys):
     assert "'not-a-value' is not a date (YYYY-MM-DD)" in out
 
 
+def test_show_cancelled_is_a_modifier_not_an_operation(capsys):
+    # bare --show-cancelled: no operation given
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--show-cancelled"])
+    assert exc_info.value.code == 1
+    assert "no operation given" in capsys.readouterr().err
+    # composes with --list-bookings
+    args = parse_args(["--list-bookings", "--show-cancelled"])
+    assert args.list_bookings is True and args.show_cancelled is True
+    assert parse_args(["--list-bookings"]).show_cancelled is False
+
+
+def test_show_cancelled_rejected_for_modes_other_than_list_bookings(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--book", "--show-cancelled"])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "● --show-cancelled only applies to --list-bookings" in err
+
+
 def test_book_flag_parses():
     args = parse_args(["--book"])
     assert args.book is True
@@ -700,6 +720,31 @@ def test_since_appears_in_the_header_box_only_with_the_flag(tmp_path, monkeypatc
     assert "2026-06-01" in out
     cli._run(parse_args(["--list-bookings"]), _StubClient())
     assert "since" not in capsys.readouterr().out
+
+
+def test_show_cancelled_flag_is_passed_through_to_handle_list_bookings(tmp_path, monkeypatch):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    captured: dict = {}
+
+    def fake_list_bookings(*_a, show_cancelled=False, **_k):
+        captured["show_cancelled"] = show_cancelled
+
+    monkeypatch.setattr(cli, "handle_list_bookings", fake_list_bookings)
+    cli._run(parse_args(["--list-bookings", "--show-cancelled"]), _StubClient())
+    assert captured["show_cancelled"] is True
+    cli._run(parse_args(["--list-bookings"]), _StubClient())
+    assert captured["show_cancelled"] is False
+
+
+def test_show_cancelled_appears_in_the_header_box_only_with_the_flag(tmp_path, monkeypatch, capsys):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "handle_list_bookings", lambda *_a, **_k: None)
+    cli._run(parse_args(["--list-bookings", "--show-cancelled"]), _StubClient())
+    out = capsys.readouterr().out
+    assert "cancelled" in out
+    assert "shown" in out
+    cli._run(parse_args(["--list-bookings"]), _StubClient())
+    assert "cancelled" not in capsys.readouterr().out
 
 
 def test_list_travelpasses_shows_expired_passes_instead_of_failing(tmp_path, monkeypatch, capsys):
