@@ -5,7 +5,7 @@ import sys
 import time
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from sj_cli.auth import ensure_valid_token
 from sj_cli.client import SJClient
@@ -932,18 +932,21 @@ def fetch_bookings_with_spinner(
     *,
     label: str,
     trail: bool = True,
-    nth_day: tuple[int, int] | None = None,
+    nth: tuple[int, int] | None = None,
+    unit: Literal["day", "booking"] = "day",
 ) -> list:
     """
     ``fetch_all_bookings`` under a spinner that counts what is left to do.
 
-    Two counts share the live text, both live-only. ``nth_day`` is this fetch's
-    1-based place in a run that walks several dates: it renders as
-    ``label · day 3 of 28``, shown from the first frame and omitted for a
-    lone date, where ``day 1 of 1`` is noise. The page count follows it as
-    pages arrive, from the API's ``totalCount`` — composed, the two read
-    ``label · day 3 of 28 · 20 of 42`` (or ``· 20 so far`` should the total
-    be missing); a single page never changes the text.
+    Two counts share the live text, both live-only. ``nth`` is this fetch's
+    1-based place in a run that walks several items — ``unit`` names what is
+    being walked (``day`` for the date-walking modes, ``booking`` for
+    ``--cancel-booking``): it renders as ``label · day 3 of 28``, shown from
+    the first frame and omitted when the total is below 2, where ``day 1 of
+    1`` is noise. The page count follows it as pages arrive, from the API's
+    ``totalCount`` — composed, the two read ``label · day 3 of 28 · 20 of
+    42`` (or ``· 20 so far`` should the total be missing); a single page
+    never changes the text.
 
     The trail line, unless ``trail=False``, keeps the bare label: a count
     never lands in a log, and the closing status line is where a total
@@ -951,8 +954,8 @@ def fetch_bookings_with_spinner(
     """
     with spinner(label, trail=trail) as update:
         live = label
-        if nth_day is not None and nth_day[1] > 1:  # a lone date shows none: `day 1 of 1` is noise
-            live = f"{label} · day {nth_day[0]} of {nth_day[1]}"
+        if nth is not None and nth[1] > 1:  # a lone item shows none: `day 1 of 1` is noise
+            live = f"{label} · {unit} {nth[0]} of {nth[1]}"
             update(live)
 
         def counting(fetched: int, total: int | None) -> None:
@@ -2264,7 +2267,7 @@ def handle_cancel_mode(
     cfg: dict,
     cancel_date: str,
     dry_run: bool = False,
-    nth_day: tuple[int, int] | None = None,
+    nth: tuple[int, int] | None = None,
 ) -> bool:
     """
     Interactive cancellation for a specific date.
@@ -2278,7 +2281,7 @@ def handle_cancel_mode(
         cfg: The loaded configuration (its [search_parameters] give the route).
         cancel_date: Swedish date (YYYY-MM-DD) to cancel journeys on.
         dry_run: Preview only — never prompt, never call a cancel API.
-        nth_day: This date's place in a multi-date run, shown live as
+        nth: This date's place in a multi-date run, shown live as
             "· day 2 of 5"; None for a lone date.
 
     Returns:
@@ -2299,7 +2302,7 @@ def handle_cancel_mode(
         cancel_date,
         cancel_date,
         label=f"fetching bookings for {cancel_date}",
-        nth_day=nth_day,
+        nth=nth,
     )
 
     # Find booking numbers with a journey on the route (either direction)
@@ -2348,6 +2351,7 @@ def handle_cancel_booking(
     prefetched_bookings: list | None = None,
     dry_run: bool = False,
     only_date: str | None = None,
+    nth: tuple[int, int] | None = None,
 ) -> bool:
     """
     Cancel a booking by its booking number.
@@ -2367,6 +2371,9 @@ def handle_cancel_booking(
         only_date: Swedish date (YYYY-MM-DD); when given, only the journeys
             departing that day are shown and offered for cancellation
             (--cancel-date), the booking's other days are left untouched.
+        nth: This booking number's place in a multi-number run, shown live
+            as "· booking 2 of 3"; None for a lone number, and never used
+            when prefetched_bookings is given (no spinner runs there).
 
     Returns:
         True when the requested cancellation happened, nothing needed
@@ -2379,7 +2386,13 @@ def handle_cancel_booking(
     else:
         b_start, b_end = booking_date_range(travel_pass)
         all_bookings = fetch_bookings_with_spinner(
-            client, access_token, b_start, b_end, label=f"searching for booking {booking_number}"
+            client,
+            access_token,
+            b_start,
+            b_end,
+            label=f"searching for booking {booking_number}",
+            nth=nth,
+            unit="booking",
         )
 
     # Find the booking matching the booking number
@@ -2753,7 +2766,7 @@ def handle_change_seat(
                 day,
                 label=f"fetching bookings for {day}",
                 trail=False,
-                nth_day=(day_index, len(dates)),
+                nth=(day_index, len(dates)),
             )
             # Same matching as handle_cancel_mode: whole journeys (a change
             # still matches), on the route in either direction, that date.
@@ -3350,7 +3363,7 @@ def handle_upgrade_class(
                 day,
                 label=f"fetching bookings for {day}",
                 trail=False,
-                nth_day=(day_index, len(dates)),
+                nth=(day_index, len(dates)),
             )
 
             # Legs on the configured route (either direction), that date, not

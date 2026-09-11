@@ -119,18 +119,34 @@ def test_the_day_ordinal_shows_from_the_start_and_stays_out_of_the_trail(monkeyp
     out = TtyOut()
     monkeypatch.setattr(output.sys, "stdout", out)
     fetch_bookings_with_spinner(
-        _paged(1, None), "tok", "d", "d", label="fetching bookings for 2026-09-14", nth_day=(3, 28)
+        _paged(1, None), "tok", "d", "d", label="fetching bookings for 2026-09-14", nth=(3, 28)
     )
     text = out.getvalue()
     assert "fetching bookings for 2026-09-14 · day 3 of 28" in text
     assert text.endswith("\r\x1b[2K ✓ fetching bookings for 2026-09-14\n")
 
 
+def test_the_unit_word_names_what_is_being_walked(monkeypatch):
+    out = TtyOut()
+    monkeypatch.setattr(output.sys, "stdout", out)
+    fetch_bookings_with_spinner(
+        _paged(1, None),
+        "tok",
+        "d",
+        "d",
+        label="searching for booking EFGH5678",
+        nth=(2, 3),
+        unit="booking",
+    )
+    text = out.getvalue()
+    assert "searching for booking EFGH5678 · booking 2 of 3" in text
+
+
 def test_a_lone_day_shows_no_ordinal(monkeypatch):
     out = TtyOut()
     monkeypatch.setattr(output.sys, "stdout", out)
     fetch_bookings_with_spinner(
-        _paged(1, None), "tok", "d", "d", label="fetching bookings", nth_day=(1, 1)
+        _paged(1, None), "tok", "d", "d", label="fetching bookings", nth=(1, 1)
     )
     assert "day 1 of 1" not in out.getvalue()
     assert "fetching bookings" in out.getvalue()
@@ -140,7 +156,7 @@ def test_the_day_ordinal_and_the_page_count_compose(monkeypatch):
     out = TtyOut()
     monkeypatch.setattr(output.sys, "stdout", out)
     fetch_bookings_with_spinner(
-        _paged(3, 1), "tok", "d", "d", label="fetching bookings", trail=False, nth_day=(2, 5)
+        _paged(3, 1), "tok", "d", "d", label="fetching bookings", trail=False, nth=(2, 5)
     )
     text = out.getvalue()
     assert "fetching bookings · day 2 of 5 · 1 of 3" in text

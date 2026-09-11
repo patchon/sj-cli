@@ -782,7 +782,7 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                     cfg,
                     cancel_date,
                     dry_run=args.dry_run,
-                    nth_day=(i + 1, len(args.cancel_dates)),
+                    nth=(i + 1, len(args.cancel_dates)),
                 )
             if not ok:
                 print()
@@ -797,7 +797,12 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 if i:
                     blank()
                 ok &= handle_cancel_booking(
-                    client, access_token, active_pass, bn, dry_run=args.dry_run
+                    client,
+                    access_token,
+                    active_pass,
+                    bn,
+                    dry_run=args.dry_run,
+                    nth=(i + 1, len(args.cancel_booking_numbers)),
                 )
             if not ok:
                 print()

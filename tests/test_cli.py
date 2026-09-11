@@ -696,11 +696,24 @@ def test_cancel_date_passes_each_date_its_ordinal(tmp_path, monkeypatch):
     seen: list[tuple[int, int] | None] = []
 
     def _record(*_a, **kwargs):
-        seen.append(kwargs.get("nth_day"))
+        seen.append(kwargs.get("nth"))
         return True
 
     monkeypatch.setattr(cli, "handle_cancel_mode", _record)
     cli._run(parse_args(["--cancel-date", "2026-09-15,2026-09-16"]), _StubClient())
+    assert seen == [(1, 2), (2, 2)]
+
+
+def test_cancel_booking_passes_each_number_its_ordinal(tmp_path, monkeypatch):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    seen: list[tuple[int, int] | None] = []
+
+    def _record(*_a, **kwargs):
+        seen.append(kwargs.get("nth"))
+        return True
+
+    monkeypatch.setattr(cli, "handle_cancel_booking", _record)
+    cli._run(parse_args(["--cancel-booking", "ABCD1234,EFGH5678"]), _StubClient())
     assert seen == [(1, 2), (2, 2)]
 
 

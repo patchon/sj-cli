@@ -131,7 +131,7 @@ def test_cancel_date_forwards_the_day_ordinal(monkeypatch):
     out = TtyOut()
     monkeypatch.setattr(output.sys, "stdout", out)
     monkeypatch.setattr(booking, "fetch_all_bookings", lambda *_a, **_k: [])
-    assert handle_cancel_mode(FakeClient(), "tok", base_cfg(), "2026-10-05", nth_day=(2, 5)) is True
+    assert handle_cancel_mode(FakeClient(), "tok", base_cfg(), "2026-10-05", nth=(2, 5)) is True
     text = out.getvalue()
     assert "fetching bookings for 2026-10-05 · day 2 of 5" in text
     assert "\r\x1b[2K ✓ fetching bookings for 2026-10-05\n" in text
