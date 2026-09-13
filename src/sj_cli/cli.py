@@ -191,7 +191,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Modifier for --list-bookings: look up whether each past leg arrived on time, "
-            "and flag delays long enough to claim compensation for (thresholds in [delays])."
+            "and flag delays long enough to claim compensation for (thresholds in [delays]). "
+            "Costs up to four lookups per past leg, from external sources."
         ),
     )
     group = parser.add_mutually_exclusive_group()

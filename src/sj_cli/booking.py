@@ -3739,12 +3739,15 @@ def _add_seat_details(
 
 def _delay_leg(segment: dict) -> punctuality.Leg | None:
     """
-    The punctuality lookup's view of one booked segment, or None if it has no train.
+    The punctuality lookup's view of one booked segment, or None if it cannot be looked up.
 
-    Every source keys on the public train number, so a segment without one
-    cannot be looked up at all. The times are read as Swedish wall clock
-    (the travel day and the planned arrival minute) because that is how the
-    upstream sources write them.
+    Every source keys on the public train number, and SJ's own traffic
+    information is asked for a departure/arrival pair of UIC codes, so a
+    segment missing either has nothing to look up with. The times are read
+    as Swedish wall clock (the departure day and the planned arrival minute)
+    because that is how the upstream sources write them; a leg that crosses
+    midnight carries the arrival's own day as well, so a night train's
+    after-midnight arrival is still matched (punctuality.Leg.arrival_day).
     """
     train = segment.get("publicServiceName")
     if not train:
@@ -3752,6 +3755,11 @@ def _delay_leg(segment: dict) -> punctuality.Leg | None:
         return None
     dep_station = segment.get("departureStation") or {}
     arr_station = segment.get("arrivalStation") or {}
+    dep_uic = str(dep_station.get("uicStationCode") or "")
+    arr_uic = str(arr_station.get("uicStationCode") or "")
+    if not dep_uic or not arr_uic:
+        logger.debug(f"delay lookup: train {train} has no station codes, skipping")
+        return None
     try:
         dep_local = to_sweden(segment.get("departureDateTime") or "")
         arr_local = to_sweden(segment.get("arrivalDateTime") or "")
@@ -3767,9 +3775,10 @@ def _delay_leg(segment: dict) -> punctuality.Leg | None:
         train=str(train),
         date=dep_local.strftime("%Y-%m-%d"),
         planned_arrival=arr_local.strftime("%H:%M"),
-        dep_uic=str(dep_station.get("uicStationCode") or ""),
-        arr_uic=str(arr_station.get("uicStationCode") or ""),
+        dep_uic=dep_uic,
+        arr_uic=arr_uic,
         arr_short=arr_name,
+        arrival_date=arr_local.strftime("%Y-%m-%d"),
     )
 
 
@@ -3801,8 +3810,9 @@ def _add_delays(
         http: The client for the external sources. None (production) builds
             one here and closes it again; the tests inject theirs.
 
-    A leg with no train number, a source that will not answer and a lookup
-    that fails outright all end as "no data" — a punctuality cell is never
+    A leg that cannot be looked up at all (no train number, no station
+    codes), a source that will not answer and a lookup that fails outright
+    all end as "no data" — a punctuality cell is never
     worth breaking the listing over. The failures are reported as one
     aggregated `pwarn` afterwards, not one per leg.
 
@@ -3812,7 +3822,9 @@ def _add_delays(
         """Source 1, fetched through the SJ client; a refusal passes to the next source."""
         try:
             return client.get_traffic_segments(leg.dep_uic, leg.arr_uic, leg.train, leg.date)
-        except SJError as e:
+        except Exception as e:
+            # Not only SJError: the method raises httpx.HTTPError on a bad
+            # status too, and one source refusing is never the run failing.
             logger.debug(f"delay lookup: SJ traffic info refused {leg.train}/{leg.date}: {e}")
             return None
 
@@ -3829,6 +3841,10 @@ def _add_delays(
                     update(f"looking up delays · {done} of {total}")
                 leg = _delay_leg(segment)
                 if leg is None:
+                    # Nothing to ask with (no train number, no station
+                    # codes): say so in the cell rather than dropping it,
+                    # and send no request for it.
+                    row["delay"] = punctuality.verdict(None, thresholds).text
                     continue
                 try:
                     arrival = punctuality.lookup(

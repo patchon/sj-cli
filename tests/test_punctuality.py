@@ -367,6 +367,55 @@ def test_tagradar_passes_on_no_announcements():
     assert tagradar_worker(LEG, http) is None
 
 
+NIGHT = Leg(
+    train="123",
+    date="2026-09-11",
+    planned_arrival="06:10",
+    dep_uic="740000901",
+    arr_uic="740000902",
+    arr_short="Kvarnhöjden C",
+    arrival_date="2026-09-12",  # leaves 23:30, arrives after midnight
+)
+
+
+def test_a_night_trains_arrival_is_matched_on_the_day_it_arrives():
+    # the stop carries the *next* day, which is exactly right here: the run
+    # is keyed by its departure day, the arrival happens on the one after
+    assert NIGHT.arrival_day == "2026-09-12"
+    assert LEG.arrival_day == LEG.date  # the ordinary case is unchanged
+    body = worker_body(
+        advertised="06:10",
+        scheduledISO="2026-09-12T06:10:00+02:00",
+        actual="06:22",
+        actualISO="2026-09-12T06:22:00+02:00",
+    )
+    http, seen = transport({WORKER: body})
+    got = tagradar_worker(NIGHT, http)
+    assert got == Arrival(12, False, True, "tagradar", "06:10", "06:22")
+    assert dict(seen[0].url.params)["date"] == "2026-09-11"  # asked for the departure day
+
+    # and a bare HH:MM pair is dated by the arrival day too
+    http, _ = transport({WORKER: {**body, "stops": _no_iso_actual(body)}})
+    assert tagradar_worker(NIGHT, http).minutes_late == 12
+
+
+def _no_iso_actual(body):
+    stops = [dict(s) for s in body["stops"]]
+    stops[-1] = {**stops[-1], "arrival": {**stops[-1]["arrival"], "actualISO": None}}
+    return stops
+
+
+def test_tagradar_still_refuses_a_stop_dated_two_days_off():
+    body = worker_body(
+        advertised="06:10",
+        scheduledISO="2026-09-13T06:10:00+02:00",
+        actual="06:22",
+        actualISO="2026-09-13T06:22:00+02:00",
+    )
+    http, _ = transport({WORKER: body})
+    assert tagradar_worker(NIGHT, http) is None
+
+
 def test_tagradar_refuses_another_days_data():
     # the worker has been seen serving the next day's run for a date it no
     # longer holds: the stop's own scheduled date has to be the leg's date

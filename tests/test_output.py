@@ -1078,6 +1078,35 @@ def test_a_claim_cell_is_yellow_and_the_rest_dim(monkeypatch):
     assert "\x1b[1m" not in claim  # never bold: the booking number is the one emphasis
 
 
+def test_a_styled_delay_cell_carries_no_padding_inside_the_escape(monkeypatch):
+    # the cell is padded to the column width; styling the padded text would
+    # bury the trailing spaces inside the escape, where rstrip() cannot see
+    # them and the line would end with ~25 invisible characters
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    claim, on_time = leg_lines(_delay_rows())
+    for line in (claim, on_time):
+        assert not line.endswith(" ")
+        assert line.endswith("\x1b[0m")
+    assert "\x1b[2mon time\x1b[0m" in on_time  # the text alone, padding outside
+
+
+def test_a_cancelled_row_without_a_delay_keeps_the_marker_column_aligned():
+    # a booking-cancelled leg is never looked up, so its delay cell is empty;
+    # blanking it rather than dropping it keeps "cancelled" under "cancelled"
+    rows = _delay_rows()
+    rows[0]["cancelled"] = "cancelled"
+    rows[1]["cancelled"] = "cancelled"
+    rows[1]["delay"] = ""
+    lines = leg_lines(rows)
+    assert lines[0].index("cancelled") == lines[1].index("cancelled")
+    assert lines[1] == (
+        "← 17:22 – 21:53   NUM2   " + " " * len("64 min late · claim compensation") + "   cancelled"
+    )
+    # with nothing after it the empty cell is still dropped, not blanked
+    rows[1]["cancelled"] = ""
+    assert leg_lines(rows)[1] == "← 17:22 – 21:53   NUM2"
+
+
 def test_the_footer_counts_what_is_worth_claiming(capsys):
     rows = [{**row, "date": "2026-09-11", "duration": "4h"} for row in _delay_rows()]
     print_bookings_table(rows)

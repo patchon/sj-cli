@@ -82,11 +82,27 @@ class Leg:
     """One booked leg to look up: the train, the day, and where it should have arrived."""
 
     train: str
-    date: str  # YYYY-MM-DD, the leg's Swedish travel day
+    date: str  # YYYY-MM-DD, the leg's Swedish departure day — what every source is keyed by
     planned_arrival: str  # HH:MM, Swedish wall clock
     dep_uic: str
     arr_uic: str
     arr_short: str  # short station name, e.g. "Linköping C" — where a source keys by name
+    # The Swedish date the train is due to arrive, when that is not the
+    # departure day: a night train leaving 23:30 arrives on the next one.
+    # None means "the same day", which is the ordinary case.
+    arrival_date: str | None = None
+
+    @property
+    def arrival_day(self) -> str:
+        """
+        The Swedish date of the planned arrival — the departure day unless it crossed midnight.
+
+        Everything about the *arrival* is read against this: which day a
+        source's stop must be dated, and which day a bare ``HH:MM`` belongs
+        to. The request itself still goes out on ``date``, which is how the
+        sources index a run.
+        """
+        return self.arrival_date or self.date
 
 
 @dataclass(frozen=True)
@@ -354,7 +370,7 @@ def sj_arrival(leg: Leg, body: Any) -> Arrival | None:
         current = arrival.get("currentTime")
         if not stop.get("arrived") or not isinstance(current, str):
             continue
-        minutes = minutes_between(arrival.get("originalTime") or "", current, leg.date)
+        minutes = minutes_between(arrival.get("originalTime") or "", current, leg.arrival_day)
         if minutes is None:
             continue
         return Arrival(minutes, False, True, SOURCE_SJ, planned, clock(current))
@@ -429,7 +445,7 @@ def trafikverket(
         actual = stop.get("TimeAtLocation")
         if not isinstance(actual, str):
             return None
-        minutes = minutes_between(advertised, actual, leg.date)
+        minutes = minutes_between(advertised, actual, leg.arrival_day)
         if minutes is None:
             return None
         return Arrival(minutes, False, True, SOURCE_TRAFIKVERKET, planned, clock(actual))
@@ -452,7 +468,8 @@ def tagradar_worker(
     Two guards. A train it has no announcements for answers
     ``NO_TRAIN_ANNOUNCEMENTS`` rather than an error, and it has been seen
     serving the *next* day's run for a date it no longer holds — so the
-    matched stop's own scheduled date has to be the leg's date before its
+    matched stop's own scheduled date has to be the day the leg was due to
+    arrive (``arrival_day``, the next day for a night train) before its
     figure is believed.
     """
     try:
@@ -481,7 +498,7 @@ def tagradar_worker(
             return None
         arrival = stop.get("arrival") or {}
         scheduled = arrival.get("scheduledISO")
-        if not isinstance(scheduled, str) or _sweden_date(scheduled) != leg.date:
+        if not isinstance(scheduled, str) or _sweden_date(scheduled) != leg.arrival_day:
             logger.debug(f"punctuality: tagradar served another day for {leg.train}/{leg.date}")
             return None
         planned = clock(arrival.get("advertised")) or clock(scheduled) or leg.planned_arrival
@@ -489,10 +506,10 @@ def tagradar_worker(
             return Arrival(0, True, True, SOURCE_TAGRADAR, planned, None)
         if isinstance(arrival.get("actualISO"), str):
             actual = arrival["actualISO"]
-            minutes = minutes_between(scheduled, actual, leg.date)
+            minutes = minutes_between(scheduled, actual, leg.arrival_day)
         elif isinstance(arrival.get("actual"), str):
             actual = arrival["actual"]
-            minutes = minutes_between(arrival.get("advertised") or "", actual, leg.date)
+            minutes = minutes_between(arrival.get("advertised") or "", actual, leg.arrival_day)
         else:
             return None
         if minutes is None:
@@ -551,7 +568,7 @@ def tagstatistik_detail(
         planned = clock(stop.get("anktid")) or leg.planned_arrival
         status = stop.get("statusAnk")
         if status is None or status == "":
-            minutes = minutes_between(stop.get("anktid") or "", actual, leg.date)
+            minutes = minutes_between(stop.get("anktid") or "", actual, leg.arrival_day)
         else:
             minutes = -int(status)
         if minutes is None:

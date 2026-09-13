@@ -553,7 +553,10 @@ def leg_lines(rows: list[dict]) -> list[str]:
     or "") render as further columns after the booking number, e.g.
     "… ABCD1234   64 min late · claim compensation   cancelled"; a leg with
     neither shows nothing there, not the em-dash placeholder — absence is the
-    normal state for both. A delay cell worth claiming for ("claim" true) is
+    normal state for both. A booking-cancelled leg is never looked up, so in
+    a mixed listing its empty delay cell is kept as blank padding, to hold
+    the cancelled marker under the markers of the rows that do carry a
+    verdict. A delay cell worth claiming for ("claim" true) is
     drawn in the warning colour, since a past row is dim throughout and the
     cell would otherwise disappear into it.
     The arrow is inferred from the route: a leg whose route is the reverse of
@@ -600,12 +603,20 @@ def leg_lines(rows: list[dict]) -> list[str]:
         for name in sorted(tail_names, key=cols.index, reverse=True):
             picked[name] = cells.pop(cols.index(name) + 1)
         number = picked.get("booking_number")
-        delay = picked.get("delay")
-        if not row.get("delay"):
-            delay = None
         marker = picked.get("cancelled")
         if not row.get("cancelled"):
             marker = None
+        delay = picked.get("delay")
+        blank_delay = False
+        if not row.get("delay"):
+            # No verdict: drop the cell — unless a later cell follows on this
+            # row (a booking-cancelled leg is never looked up), where a blank
+            # of the column's width keeps that marker under the others.
+            if delay is not None and marker is not None:
+                delay = " " * widths["delay"]
+                blank_delay = True
+            else:
+                delay = None
         body = "   ".join(cells)
         if is_past:
             arrow = style(_ANSI_RE.sub("", arrow), DIM)
@@ -616,12 +627,18 @@ def leg_lines(rows: list[dict]) -> list[str]:
                 marker = style(_ANSI_RE.sub("", marker), DIM)
         elif number is not None:
             number = style(number, BOLD)
-        if delay is not None:
+        if delay is not None and not blank_delay:
             # A past row is dim throughout, so a verdict worth money would
             # drown in it: the claim cells take the same yellow the '!' line
             # uses. Never bold — the booking number is the line's one emphasis.
+            # Only the text is styled, with the column padding re-appended
+            # outside the escape: inside it, rstrip() cannot see the spaces
+            # and a short cell ending a line would trail invisible ones.
             plain = _ANSI_RE.sub("", delay)
-            delay = style(plain, YELLOW) if row.get("claim") else style(plain, DIM)
+            trimmed = plain.rstrip()
+            delay = style(trimmed, YELLOW if row.get("claim") else DIM) + " " * (
+                len(plain) - len(trimmed)
+            )
         tail = (
             (f"   {number}" if number is not None else "")
             + (f"   {delay}" if delay is not None else "")

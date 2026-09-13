@@ -9,6 +9,7 @@ import httpx
 from sj_cli import output, punctuality
 from sj_cli.booking import handle_list_bookings
 from sj_cli.dates import sweden_now, to_sweden
+from sj_cli.errors import SJAPIError
 from tests.fakes import FakeClient, TtyOut, seatmap
 
 # Computed from the real clock at test-run time so these dates are never
@@ -739,17 +740,79 @@ def test_no_source_answering_shows_no_data(capsys):
     assert "delay lookup failed" not in out  # nothing answering is not a failure
 
 
+def test_a_leg_that_cannot_be_looked_up_says_no_data(capsys):
+    # No train number and no station codes: nothing to ask any source with,
+    # so the cell says so instead of vanishing — and no request goes out.
+    for missing in ("publicServiceName", "stations"):
+        c = FakeClient()
+        segment = _segment(PAST_DATE, "D1")
+        if missing == "publicServiceName":
+            segment["publicServiceName"] = ""
+        else:
+            segment["departureStation"] = {"name": "Göteborg Central"}
+            segment["arrivalStation"] = {"name": "Stockholm Central"}
+        c.bookings_list = [_booking_item("NUM1", [segment])]
+        http, seen = _mock_http()
+
+        handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
+
+        assert not any(call[0] == "traffic" for call in c.calls)
+        assert seen == []
+        out = capsys.readouterr().out
+        assert "no data" in out
+        assert "delay lookup failed" not in out  # an unlookable leg is not a failure
+
+
+def test_delay_leg_reads_the_segment_the_sources_want():
+    from sj_cli.booking import _delay_leg
+
+    leg = _delay_leg(_segment(PAST_DATE, "D1"))
+    assert leg.train == "520"
+    assert leg.date == PAST_DATE  # the Swedish departure day
+    assert leg.planned_arrival == _at()  # HH:MM, Swedish wall clock
+    assert leg.dep_uic == "740000002"
+    assert leg.arr_uic == "740000001"
+    assert leg.arr_short == "Stockholm C"  # sources 4 and 5 name it the short way
+    assert leg.arrival_day == PAST_DATE
+
+
+def test_delay_leg_keeps_a_night_trains_arrival_on_the_next_day():
+    night = _segment(PAST_DATE, "D1", dep_time="23:30")
+    tomorrow = (date.fromisoformat(PAST_DATE) + timedelta(days=1)).isoformat()
+    night["arrivalDateTime"] = f"{tomorrow}T06:10:00+02:00"
+
+    from sj_cli.booking import _delay_leg
+
+    leg = _delay_leg(night)
+    assert leg.date == PAST_DATE  # every source keys the run by its departure day
+    assert leg.arrival_date == tomorrow
+    assert leg.arrival_day == tomorrow
+    assert leg.planned_arrival == to_sweden(f"{tomorrow}T06:10:00+02:00").strftime("%H:%M")
+
+
 def test_a_raising_traffic_lookup_degrades_to_no_data(capsys):
-    c = FakeClient()
-    c.traffic_error = RuntimeError("traffic info is down")
-    c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
-    http, _ = _mock_http()
+    # get_traffic_segments raises SJAPIError on an error envelope and
+    # httpx.HTTPStatusError on a bad status without one: both are one source
+    # refusing, which hands over to the next — never a failed lookup.
+    request = httpx.Request("POST", "https://prod-api.adp.sj.se/x")
+    errors = [
+        SJAPIError({"errorCode": "E1", "message": "traffic info is down"}),
+        httpx.HTTPStatusError(
+            "503", request=request, response=httpx.Response(503, request=request)
+        ),
+    ]
+    for error in errors:
+        c = FakeClient()
+        c.traffic_error = error
+        c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+        http, _ = _mock_http()
 
-    handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
+        handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
 
-    out = capsys.readouterr().out
-    assert "carriage 3 seat 39" in out  # the listing itself is unharmed
-    assert "no data" in out
+        out = capsys.readouterr().out
+        assert "carriage 3 seat 39" in out  # the listing itself is unharmed
+        assert "no data" in out
+        assert "delay lookup failed" not in out
 
 
 def test_an_unexpected_lookup_failure_warns_once(capsys):
@@ -772,6 +835,32 @@ def test_an_unexpected_lookup_failure_warns_once(capsys):
     assert out.count("no data") == 2
     assert out.count("delay lookup failed") == 1  # aggregated, not one per leg
     assert "! delay lookup failed for 2 leg(s)" in out
+
+
+def test_delays_composes_with_since_and_seat_details(capsys):
+    # a past leg gets both the seat words and the delay cell; a future leg is
+    # never looked up, so it keeps the seat words alone
+    c = FakeClient()
+    c.seatmaps["SM-D2"] = seatmap(assigned=("3", "39"), assigned_codes=["IDR", "TABLE", "WINDOW"])
+    c.traffic_segments[("520", PAST_DATE)] = _sj_body(minutes_late=64)
+    c.bookings_list = [
+        _booking_item("NUM1", [_segment(PAST_DATE, "D1")]),
+        _booking_item("NUM2", [_segment(FUTURE_DATE, "D2")]),
+    ]
+    http, _ = _mock_http()
+    since = date.fromisoformat(PAST_DATE)
+
+    handle_list_bookings(c, "TOKEN", {}, seat_details=True, delays=True, since=since, http=http)
+
+    assert c.calls[0] == ("bookings", PAST_DATE, c.calls[0][2])  # --since set the window
+    assert ("seatmap", "ID-NUM2", "SM-D2") in c.calls
+    assert ("seatmap", "ID-NUM1", "SM-D1") not in c.calls  # departed: no seat map fetched
+    out = capsys.readouterr().out
+    past, future = (line for line in out.splitlines() if "carriage 3 seat 39" in line)
+    assert "64 min late · claim compensation" in past
+    assert "carriage 3 seat 39 · table, window, forward" in future
+    assert "min late" not in future
+    assert "1 to claim" in out
 
 
 def test_an_injected_client_is_left_open_and_an_own_one_is_closed(monkeypatch):
