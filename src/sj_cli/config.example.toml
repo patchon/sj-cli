@@ -154,7 +154,7 @@ service_types = ["SJ_HIGH", "SJ_IC"]
 
 # Your own Trafikverket API key, one of the five sources. Optional and free:
 # register at data.trafikverket.se and paste the key here. Without it that
-# source is skipped and the other four still answer. Note that it is the one
-# source nobody has run yet: it stays unverified until a key has been used
-# once, so treat its first answers with a little suspicion.
+# source is skipped and the other four still answer. A key the service
+# rejects is reported once per run ("! trafikverket rejected the key"), since
+# every other source failure is quiet and a wrong key would look like one.
 #trafikverket_key = "your-trafikverket-key"

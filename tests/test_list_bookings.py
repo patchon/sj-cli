@@ -865,6 +865,42 @@ def test_delays_composes_with_since_and_seat_details(capsys):
     assert "1 to claim" in out
 
 
+def test_a_rejected_trafikverket_key_is_warned_about_once(capsys):
+    # every source is allowed to fail quietly, so a key the service refuses
+    # would be invisible: it is the one failure the user can fix, and it is
+    # said once for the whole run, however many legs hit it
+    rejection = {
+        "RESPONSE": {
+            "RESULT": [{"ERROR": {"SOURCE": "Security", "MESSAGE": "Invalid authentication"}}]
+        }
+    }
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if request.url.path == "/v2/data.json":
+            return httpx.Response(401, json=rejection, request=request)
+        return httpx.Response(404, json={"unreachable": 1}, request=request)
+
+    c = FakeClient()
+    c.bookings_list = [
+        _booking_item(
+            "NUM1",
+            [_segment(PAST_DATE, "D1"), _segment(PAST_DATE, "D2", dep_time="09:00")],
+        )
+    ]
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+
+    handle_list_bookings(c, "TOKEN", {}, delays=True, trafikverket_key="BAD", http=http)
+
+    out = capsys.readouterr().out
+    assert out.count("! trafikverket rejected the key") == 1
+    assert "check [delays].trafikverket_key or remove it" in out
+    assert seen.count("/v2/data.json") == 1  # the second leg never asked again
+    assert "no data" in out  # the listing still says what it knows
+    assert "delay lookup failed" not in out  # a rejected key is not a lookup failure
+
+
 def test_an_injected_client_is_left_open_and_an_own_one_is_closed(monkeypatch):
     # Production passes no client: _add_delays builds one and must close it again.
     built, _ = _mock_http()

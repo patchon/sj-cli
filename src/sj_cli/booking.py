@@ -3846,6 +3846,7 @@ def _add_delays(
     owned = http is None
     session = http if http is not None else punctuality.make_http()
     memo: dict[Any, Any] = {}
+    issues: list[str] = []
     today = sweden_now().date()
     failures = 0
     total = len(tasks)
@@ -3872,6 +3873,7 @@ def _add_delays(
                         trafikverket_key=trafikverket_key,
                         today=today,
                         memo=memo,
+                        issues=issues,
                     )
                 except Exception as e:
                     # The cascade already swallows a source failing; anything
@@ -3886,6 +3888,11 @@ def _add_delays(
         if owned:
             session.close()
 
+    # A problem the user can fix comes first, and only once however many
+    # legs hit it: a rejected Trafikverket key is a config mistake, not a
+    # source having a bad day.
+    for issue in issues:
+        pwarn(issue)
     if failures:
         pwarn(f"delay lookup failed for {failures} leg(s)")
 

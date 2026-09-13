@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from sj_cli.punctuality import (
+    ISSUE_TRAFIKVERKET_KEY,
     Arrival,
     Leg,
     Thresholds,
@@ -377,6 +378,76 @@ def test_trafikverket_escapes_a_value_for_the_xml_attribute():
     body = seen[0].content.decode()
     assert 'authenticationkey="k&amp;y&lt;&quot;x&quot;&gt;"' in body
     assert '<LOGIN authenticationkey="k&y' not in body  # never the raw value
+
+
+def trv_rejection():
+    """What the live service answers a bad or empty key: 401 and a Security ERROR."""
+    return (
+        401,
+        {
+            "RESPONSE": {
+                "RESULT": [{"ERROR": {"SOURCE": "Security", "MESSAGE": "Invalid authentication"}}]
+            }
+        },
+    )
+
+
+def test_trafikverket_reports_a_rejected_key_once_and_then_stops_asking():
+    # a key the service refuses would otherwise be invisible: every source
+    # is allowed to fail quietly, so this one failure is reported
+    memo, issues = {}, []
+    http, seen = transport({TRV: trv_rejection(), WORKER: worker_body()})
+    other = Leg("456", "2026-09-11", "09:42", "740000901", "740000902", "Kvarnhöjden C")
+
+    for leg in (LEG, other):
+        assert trafikverket(leg, http, "BAD-KEY", memo, issues) is None
+
+    assert issues == [ISSUE_TRAFIKVERKET_KEY]  # once, not once per leg
+    assert "check [delays].trafikverket_key or remove it" in issues[0]
+    assert paths(seen) == [TRV]  # the second leg never asked again
+
+
+def test_trafikverket_reports_a_security_error_behind_any_status():
+    memo, issues = {}, []
+    _status, body = trv_rejection()
+    http, seen = transport({TRV: (200, body)})
+    assert trafikverket(LEG, http, "BAD-KEY", memo, issues) is None
+    assert issues == [ISSUE_TRAFIKVERKET_KEY]
+    assert memo[("trafikverket", "rejected")] is True
+    assert len(seen) == 1
+
+
+def test_trafikverket_stays_quiet_about_an_error_of_its_own():
+    # a refused *query* is our bug, not the user's key: it passes like any
+    # other source that cannot answer, with nothing for the user to fix
+    memo, issues = {}, []
+    body = {"RESPONSE": {"RESULT": [{"ERROR": {"SOURCE": "Filter", "MESSAGE": "bad objecttype"}}]}}
+    http, _ = transport({TRV: (200, body)})
+    assert trafikverket(LEG, http, "GOOD-KEY", memo, issues) is None
+    assert issues == []
+    assert ("trafikverket", "rejected") not in memo
+
+
+def test_the_cascade_carries_on_past_a_rejected_key():
+    # the point of reporting it is that the run still answers: the worker
+    # does, for both legs, and the second one sends no trafikverket request
+    memo, issues = {}, []
+    http, seen = transport({TRV: trv_rejection(), WORKER: worker_body()})
+    night = Leg("123", "2026-09-11", "09:42", "740000901", "740000902", "Kvarnhöjden C")
+    for leg in (LEG, night):
+        got = lookup(
+            leg,
+            sj_segments=None,
+            http=http,
+            trafikverket_key="BAD-KEY",
+            today=TODAY,
+            memo=memo,
+            issues=issues,
+        )
+        assert got is not None
+        assert got.source == "tagradar"
+    assert issues == [ISSUE_TRAFIKVERKET_KEY]
+    assert paths(seen).count(TRV) == 1
 
 
 def test_trafikverket_passes_without_an_actual_time_and_reports_cancelled():

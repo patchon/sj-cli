@@ -8,7 +8,8 @@ runs. Five sources answer, first answer wins (``lookup``):
 1. SJ's own traffic-info service (passed in as a callable, so this module
    never talks to the SJ client), exact, reaches the travel day and the
    day after
-2. Trafikverket's open API, exact, ~4 days, needs a key — unverified
+2. Trafikverket's open API, exact, ~4 days, needs a key (a key it rejects
+   is the one failure reported rather than swallowed)
 3. the Tågradar worker, exact, ~4 days
 4. Tågstatistik's per-train detail, exact, ~4 days
 5. Tågstatistik's yearly summary, the train's *final* stop, ~1 year
@@ -87,6 +88,17 @@ SOURCE_LABELS = {
     # Tågstatistik lives at statistik.tågexperterna.nu; its backend host (tydalsystems.se)
     # is not a name a reader knows, so the label is the site's apex domain like the others.
 }
+
+# A problem only the user can fix, said once per run rather than per leg.
+# Trafikverket is the only source with a credential to get wrong; the rest
+# need none, so their silence is never the user's fault.
+ISSUE_TRAFIKVERKET_KEY = (
+    "trafikverket rejected the key · check [delays].trafikverket_key or remove it"
+)
+
+# Memo entry remembering that the key was rejected: once is enough, and
+# every later leg then skips the source without a request.
+_TRAFIKVERKET_REJECTED = (SOURCE_TRAFIKVERKET, "rejected")
 
 _TIME = re.compile(r"(?<!\d)([01]\d|2[0-3]):([0-5]\d)(?!\d)")
 
@@ -349,6 +361,46 @@ def _fetch_json(
         return None
 
 
+def _note_issue(issues: list[str] | None, message: str) -> None:
+    """Record a user-fixable problem, once per run — the caller prints each one."""
+    if issues is not None and message not in issues:
+        issues.append(message)
+
+
+def _post_trafikverket(http: httpx.Client, content: bytes) -> tuple[int | None, Any]:
+    """
+    Trafikverket's answer as (status, parsed body) — never raising, never hiding.
+
+    Unlike the other sources this one has a credential to get wrong, and it
+    says so in the *body* of a 401 (``ERROR.SOURCE == "Security"``). Both
+    halves have to reach the adapter, so this returns them rather than
+    folding a bad status into None: a status of None means the request or
+    the decoding failed outright.
+    """
+    try:
+        response = http.post(
+            URL_TRAFIKVERKET, headers={"Content-Type": "text/xml"}, content=content
+        )
+    except Exception as e:  # a network failure means this source passes
+        logger.debug(f"punctuality: POST {URL_TRAFIKVERKET} failed: {type(e).__name__}: {e}")
+        return None, None
+    try:
+        return response.status_code, response.json()
+    except ValueError:
+        logger.debug(f"punctuality: trafikverket answered {response.status_code} with no json")
+        return response.status_code, None
+
+
+def _trafikverket_error(body: Any) -> str | None:
+    """The SOURCE of the ERROR a Trafikverket response carries, if it carries one."""
+    if not isinstance(body, dict):
+        return None
+    for result in (body.get("RESPONSE") or {}).get("RESULT") or []:
+        if isinstance(result, dict) and isinstance(result.get("ERROR"), dict):
+            return str(result["ERROR"].get("SOURCE") or "")
+    return None
+
+
 def _cached(memo: dict[Any, Any] | None, key: tuple[str, ...], fetch: Callable[[], Any]) -> Any:
     """
     One fetch per (source, train, date) in a run — two legs on a train share it.
@@ -445,30 +497,49 @@ def trafikverket_query(leg: Leg, key: str) -> str:
 
 
 def trafikverket(
-    leg: Leg, http: httpx.Client, key: str, memo: dict[Any, Any] | None = None
+    leg: Leg,
+    http: httpx.Client,
+    key: str,
+    memo: dict[Any, Any] | None = None,
+    issues: list[str] | None = None,
 ) -> Arrival | None:
     """
     Trafikverket's open API: the exact arrival at our stop, about four days back.
 
-    **Unverified.** Nobody has run this against the live service yet — it
-    needs a personal API key (``[delays].trafikverket_key``, free from
-    data.trafikverket.se) and there is none to test with. The request and
-    the response shaping follow the published schema (TrainAnnouncement,
-    schemaversion 1.9) and are unit-tested against a canned body; treat the
-    first live run as the verification.
+    Needs a personal API key (``[delays].trafikverket_key``, free from
+    data.trafikverket.se); the request follows the published schema
+    (TrainAnnouncement, schemaversion 1.9). Verified against the live
+    service on 2026-09-13.
+
+    A key the service rejects would otherwise be invisible — every source is
+    allowed to fail quietly — so it is the one failure reported: a 401, or
+    any status whose body carries an ``ERROR`` from ``SOURCE "Security"``,
+    appends ``ISSUE_TRAFIKVERKET_KEY`` to ``issues`` once and marks the run's
+    memo, after which every later leg skips this source without a request.
+    An ``ERROR`` from any other source is our query's fault, not the user's,
+    and passes quietly like anything else.
     """
     try:
-        body = _cached(
+        if memo is not None and memo.get(_TRAFIKVERKET_REJECTED):
+            return None
+        status, body = _cached(
             memo,
             (SOURCE_TRAFIKVERKET, leg.train, leg.date),
-            lambda: _fetch_json(
-                http,
-                "POST",
-                URL_TRAFIKVERKET,
-                headers={"Content-Type": "text/xml"},
-                content=trafikverket_query(leg, key).encode("utf-8"),
-            ),
+            lambda: _post_trafikverket(http, trafikverket_query(leg, key).encode("utf-8")),
         )
+        error_source = _trafikverket_error(body)
+        if status == 401 or error_source == "Security":
+            logger.debug(f"punctuality: trafikverket rejected the key (status {status})")
+            _note_issue(issues, ISSUE_TRAFIKVERKET_KEY)
+            if memo is not None:
+                memo[_TRAFIKVERKET_REJECTED] = True
+            return None
+        if error_source:
+            logger.debug(f"punctuality: trafikverket refused the query ({error_source})")
+            return None
+        if status is None or status >= 400:
+            logger.debug(f"punctuality: trafikverket answered {status}")
+            return None
         if not isinstance(body, dict):
             return None
         announcements: list[Any] = []
@@ -687,6 +758,7 @@ def lookup(
     trafikverket_key: str | None,
     today: date,
     memo: dict[Any, Any],
+    issues: list[str] | None = None,
 ) -> Arrival | None:
     """
     Ask each source in turn for the leg's actual arrival; the first answer wins.
@@ -697,6 +769,8 @@ def lookup(
     traffic-info fetch (None skips the source, e.g. with no token at hand)
     and ``trafikverket_key`` skips its source when absent. ``memo`` is
     shared across the whole run, so two legs on one train fetch once.
+    ``issues`` collects the problems only the user can fix (a rejected
+    Trafikverket key), once each, for the caller to print.
 
     Returns None when no source answered — the caller renders that as
     ``no data``, which is not the same thing as ``on time``.
@@ -726,7 +800,7 @@ def lookup(
             )
         if trafikverket_key:
             key = trafikverket_key
-            steps.append((SOURCE_TRAFIKVERKET, lambda: trafikverket(leg, http, key, memo)))
+            steps.append((SOURCE_TRAFIKVERKET, lambda: trafikverket(leg, http, key, memo, issues)))
         steps.append((SOURCE_TAGRADAR, lambda: tagradar_worker(leg, http, memo)))
         steps.append((SOURCE_TAGSTATISTIK, lambda: tagstatistik_detail(leg, http, memo)))
     steps.append((SOURCE_TAGSTATISTIK_SUMMARY, lambda: tagstatistik_summary(leg, http, memo)))

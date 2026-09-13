@@ -236,7 +236,7 @@ true. From `compensation_minutes` (60 by default, see `[delays]`) the cell adds
 `+64 min · claim compensation (tagradar.nu)`. The cell is coloured by meaning —
 green on time, yellow late, orange for what is worth claiming for. The data
 comes from five sources in turn: SJ's traffic info, Trafikverket's open data
-(with your own key — that source is unverified until a key has been used once),
+(with your own key; a key the service rejects is reported once per run),
 Tågradar and Tågstatistik's two services; the exact arrival at your station exists for about four days, after which the
 train's final-stop time is shown as an indication
 (`final stop +78 min · likely, verify`). Nothing is stored between runs.
