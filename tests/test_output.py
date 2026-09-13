@@ -1103,6 +1103,30 @@ def test_the_delay_cell_is_coloured_by_what_it_means(monkeypatch):
     )
 
 
+def test_the_cancelled_marker_follows_the_row_not_the_cell(monkeypatch):
+    # a past leg is dim throughout, marker included; a future cancelled leg
+    # sits on a bright row and keeps a plain marker
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    rows = _delay_rows()
+    for row in rows:
+        row.update(cancelled="cancelled", delay="", delay_source="", delay_tone="none")
+    rows[1]["past"] = "N"
+    past, future = leg_lines(rows)
+    assert "\x1b[2mcancelled\x1b[0m" in past
+    assert "\x1b[2mcancelled\x1b[0m" not in future
+    assert future.endswith("cancelled")
+
+
+def test_the_optional_tail_columns_are_the_last_leg_columns():
+    # They render outside the joined body, pulled out by name: a column
+    # inserted between the booking number and them would silently be printed
+    # in the body instead, so the two lists have to stay in step.
+    columns = list(output._LEG_COLUMNS)
+    tail = list(output._TAIL_OPTIONAL)
+    assert columns[-len(tail) :] == tail
+    assert columns[-len(tail) - 1] == "booking_number"
+
+
 def test_the_source_label_is_named_after_the_verdict():
     rows = _delay_rows()
     assert leg_lines(rows)[0].endswith("(tagradar.nu)")

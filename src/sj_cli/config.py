@@ -338,6 +338,8 @@ class CfgManager:
         there has to make sense: the threshold is a whole number of minutes,
         at least 1 (there is no tolerance band to be greater than: a verdict
         reports the signed minutes and only the claim note is a threshold).
+        The dropped `on_time_minutes` key gets a migration hint rather than
+        silence, the way `date_start`/`date_end` do.
         """
         delays = cfg.get("delays")
         if delays is None:
@@ -345,6 +347,15 @@ class CfgManager:
         if not isinstance(delays, dict):
             errors.append("[delays] must be a section")
             return
+
+        if "on_time_minutes" in delays:
+            # Dropped when the verdict became honest about every minute; a
+            # standing config would otherwise keep it silently, like the old
+            # date_start/date_end keys, so say what happened to it.
+            errors.append(
+                "on_time_minutes was dropped: a verdict reports the signed minutes, "
+                '"on time" means exactly on the minute'
+            )
 
         value = delays.get("compensation_minutes")
         if value is not None:

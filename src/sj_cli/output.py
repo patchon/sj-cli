@@ -662,9 +662,15 @@ def leg_lines(rows: list[dict]) -> list[str]:
             plain = _ANSI_RE.sub("", cell)
             trimmed = plain.rstrip()
             # The delay cell is coloured by meaning, never bold (the booking
-            # number is the line's one emphasis) and never dimmed by the row;
-            # the source label and the cancelled marker are dim.
-            painted = _delay_styled(row, trimmed) if name == "delay" else style(trimmed, DIM)
+            # number is the line's one emphasis) and never dimmed by the row.
+            # The source label is dim always — provenance, not news — while
+            # the cancelled marker follows the row, plain on a future leg.
+            if name == "delay":
+                painted = _delay_styled(row, trimmed)
+            elif name == "delay_source" or is_past:
+                painted = style(trimmed, DIM)
+            else:
+                painted = trimmed
             tail += "   " + painted + " " * (len(plain) - len(trimmed))
         line = f"{arrow} {body}{tail}"
         lines.append(line.rstrip())
@@ -722,7 +728,9 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
         bookings: Leg rows (sorted by departure) with keys: date, direction,
                   departure, arrival, duration, comfort_class, route,
                   booking_number, past ("Y"/"N"), and optionally train, seat,
-                  delay (with claim), cancelled ("cancelled" or "").
+                  delay (with claim, delay_tone and delay_source — the
+                  verdict, how it reads and the site it came from),
+                  cancelled ("cancelled" or "").
         summary: Print the "N day(s) · N booking(s) · …" footer line.
 
     """

@@ -240,9 +240,9 @@ och `-1 min` för ett tåg som kom före tiden, vilket är lika sant. Från
 `· claim compensation` till. Efter omdömet står källan inom parentes:
 `+64 min · claim compensation (tagradar.nu)`. Cellen färgas efter innebörd —
 grönt i tid, gult försenat, orange det som är värt att söka ersättning för.
-Uppgifterna hämtas från SJ:s trafikinfo, Trafikverkets öppna data (med egen
-nyckel — den källan är oprövad tills en nyckel har använts en gång) och
-Tågstatistik; exakt ankomst till din station finns i ungefär fyra dagar,
+Uppgifterna hämtas från fem källor i tur och ordning: SJ:s trafikinfo,
+Trafikverkets öppna data (med egen nyckel — den källan är oprövad tills en
+nyckel har använts en gång), Tågradar och Tågstatistiks två tjänster; exakt ankomst till din station finns i ungefär fyra dagar,
 därefter visas tågets slutstationstid som en indikation
 (`final stop +78 min · likely, verify`). Inget sparas mellan körningarna.
 

@@ -376,13 +376,18 @@ def test_delays_rejects_non_integer_and_out_of_range_minutes():
     verify(delays_cfg(compensation_minutes=1))
 
 
-def test_delays_has_no_on_time_threshold_to_configure():
-    # dropped on purpose: a verdict reports the signed minutes, so there is
-    # no tolerance band to set. An unknown key is simply ignored, as ever.
-    cfg = delays_cfg(on_time_minutes=30)
-    verify(cfg)
-    assert delay_thresholds(cfg) == Thresholds(60)
-    assert not hasattr(Thresholds(), "on_time")
+def test_delays_rejects_the_dropped_on_time_key_with_a_hint():
+    # Dropped when the verdict became honest about every minute. A standing
+    # config would otherwise keep it silently, so it gets a migration hint,
+    # the way date_start/date_end do.
+    msg = errors_of(delays_cfg(on_time_minutes=30))
+    assert "on_time_minutes was dropped" in msg
+    assert '"on time" means exactly on the minute' in msg
+    assert not hasattr(Thresholds(), "on_time")  # and nothing reads it any more
+    # the rest of the section is still validated alongside it
+    both = errors_of(delays_cfg(on_time_minutes=5, compensation_minutes=0))
+    assert "on_time_minutes was dropped" in both
+    assert "compensation_minutes must be at least 1" in both
 
 
 def test_delays_rejects_an_empty_key_and_a_non_section():
