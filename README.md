@@ -233,12 +233,12 @@ lista avbokade bokningar (markerade `cancelled`). Går att kombinera med
 `--since` för att nå längre bakåt än idag.
 
 Med `--delays` tillsammans med `--list-bookings` slår verktyget upp, direkt när
-du kör, om varje tidigare resa kom fram i tid. `on time` betyder att tåget kom 
-på utsatt minut, allt annat visas med tecken — `+11 min` för ett tåg som kom 
-efter tiden, och `-1 min` för ett tåg som kom före utsatt tid. 
+du kör, om varje tidigare resa kom fram i tid. `on time` betyder att tåget kom
+på utsatt minut, allt annat visas med tecken — `+11 min` för ett tåg som kom
+efter tiden, och `-1 min` för ett tåg som kom före utsatt tid.
 
-Om `compensation_minutes` (60 som standard, se `[delays]`) överskrids, läggs 
-texten `· claim compensation` till. Efter omdömet står källan inom parentes 
+Om `compensation_minutes` (60 som standard, se `[delays]`) överskrids, läggs
+texten `· claim compensation` till. Efter omdömet står källan inom parentes
 `+64 min · claim compensation (tagradar.nu)`. Texten färgas efter innebörd —
 grönt i tid, gult försenat samt orange för det som är värt att söka ersättning
 för. Uppgifterna hämtas från fem källor i tur och ordning: SJ:s trafikinfo,

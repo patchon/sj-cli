@@ -231,7 +231,9 @@ With `--delays` together with `--list-bookings` the tool looks up, live as it
 runs, whether each past leg arrived on time. No tolerance is hidden: `on time`
 means the train arrived on its planned minute, and anything else is shown with
 its sign — `+11 min`, and `-1 min` for a train that was early, which is just as
-true. From `compensation_minutes` (60 by default, see `[delays]`) the cell adds
+true.
+
+From `compensation_minutes` (60 by default, see `[delays]`) the cell adds
 `· claim compensation`. The source is named after the verdict, in parentheses:
 `+64 min · claim compensation (tagradar.nu)`. The cell is coloured by meaning —
 green on time, yellow late, orange for what is worth claiming for. The data
