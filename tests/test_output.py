@@ -1021,3 +1021,74 @@ def test_select_list_keeps_a_typed_prefix_past_a_refused_row(capsys):
     assert select_list("outbound", short, str, reject=reject, keys=iter(["2", "enter"])) == "05:29"
     f = frames(capsys.readouterr().out)
     assert f[1].startswith(" ? outbound [1]: \n") and "held" in f[1]  # no row 2x: typed dropped
+
+
+# --- the --delays punctuality cell -----------------------------------------
+
+
+def _delay_rows():
+    return [
+        {
+            "departure": "06:59",
+            "arrival": "11:36",
+            "route": "A → B",
+            "booking_number": "NUM1",
+            "delay": "64 min late · claim compensation",
+            "claim": True,
+            "past": "Y",
+        },
+        {
+            "departure": "17:22",
+            "arrival": "21:53",
+            "route": "B → A",
+            "booking_number": "NUM2",
+            "delay": "on time",
+            "claim": False,
+            "past": "Y",
+        },
+    ]
+
+
+def test_delay_cell_sits_after_the_booking_number_and_before_the_cancelled_marker():
+    rows = _delay_rows()
+    rows[0]["cancelled"] = "cancelled"
+    assert leg_lines(rows) == [
+        "→ 06:59 – 11:36   NUM1   64 min late · claim compensation   cancelled",
+        "← 17:22 – 21:53   NUM2   on time",  # trailing padding is stripped
+    ]
+
+
+def test_a_leg_without_a_delay_drops_the_cell_entirely():
+    rows = _delay_rows()
+    rows[1]["delay"] = ""  # not looked up (not departed, or no train number)
+    lines = leg_lines(rows)
+    assert lines[0] == "→ 06:59 – 11:36   NUM1   64 min late · claim compensation"
+    assert lines[1] == "← 17:22 – 21:53   NUM2"  # no em-dash placeholder either
+    assert "—" not in "".join(lines)
+
+
+def test_a_claim_cell_is_yellow_and_the_rest_dim(monkeypatch):
+    monkeypatch.setattr(output, "color_enabled", lambda: True)
+    claim, on_time = leg_lines(_delay_rows())
+    # the warning colour, the same one the '!' line uses — a past row is dim
+    # throughout and the cell would otherwise disappear into it
+    assert "\x1b[93m64 min late · claim compensation\x1b[0m" in claim
+    assert "\x1b[2mon time" in on_time
+    assert "\x1b[93m" not in on_time
+    assert "\x1b[1m" not in claim  # never bold: the booking number is the one emphasis
+
+
+def test_the_footer_counts_what_is_worth_claiming(capsys):
+    rows = [{**row, "date": "2026-09-11", "duration": "4h"} for row in _delay_rows()]
+    print_bookings_table(rows)
+    out = capsys.readouterr().out
+    assert "2 day(s) · 2 booking(s)" not in out  # one day, two bookings
+    assert "1 day(s) · 2 booking(s) · 2 in the past · 1 to claim" in out
+
+
+def test_the_footer_omits_the_claim_term_when_nothing_is_worth_claiming(capsys):
+    rows = [
+        {**row, "date": "2026-09-11", "claim": False, "delay": "on time"} for row in _delay_rows()
+    ]
+    print_bookings_table(rows)
+    assert "to claim" not in capsys.readouterr().out

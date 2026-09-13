@@ -7,6 +7,9 @@ from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, TypedDict
 
+import httpx
+
+from sj_cli import punctuality
 from sj_cli.auth import ensure_valid_token
 from sj_cli.client import SJClient
 from sj_cli.config import SERVICE_TYPE_NAMES
@@ -374,8 +377,10 @@ def _segment_to_display_row(
 
     Returns:
         Display row dict with keys: date, direction, departure, arrival,
-        duration, comfort_class, flexibility, route, booking_number,
-        cancelled, past, train, seat.
+        duration, comfort_class, flexibility, route, booking_number, delay,
+        claim, cancelled, past, train, seat. "delay"/"claim" start empty on
+        every row, the way "cancelled" does, so the column is uniform;
+        --list-bookings --delays fills them in for a departed leg.
 
     """
     # API says OUTBOUND/INBOUND; the UI (and the dry-run table) says Outbound/Return
@@ -433,6 +438,8 @@ def _segment_to_display_row(
         "flexibility": flexibility,
         "route": f"{dep_station} → {arr_station}",
         "booking_number": booking_number,
+        "delay": "",
+        "claim": False,
         "cancelled": "cancelled" if cancelled else "",
         "past": in_past,
         "train": train,
@@ -3730,6 +3737,126 @@ def _add_seat_details(
         pwarn(f"seat details unavailable for {failures} leg(s)")
 
 
+def _delay_leg(segment: dict) -> punctuality.Leg | None:
+    """
+    The punctuality lookup's view of one booked segment, or None if it has no train.
+
+    Every source keys on the public train number, so a segment without one
+    cannot be looked up at all. The times are read as Swedish wall clock
+    (the travel day and the planned arrival minute) because that is how the
+    upstream sources write them.
+    """
+    train = segment.get("publicServiceName")
+    if not train:
+        logger.debug("delay lookup: segment has no public train number, skipping")
+        return None
+    dep_station = segment.get("departureStation") or {}
+    arr_station = segment.get("arrivalStation") or {}
+    try:
+        dep_local = to_sweden(segment.get("departureDateTime") or "")
+        arr_local = to_sweden(segment.get("arrivalDateTime") or "")
+    except (ValueError, TypeError) as e:
+        logger.debug(f"delay lookup: unreadable times on train {train}: {e}")
+        return None
+    arr_name = str(arr_station.get("name") or "")
+    # Sources 4 and 5 name stations the short way ("Linköping C"), SJ the
+    # long way ("Linköping Central"); only the suffix differs.
+    if arr_name.endswith(" Central"):
+        arr_name = f"{arr_name[: -len(' Central')]} C"
+    return punctuality.Leg(
+        train=str(train),
+        date=dep_local.strftime("%Y-%m-%d"),
+        planned_arrival=arr_local.strftime("%H:%M"),
+        dep_uic=str(dep_station.get("uicStationCode") or ""),
+        arr_uic=str(arr_station.get("uicStationCode") or ""),
+        arr_short=arr_name,
+    )
+
+
+def _add_delays(
+    client: SJClient,
+    tasks: list[tuple[dict, dict]],
+    thresholds: punctuality.Thresholds,
+    trafikverket_key: str | None = None,
+    http: httpx.Client | None = None,
+) -> None:
+    """
+    Look each departed leg's actual arrival up and fill in its punctuality cell.
+
+    Sets the row's "delay" text ("on time", "12 min late", "64 min late ·
+    claim compensation", a final-stop indication, or "no data") and its
+    "claim" flag, for --delays. Nothing is stored between runs: every leg is
+    looked up live, through punctuality.lookup's cascade of sources, with one
+    memo shared by the whole run so two legs on the same train fetch once.
+    The spinner counts the legs as it goes (live-only, while legs remain).
+
+    Args:
+        client: The SJ HTTP client — source 1 (SJ's traffic info) is its
+            get_traffic_segments; the other sources are external and go
+            through `http`.
+        tasks: (row, segment) for every past, uncancelled leg to look up.
+        thresholds: The two minute thresholds from [delays] the verdict is
+            read against.
+        trafikverket_key: [delays].trafikverket_key; None skips that source.
+        http: The client for the external sources. None (production) builds
+            one here and closes it again; the tests inject theirs.
+
+    A leg with no train number, a source that will not answer and a lookup
+    that fails outright all end as "no data" — a punctuality cell is never
+    worth breaking the listing over. The failures are reported as one
+    aggregated `pwarn` afterwards, not one per leg.
+
+    """
+
+    def sj_segments(leg: punctuality.Leg) -> dict[str, Any] | None:
+        """Source 1, fetched through the SJ client; a refusal passes to the next source."""
+        try:
+            return client.get_traffic_segments(leg.dep_uic, leg.arr_uic, leg.train, leg.date)
+        except SJError as e:
+            logger.debug(f"delay lookup: SJ traffic info refused {leg.train}/{leg.date}: {e}")
+            return None
+
+    owned = http is None
+    session = http if http is not None else punctuality.make_http()
+    memo: dict[Any, Any] = {}
+    today = sweden_now().date()
+    failures = 0
+    total = len(tasks)
+    try:
+        with spinner("looking up delays", trail=False) as update:
+            for done, (row, segment) in enumerate(tasks):
+                if done:  # legs handled so far, only while more remain
+                    update(f"looking up delays · {done} of {total}")
+                leg = _delay_leg(segment)
+                if leg is None:
+                    continue
+                try:
+                    arrival = punctuality.lookup(
+                        leg,
+                        sj_segments=sj_segments,
+                        http=session,
+                        trafikverket_key=trafikverket_key,
+                        today=today,
+                        memo=memo,
+                    )
+                except Exception as e:
+                    # The cascade already swallows a source failing; anything
+                    # reaching here is unexpected, so it is worth a warning.
+                    logger.warning(f"delay lookup failed for {leg.train}/{leg.date}: {e}")
+                    failures += 1
+                    row["delay"] = punctuality.verdict(None, thresholds).text
+                    continue
+                decided = punctuality.verdict(arrival, thresholds)
+                row["delay"] = decided.text
+                row["claim"] = decided.claim
+    finally:
+        if owned:
+            session.close()
+
+    if failures:
+        pwarn(f"delay lookup failed for {failures} leg(s)")
+
+
 def handle_list_bookings(
     client: SJClient,
     access_token: str,
@@ -3739,6 +3866,10 @@ def handle_list_bookings(
     *,
     since: date | None = None,
     show_cancelled: bool = False,
+    delays: bool = False,
+    thresholds: punctuality.Thresholds | None = None,
+    trafikverket_key: str | None = None,
+    http: httpx.Client | None = None,
 ) -> None:
     """
     Fetch and display all active bookings per SPEC §5.4 (the caller prints the title).
@@ -3763,6 +3894,17 @@ def handle_list_bookings(
             rather than `journeys`, so those legs are rendered separately
             with a "cancelled" marker. False (the default) leaves cancelled
             bookings out, as before. Composes with `since`.
+        delays: With True, look up how late every departed leg actually was
+            and put the verdict in its own cell (see _add_delays), plus
+            "· N to claim" in the footer. Live lookups, nothing stored
+            between runs. Composes with `since`, `show_cancelled` and
+            `seat_details`.
+        thresholds: The [delays] minute thresholds (config.delay_thresholds);
+            None means the defaults. Only read when `delays` is on.
+        trafikverket_key: [delays].trafikverket_key, or None to skip that
+            source. Only read when `delays` is on.
+        http: The HTTP client for the external delay sources. None (production)
+            lets _add_delays build and close its own; the tests inject theirs.
 
     """
     range_start, b_end = booking_date_range(travel_pass)
@@ -3782,6 +3924,7 @@ def handle_list_bookings(
     now = sweden_now()
     display_rows = []
     seat_tasks: list[tuple[dict, str, str]] = []
+    delay_tasks: list[tuple[dict, dict]] = []
     for item in all_bookings:
         booking = item.get("booking") or {}
         if not is_active_booking(booking):
@@ -3802,10 +3945,14 @@ def handle_list_bookings(
                     and row["past"] == "N"
                 ):
                     seat_tasks.append((row, booking_id, search_id))
+                # Only a leg that has actually run can have been late.
+                if delays and row["past"] == "Y":
+                    delay_tasks.append((row, segment))
 
         # Cancelled journeys sit in a sibling list, same shape as journeys —
         # only rendered when --show-cancelled asked for them; a cancelled
-        # leg has no seat to read, so it never joins seat_tasks.
+        # leg has no seat to read and was never travelled, so it joins
+        # neither seat_tasks nor delay_tasks.
         if show_cancelled:
             for journey in booking.get("cancelledJourneys") or []:
                 for segment in journey.get("segments") or []:
@@ -3819,6 +3966,15 @@ def handle_list_bookings(
 
     if seat_tasks:
         _add_seat_details(client, access_token, seat_tasks, seat_preference)
+
+    if delay_tasks:
+        _add_delays(
+            client,
+            delay_tasks,
+            thresholds or punctuality.Thresholds(),
+            trafikverket_key,
+            http,
+        )
 
     # Sort by date, then departure time
     display_rows.sort(key=lambda r: r.pop("_sort_key", ""))

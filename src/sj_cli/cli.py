@@ -26,7 +26,7 @@ from sj_cli.booking import (
     process_date_range,
 )
 from sj_cli.client import SJClient
-from sj_cli.config import CfgManager
+from sj_cli.config import CfgManager, delay_thresholds, trafikverket_key
 from sj_cli.dates import (
     SWEDEN,
     booking_dates,
@@ -186,6 +186,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "marked on the leg. Combine with --since to reach back past today."
         ),
     )
+    parser.add_argument(
+        "--delays",
+        action="store_true",
+        help=(
+            "Modifier for --list-bookings: look up whether each past leg arrived on time, "
+            "and flag delays long enough to claim compensation for (thresholds in [delays])."
+        ),
+    )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--book",
@@ -272,7 +280,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # which are only modifiers) shows the help and fails. An empty value
     # (`--cancel-date ""`) is an operation with an invalid argument, reported
     # as such below.
-    modifiers = ("dry_run", "seat_details", "since", "show_cancelled")
+    modifiers = ("dry_run", "seat_details", "since", "show_cancelled", "delays")
     given = [k for k, v in vars(args).items() if k not in modifiers and v not in (None, False)]
     if not given:
         parser.error("no operation given, choose one of the flags above")
@@ -299,6 +307,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     if args.show_cancelled and not args.list_bookings:
         parser.error("--show-cancelled only applies to --list-bookings")
+
+    if args.delays and not args.list_bookings:
+        parser.error("--delays only applies to --list-bookings")
 
     # Validate-first: every cancel date is parsed and checked here, before
     # any auth or API work can start.
@@ -803,6 +814,9 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 seat_preference=seat_preference,
                 since=args.since_date,
                 show_cancelled=args.show_cancelled,
+                delays=args.delays,
+                thresholds=delay_thresholds(cfg),
+                trafikverket_key=trafikverket_key(cfg),
             )
 
         elif args.cancel_date is not None:

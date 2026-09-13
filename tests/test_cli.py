@@ -144,6 +144,26 @@ def test_show_cancelled_rejected_for_modes_other_than_list_bookings(capsys):
     assert "● --show-cancelled only applies to --list-bookings" in err
 
 
+def test_delays_is_a_modifier_not_an_operation(capsys):
+    # bare --delays: no operation given
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--delays"])
+    assert exc_info.value.code == 1
+    assert "no operation given" in capsys.readouterr().err
+    # composes with --list-bookings
+    args = parse_args(["--list-bookings", "--delays"])
+    assert args.list_bookings is True and args.delays is True
+    assert parse_args(["--list-bookings"]).delays is False
+
+
+def test_delays_rejected_for_modes_other_than_list_bookings(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--book", "--delays"])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "● --delays only applies to --list-bookings" in err
+
+
 def test_book_flag_parses():
     args = parse_args(["--book"])
     assert args.book is True
@@ -745,6 +765,41 @@ def test_show_cancelled_appears_in_the_header_box_only_with_the_flag(tmp_path, m
     assert "shown" in out
     cli._run(parse_args(["--list-bookings"]), _StubClient())
     assert "cancelled" not in capsys.readouterr().out
+
+
+def test_delays_flag_and_config_thresholds_reach_handle_list_bookings(tmp_path, monkeypatch):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    config = tmp_path / "config.toml"
+    config.write_text(
+        config.read_text()
+        + "\n[delays]\non_time_minutes = 3\ncompensation_minutes = 45\n"
+        + 'trafikverket_key = "TRV-KEY"\n'
+    )
+    captured: dict = {}
+
+    def fake_list_bookings(*_a, delays=False, thresholds=None, trafikverket_key=None, **_k):
+        captured.update(delays=delays, thresholds=thresholds, trafikverket_key=trafikverket_key)
+
+    monkeypatch.setattr(cli, "handle_list_bookings", fake_list_bookings)
+    cli._run(parse_args(["--list-bookings", "--delays"]), _StubClient())
+    assert captured["delays"] is True
+    # the [delays] section reaches the listing, not the defaults
+    assert tuple(captured["thresholds"]) == (3, 45)
+    assert captured["trafikverket_key"] == "TRV-KEY"
+
+    cli._run(parse_args(["--list-bookings"]), _StubClient())
+    assert captured["delays"] is False  # the thresholds still travel, unused
+
+
+def test_delays_adds_no_header_box_row(tmp_path, monkeypatch, capsys):
+    # Like --seat-details: the modifier fills cells in, it does not change
+    # the window the listing covers, so the header box says nothing about it.
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "handle_list_bookings", lambda *_a, **_k: None)
+    cli._run(parse_args(["--list-bookings", "--delays"]), _StubClient())
+    out = capsys.readouterr().out
+    assert "listing bookings" in out
+    assert "delays" not in out
 
 
 def test_list_travelpasses_shows_expired_passes_instead_of_failing(tmp_path, monkeypatch, capsys):

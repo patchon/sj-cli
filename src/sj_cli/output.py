@@ -524,6 +524,7 @@ _LEG_COLUMNS = (
     "comfort_class",
     "flexibility",
     "booking_number",
+    "delay",
     "cancelled",
 )
 
@@ -544,14 +545,17 @@ def leg_lines(rows: list[dict]) -> list[str]:
     Render legs as aligned lines (no indent): "-> 04:01 - 08:38   4h 37m   X 2000 520   ...".
 
     Row keys: departure, arrival, route, and optionally duration, train, seat,
-    comfort_class, flexibility, note, booking_number, cancelled, past
-    ("Y"/"N"). Columns that are empty on every row are omitted, so the same
+    comfort_class, flexibility, note, booking_number, delay, claim, cancelled,
+    past ("Y"/"N"). Columns that are empty on every row are omitted, so the same
     renderer serves bookings (train/seat/number), dry runs (flexibility/note)
-    and cancels. "cancelled" (set to the literal "cancelled" or "") renders
-    as a further column after the booking number, e.g. "… ABCD1234   cancelled";
-    an uncancelled leg shows nothing there, not the em-dash placeholder
-    — used by --list-bookings --show-cancelled for a leg read from a booking's
-    cancelledJourneys.
+    and cancels. "delay" (the punctuality verdict for a departed leg, from
+    --list-bookings --delays) and "cancelled" (set to the literal "cancelled"
+    or "") render as further columns after the booking number, e.g.
+    "… ABCD1234   64 min late · claim compensation   cancelled"; a leg with
+    neither shows nothing there, not the em-dash placeholder — absence is the
+    normal state for both. A delay cell worth claiming for ("claim" true) is
+    drawn in the warning colour, since a past row is dim throughout and the
+    cell would otherwise disappear into it.
     The arrow is inferred from the route: a leg whose route is the reverse of
     the first leg's is a return (←); the API reports a standalone return
     booking as OUTBOUND, so the direction field alone is not enough.
@@ -580,8 +584,8 @@ def leg_lines(rows: list[dict]) -> list[str]:
             if c == "flexibility" and row.get("note"):
                 val = style(val, DIM)
             cells.append(pad(val, widths[c]))
-        # booking_number and cancelled render outside the joined body (bold
-        # number, plain marker after it) rather than as ordinary columns, so
+        # booking_number, delay and cancelled render outside the joined body
+        # (bold number, then the cells after it) rather than as ordinary columns, so
         # they are pulled out here by name — not position — so a column
         # added later between them is never silently printed as the wrong
         # one. Highest cells-index first so an earlier pop cannot shift the
@@ -589,12 +593,16 @@ def leg_lines(rows: list[dict]) -> list[str]:
         # range, not a column). An uncancelled leg drops the marker
         # entirely rather than showing the em-dash placeholder the other
         # columns use — absence here is the normal state, not a missing
-        # value, and in a mixed listing most legs are uncancelled.
-        tail_names = [n for n in ("booking_number", "cancelled") if n in cols]
+        # value, and in a mixed listing most legs are uncancelled. The delay
+        # cell is dropped the same way, for the same reason.
+        tail_names = [n for n in ("booking_number", "delay", "cancelled") if n in cols]
         picked: dict[str, str] = {}
         for name in sorted(tail_names, key=cols.index, reverse=True):
             picked[name] = cells.pop(cols.index(name) + 1)
         number = picked.get("booking_number")
+        delay = picked.get("delay")
+        if not row.get("delay"):
+            delay = None
         marker = picked.get("cancelled")
         if not row.get("cancelled"):
             marker = None
@@ -608,8 +616,16 @@ def leg_lines(rows: list[dict]) -> list[str]:
                 marker = style(_ANSI_RE.sub("", marker), DIM)
         elif number is not None:
             number = style(number, BOLD)
-        tail = (f"   {number}" if number is not None else "") + (
-            f"   {marker}" if marker is not None else ""
+        if delay is not None:
+            # A past row is dim throughout, so a verdict worth money would
+            # drown in it: the claim cells take the same yellow the '!' line
+            # uses. Never bold — the booking number is the line's one emphasis.
+            plain = _ANSI_RE.sub("", delay)
+            delay = style(plain, YELLOW) if row.get("claim") else style(plain, DIM)
+        tail = (
+            (f"   {number}" if number is not None else "")
+            + (f"   {delay}" if delay is not None else "")
+            + (f"   {marker}" if marker is not None else "")
         )
         line = f"{arrow} {body}{tail}"
         lines.append(line.rstrip())
@@ -667,7 +683,7 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
         bookings: Leg rows (sorted by departure) with keys: date, direction,
                   departure, arrival, duration, comfort_class, route,
                   booking_number, past ("Y"/"N"), and optionally train, seat,
-                  cancelled ("cancelled" or "").
+                  delay (with claim), cancelled ("cancelled" or "").
         summary: Print the "N day(s) · N booking(s) · …" footer line.
 
     """
@@ -714,6 +730,9 @@ def print_bookings_table(bookings: list[dict], summary: bool = True) -> None:
         cancelled_legs = sum(1 for leg in bookings if leg.get("cancelled"))
         if cancelled_legs:
             footer += f" \u00b7 {cancelled_legs} cancelled"
+        claims = sum(1 for leg in bookings if leg.get("claim"))
+        if claims:
+            footer += f" \u00b7 {claims} to claim"
         blank()
         pstatus(None, footer)
 

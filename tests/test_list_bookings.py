@@ -1,11 +1,14 @@
-"""Tests for handle_list_bookings, including the --seat-details, --since and
---show-cancelled modifiers."""
+"""Tests for handle_list_bookings, including the --seat-details, --since,
+--show-cancelled and --delays modifiers."""
 
 from datetime import date, timedelta
+from unittest import mock
 
-from sj_cli import output
+import httpx
+
+from sj_cli import output, punctuality
 from sj_cli.booking import handle_list_bookings
-from sj_cli.dates import sweden_now
+from sj_cli.dates import sweden_now, to_sweden
 from tests.fakes import FakeClient, TtyOut, seatmap
 
 # Computed from the real clock at test-run time so these dates are never
@@ -24,6 +27,7 @@ def _segment(date, tag, dep_time="06:00", seat_map=True):
         "seatMapSearchId": f"SM-{tag}",
         "departureDateTime": f"{date}T{dep_time}:00+02:00",
         "arrivalDateTime": f"{date}T{dep_time[:2]}:59:00+02:00",
+        "publicServiceName": "520",
         "departureStation": {"name": "Göteborg Central", "uicStationCode": "740000002"},
         "arrivalStation": {"name": "Stockholm Central", "uicStationCode": "740000001"},
         "requiredProducts": [{"seat": {"number": "39", "carriageNumber": "3"}}],
@@ -595,3 +599,192 @@ def test_the_hint_appears_when_a_free_seat_meets_more_wishes():
     assert (
         _seat_hint(here, m, ["single", "forward"]) == " · could take 15 · single, window, forward"
     )
+
+
+# --- --delays: the punctuality cell ---------------------------------------
+
+# The fixture segments are written with a +02:00 offset; converting them the
+# way _delay_leg does keeps the planned minute right whatever the run's season.
+_PAST_ARRIVAL = to_sweden(f"{PAST_DATE}T06:59:00+02:00")
+
+
+def _at(minutes_late=0):
+    """The fixture leg's arrival clock, `minutes_late` minutes after the planned one."""
+    return (_PAST_ARRIVAL + timedelta(minutes=minutes_late)).strftime("%H:%M")
+
+
+def _sj_body(minutes_late=0, **over):
+    """An SJ traffic-info answer for the fixture leg: arrived, `minutes_late` late."""
+    station = {
+        "name": "Stockholm C",
+        "arrived": True,
+        "cancelled": False,
+        "arrival": {
+            "originalTime": f"{PAST_DATE} {_at()}",
+            "currentTime": f"{PAST_DATE} {_at(minutes_late)}",
+            "cancelled": False,
+        },
+    }
+    station.update(over)
+    return {
+        "segments": [
+            {
+                "missingData": False,
+                "trafficInformationUnavailableReason": None,
+                "stations": [station],
+            }
+        ]
+    }
+
+
+def _mock_http():
+    """An httpx client whose every external host 404s — the tests never reach the network."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(404, json={"unreachable": str(request.url)}, request=request)
+
+    return httpx.Client(transport=httpx.MockTransport(handler)), seen
+
+
+def test_delays_reads_the_sj_source_for_a_past_leg(capsys):
+    c = FakeClient()
+    c.traffic_segments[("520", PAST_DATE)] = _sj_body(minutes_late=2)  # within on_time
+    c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+    http, seen = _mock_http()
+
+    handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
+
+    # the segment's own stations and train, asked of the SJ traffic service
+    assert ("traffic", "740000002", "740000001", "520", PAST_DATE) in c.calls
+    assert seen == []  # the first source answered: no external request at all
+    out = capsys.readouterr().out
+    assert "on time" in out
+    assert "to claim" not in out
+
+
+def test_delays_flags_a_leg_worth_claiming_and_counts_it_in_the_footer(capsys):
+    c = FakeClient()
+    c.traffic_segments[("520", PAST_DATE)] = _sj_body(minutes_late=64)
+    c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+    http, _ = _mock_http()
+
+    handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
+
+    out = capsys.readouterr().out
+    assert "64 min late · claim compensation" in out
+    assert "1 day(s) · 1 booking(s) · 1 in the past · 1 to claim" in out
+
+
+def test_a_not_yet_departed_leg_gets_no_delay_cell(capsys):
+    c = FakeClient()
+    c.bookings_list = [_booking_item("NUM1", [_segment(FUTURE_DATE, "D1")])]
+    http, seen = _mock_http()
+
+    handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
+
+    assert not any(call[0] == "traffic" for call in c.calls)
+    assert seen == []
+    out = capsys.readouterr().out
+    assert "no data" not in out
+    assert "on time" not in out
+
+
+def test_a_cancelled_booking_is_never_looked_up(capsys):
+    # The journey was cancelled by the booking, so it was never travelled:
+    # its row keeps the cancelled marker and gets no punctuality cell.
+    c = FakeClient()
+    c.bookings_list = [_cancelled_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+    http, seen = _mock_http()
+
+    handle_list_bookings(c, "TOKEN", {}, delays=True, show_cancelled=True, http=http)
+
+    assert not any(call[0] == "traffic" for call in c.calls)
+    assert seen == []
+    out = capsys.readouterr().out
+    assert "NUM1   cancelled" in out
+    assert "no data" not in out
+    assert "to claim" not in out
+
+
+def test_without_the_flag_nothing_is_looked_up(capsys):
+    c = FakeClient()
+    c.traffic_segments[("520", PAST_DATE)] = _sj_body(minutes_late=64)
+    c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+    http, seen = _mock_http()
+
+    handle_list_bookings(c, "TOKEN", {}, http=http)
+
+    assert not any(call[0] == "traffic" for call in c.calls)
+    assert seen == []
+    out = capsys.readouterr().out
+    assert "on time" not in out
+    assert "claim" not in out
+
+
+def test_no_source_answering_shows_no_data(capsys):
+    # SJ answers missingData for a day it no longer holds and every external
+    # source 404s here: the cell says so rather than claiming the train ran.
+    c = FakeClient()
+    c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+    http, seen = _mock_http()
+
+    handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
+
+    assert any(call[0] == "traffic" for call in c.calls)
+    assert seen  # the cascade moved on to the external sources
+    out = capsys.readouterr().out
+    assert "no data" in out
+    assert "delay lookup failed" not in out  # nothing answering is not a failure
+
+
+def test_a_raising_traffic_lookup_degrades_to_no_data(capsys):
+    c = FakeClient()
+    c.traffic_error = RuntimeError("traffic info is down")
+    c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+    http, _ = _mock_http()
+
+    handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
+
+    out = capsys.readouterr().out
+    assert "carriage 3 seat 39" in out  # the listing itself is unharmed
+    assert "no data" in out
+
+
+def test_an_unexpected_lookup_failure_warns_once(capsys):
+    def boom(*a, **kw):
+        raise RuntimeError("cascade exploded")
+
+    c = FakeClient()
+    c.bookings_list = [
+        _booking_item(
+            "NUM1",
+            [_segment(PAST_DATE, "D1"), _segment(PAST_DATE, "D2", dep_time="09:00")],
+        )
+    ]
+    http, _ = _mock_http()
+
+    with mock.patch.object(punctuality, "lookup", boom):
+        handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
+
+    out = capsys.readouterr().out
+    assert out.count("no data") == 2
+    assert out.count("delay lookup failed") == 1  # aggregated, not one per leg
+    assert "! delay lookup failed for 2 leg(s)" in out
+
+
+def test_an_injected_client_is_left_open_and_an_own_one_is_closed(monkeypatch):
+    # Production passes no client: _add_delays builds one and must close it again.
+    built, _ = _mock_http()
+    monkeypatch.setattr(punctuality, "make_http", lambda: built)
+    c = FakeClient()
+    c.traffic_segments[("520", PAST_DATE)] = _sj_body()
+    c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
+
+    handle_list_bookings(c, "TOKEN", {}, delays=True)
+    assert built.is_closed
+
+    injected, _ = _mock_http()
+    handle_list_bookings(c, "TOKEN", {}, delays=True, http=injected)
+    assert not injected.is_closed  # the caller's client is the caller's to close

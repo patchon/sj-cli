@@ -177,6 +177,7 @@ class FakeClient:
         self.traffic_segments: dict[tuple, dict] = {}  # (train, date) -> segments response
         self.seat_updates: list[tuple] = []  # (booking_id, updates, provisional)
         self.seatmap_error: Exception | None = None
+        self.traffic_error: Exception | None = None
         self.seat_update_error: Exception | None = None
         self.bookings_list: list[dict] = []
         self.page_size: int | None = None  # None: everything in one page, like the tests expect
@@ -345,6 +346,8 @@ class FakeClient:
 
     def get_traffic_segments(self, dep_uic, arr_uic, train, date):
         self.calls.append(("traffic", dep_uic, arr_uic, train, date))
+        if self.traffic_error:
+            raise self.traffic_error
         if (train, date) in self.traffic_segments:
             return self.traffic_segments[(train, date)]
         # what the live service answers for a day it no longer holds
