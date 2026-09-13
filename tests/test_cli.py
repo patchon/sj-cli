@@ -772,7 +772,7 @@ def test_delays_flag_and_config_thresholds_reach_handle_list_bookings(tmp_path, 
     config = tmp_path / "config.toml"
     config.write_text(
         config.read_text()
-        + "\n[delays]\non_time_minutes = 3\ncompensation_minutes = 45\n"
+        + "\n[delays]\ncompensation_minutes = 45\n"
         + 'trafikverket_key = "TRV-KEY"\n'
     )
     captured: dict = {}
@@ -784,7 +784,7 @@ def test_delays_flag_and_config_thresholds_reach_handle_list_bookings(tmp_path, 
     cli._run(parse_args(["--list-bookings", "--delays"]), _StubClient())
     assert captured["delays"] is True
     # the [delays] section reaches the listing, not the defaults
-    assert tuple(captured["thresholds"]) == (3, 45)
+    assert tuple(captured["thresholds"]) == (45,)
     assert captured["trafikverket_key"] == "TRV-KEY"
 
     cli._run(parse_args(["--list-bookings"]), _StubClient())

@@ -33,6 +33,10 @@ GREEN = "92"
 YELLOW = "93"
 MAGENTA = "95"
 CYAN = "96"
+# The one deliberate exception to "bright ANSI slots only, so hues follow the
+# user's terminal theme": there is no bright orange slot, and the punctuality
+# cell's claim note is orange because Patrik asked for orange. 256-colour 208.
+ORANGE = "38;5;208"
 
 
 def color_enabled() -> bool:
@@ -525,8 +529,41 @@ _LEG_COLUMNS = (
     "flexibility",
     "booking_number",
     "delay",
+    "delay_source",
     "cancelled",
 )
+
+# The tail columns that mean nothing when empty: an absent one is dropped
+# rather than shown as the em-dash placeholder the ordinary columns use —
+# absence is the normal state for all three. One with a later tail cell
+# filled in on the same row is blanked instead of dropped, so the columns
+# after it stay under their neighbours.
+_TAIL_OPTIONAL = ("delay", "delay_source", "cancelled")
+
+
+def _delay_styled(row: dict, text: str) -> str:
+    """
+    The delay cell, coloured by what it means rather than by the row's state.
+
+    A past row is dim throughout, so the verdict would drown in it: on time
+    is green and a deviation yellow, both at full strength. A cell worth
+    money keeps the figure yellow and puts the note — ``· claim
+    compensation``, or a final-stop ``· likely, verify`` — in orange, the
+    one non-theme colour in the tool. ``no data`` says nothing, so it stays
+    dim. The source label is dim in every case: it is provenance, not news.
+
+    ``text`` is the verdict alone: the source label is its own column, and
+    the column padding is re-appended by the caller, outside every escape.
+    """
+    tone = str(row.get("delay_tone") or "none")
+    if tone == "claim":
+        figure, sep, note = text.partition(" \u00b7 ")
+        return style(figure, YELLOW) + (style(f"{sep}{note}", ORANGE) if sep else "")
+    if tone == "good":
+        return style(text, GREEN)
+    if tone == "late":
+        return style(text, YELLOW)
+    return style(text, DIM)
 
 
 def _cell(row: dict, col: str) -> str:
@@ -545,20 +582,24 @@ def leg_lines(rows: list[dict]) -> list[str]:
     Render legs as aligned lines (no indent): "-> 04:01 - 08:38   4h 37m   X 2000 520   ...".
 
     Row keys: departure, arrival, route, and optionally duration, train, seat,
-    comfort_class, flexibility, note, booking_number, delay, claim, cancelled,
-    past ("Y"/"N"). Columns that are empty on every row are omitted, so the same
+    comfort_class, flexibility, note, booking_number, delay, claim, delay_tone,
+    delay_source, cancelled, past ("Y"/"N"). Columns that are empty on every
+    row are omitted, so the same
     renderer serves bookings (train/seat/number), dry runs (flexibility/note)
     and cancels. "delay" (the punctuality verdict for a departed leg, from
     --list-bookings --delays) and "cancelled" (set to the literal "cancelled"
-    or "") render as further columns after the booking number, e.g.
-    "… ABCD1234   64 min late · claim compensation   cancelled"; a leg with
-    neither shows nothing there, not the em-dash placeholder — absence is the
-    normal state for both. A booking-cancelled leg is never looked up, so in
-    a mixed listing its empty delay cell is kept as blank padding, to hold
-    the cancelled marker under the markers of the rows that do carry a
-    verdict. A delay cell worth claiming for ("claim" true) is
-    drawn in the warning colour, since a past row is dim throughout and the
-    cell would otherwise disappear into it.
+    or "") render as further columns after the booking number, with the
+    verdict's source ("delay_source", parenthesised) between them, e.g.
+    "… ABCD1234   +64 min · claim compensation   (tagradar.nu)   cancelled";
+    a leg without one shows nothing there, not the em-dash placeholder —
+    absence is the normal state for all three. A booking-cancelled leg is
+    never looked up, so in a mixed listing its empty delay cells are kept as
+    blank padding, to hold the cancelled marker under the markers of the
+    rows that do carry a verdict. The delay cell is coloured by its
+    "delay_tone" rather than by the row (`_delay_styled`): green on time,
+    yellow for a deviation, and for a claim the figure yellow with the note
+    in orange — a past row is dim throughout and the cell would otherwise
+    disappear into it. The source label stays dim.
     The arrow is inferred from the route: a leg whose route is the reverse of
     the first leg's is a return (←); the API reports a standalone return
     booking as OUTBOUND, so the direction field alone is not enough.
@@ -587,63 +628,44 @@ def leg_lines(rows: list[dict]) -> list[str]:
             if c == "flexibility" and row.get("note"):
                 val = style(val, DIM)
             cells.append(pad(val, widths[c]))
-        # booking_number, delay and cancelled render outside the joined body
-        # (bold number, then the cells after it) rather than as ordinary columns, so
-        # they are pulled out here by name — not position — so a column
-        # added later between them is never silently printed as the wrong
-        # one. Highest cells-index first so an earlier pop cannot shift the
-        # index a later one still needs (+1: cells[0] is the leading time
-        # range, not a column). An uncancelled leg drops the marker
-        # entirely rather than showing the em-dash placeholder the other
-        # columns use — absence here is the normal state, not a missing
-        # value, and in a mixed listing most legs are uncancelled. The delay
-        # cell is dropped the same way, for the same reason.
-        tail_names = [n for n in ("booking_number", "delay", "cancelled") if n in cols]
+        # The booking number and the three cells after it render outside the
+        # joined body (bold number, then the tail cells) rather than as
+        # ordinary columns, so they are pulled out here by name — not
+        # position — and a column added later between them is never silently
+        # printed as the wrong one. Highest cells-index first so an earlier
+        # pop cannot shift the index a later one still needs (+1: cells[0] is
+        # the leading time range, not a column).
+        tail_names = [n for n in ("booking_number", *_TAIL_OPTIONAL) if n in cols]
         picked: dict[str, str] = {}
         for name in sorted(tail_names, key=cols.index, reverse=True):
             picked[name] = cells.pop(cols.index(name) + 1)
         number = picked.get("booking_number")
-        marker = picked.get("cancelled")
-        if not row.get("cancelled"):
-            marker = None
-        delay = picked.get("delay")
-        blank_delay = False
-        if not row.get("delay"):
-            # No verdict: drop the cell — unless a later cell follows on this
-            # row (a booking-cancelled leg is never looked up), where a blank
-            # of the column's width keeps that marker under the others.
-            if delay is not None and marker is not None:
-                delay = " " * widths["delay"]
-                blank_delay = True
-            else:
-                delay = None
         body = "   ".join(cells)
         if is_past:
             arrow = style(_ANSI_RE.sub("", arrow), DIM)
             body = style(_ANSI_RE.sub("", body), DIM)
             if number is not None:
                 number = style(_ANSI_RE.sub("", number), DIM)
-            if marker is not None:
-                marker = style(_ANSI_RE.sub("", marker), DIM)
         elif number is not None:
             number = style(number, BOLD)
-        if delay is not None and not blank_delay:
-            # A past row is dim throughout, so a verdict worth money would
-            # drown in it: the claim cells take the same yellow the '!' line
-            # uses. Never bold — the booking number is the line's one emphasis.
-            # Only the text is styled, with the column padding re-appended
-            # outside the escape: inside it, rstrip() cannot see the spaces
-            # and a short cell ending a line would trail invisible ones.
-            plain = _ANSI_RE.sub("", delay)
+        tail = f"   {number}" if number is not None else ""
+        optional = [n for n in _TAIL_OPTIONAL if n in cols]
+        for i, name in enumerate(optional):
+            cell = picked[name]
+            if not row.get(name):
+                if any(row.get(m) for m in optional[i + 1 :]):
+                    tail += "   " + " " * widths[name]  # blank: keep what follows aligned
+                continue
+            # The column padding is re-appended outside the escapes: inside
+            # them rstrip() cannot see the spaces and a short cell ending a
+            # line would trail invisible ones.
+            plain = _ANSI_RE.sub("", cell)
             trimmed = plain.rstrip()
-            delay = style(trimmed, YELLOW if row.get("claim") else DIM) + " " * (
-                len(plain) - len(trimmed)
-            )
-        tail = (
-            (f"   {number}" if number is not None else "")
-            + (f"   {delay}" if delay is not None else "")
-            + (f"   {marker}" if marker is not None else "")
-        )
+            # The delay cell is coloured by meaning, never bold (the booking
+            # number is the line's one emphasis) and never dimmed by the row;
+            # the source label and the cancelled marker are dim.
+            painted = _delay_styled(row, trimmed) if name == "delay" else style(trimmed, DIM)
+            tail += "   " + painted + " " * (len(plain) - len(trimmed))
         line = f"{arrow} {body}{tail}"
         lines.append(line.rstrip())
     return lines

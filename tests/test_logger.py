@@ -37,9 +37,9 @@ def test_log_json_redacts_the_trafikverket_key():
     # config.py logs the whole loaded config at DEBUG, and [delays] holds the
     # user's own API key; Trafikverket's XML spells the same key
     # "authenticationkey".
-    out = log_json({"delays": {"trafikverket_key": "x", "on_time_minutes": 5}})
+    out = log_json({"delays": {"trafikverket_key": "x", "compensation_minutes": 60}})
     assert json.loads(out) == {
-        "delays": {"trafikverket_key": "***redacted***", "on_time_minutes": 5}
+        "delays": {"trafikverket_key": "***redacted***", "compensation_minutes": 60}
     }
     assert redact({"authenticationkey": "x"}) == {"authenticationkey": "***redacted***"}
 

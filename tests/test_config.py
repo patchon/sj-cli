@@ -348,40 +348,41 @@ def delays_cfg(**delays):
     return cfg
 
 
-def test_delays_is_optional_and_defaults_to_five_and_sixty():
+def test_delays_is_optional_and_the_threshold_defaults_to_sixty():
     cfg = future_cfg()
     verify(cfg)  # no section at all is fine
-    assert delay_thresholds(cfg) == Thresholds(5, 60)
-    assert delay_thresholds(cfg).on_time == 5
+    assert delay_thresholds(cfg) == Thresholds(60)
     assert delay_thresholds(cfg).compensation == 60
     assert trafikverket_key(cfg) is None
-    assert delay_thresholds(delays_cfg()) == Thresholds(5, 60)  # an empty section too
+    assert delay_thresholds(delays_cfg()) == Thresholds(60)  # an empty section too
 
 
 def test_delays_valid_section_is_read_back():
-    cfg = delays_cfg(on_time_minutes=0, compensation_minutes=20, trafikverket_key="  abc123  ")
+    cfg = delays_cfg(compensation_minutes=20, trafikverket_key="  abc123  ")
     verify(cfg)
-    assert delay_thresholds(cfg) == Thresholds(0, 20)
+    assert delay_thresholds(cfg) == Thresholds(20)  # 20 min: the short-route rule
     assert trafikverket_key(cfg) == "abc123"
 
 
-def test_delays_rejects_non_integer_and_negative_minutes():
-    assert "on_time_minutes must be a whole number" in errors_of(delays_cfg(on_time_minutes="5"))
-    assert "on_time_minutes must be a whole number" in errors_of(delays_cfg(on_time_minutes=True))
-    assert "on_time_minutes must be at least 0" in errors_of(delays_cfg(on_time_minutes=-1))
-    assert "compensation_minutes must be at least 1" in errors_of(
-        delays_cfg(compensation_minutes=0)
-    )
-    assert "compensation_minutes must be a whole number" in errors_of(
-        delays_cfg(compensation_minutes=1.5)
-    )
+def test_delays_rejects_non_integer_and_out_of_range_minutes():
+    for bad in ("45", True, 1.5):
+        assert "compensation_minutes must be a whole number" in errors_of(
+            delays_cfg(compensation_minutes=bad)
+        )
+    for bad in (0, -1):
+        assert "compensation_minutes must be at least 1" in errors_of(
+            delays_cfg(compensation_minutes=bad)
+        )
+    verify(delays_cfg(compensation_minutes=1))
 
 
-def test_delays_rejects_a_compensation_threshold_at_or_below_on_time():
-    msg = errors_of(delays_cfg(on_time_minutes=30, compensation_minutes=30))
-    assert "compensation_minutes must be greater than on_time_minutes" in msg
-    assert "compensation_minutes must be greater" in errors_of(delays_cfg(on_time_minutes=90))
-    verify(delays_cfg(on_time_minutes=30, compensation_minutes=31))
+def test_delays_has_no_on_time_threshold_to_configure():
+    # dropped on purpose: a verdict reports the signed minutes, so there is
+    # no tolerance band to set. An unknown key is simply ignored, as ever.
+    cfg = delays_cfg(on_time_minutes=30)
+    verify(cfg)
+    assert delay_thresholds(cfg) == Thresholds(60)
+    assert not hasattr(Thresholds(), "on_time")
 
 
 def test_delays_rejects_an_empty_key_and_a_non_section():
@@ -404,11 +405,11 @@ def test_the_example_config_delays_section_validates_to_the_defaults():
         example = tomllib.load(f)
     example["search_parameters"]["dates"] = future_cfg()["search_parameters"]["dates"]
     CfgManager().verify_cfg(example)
-    assert delay_thresholds(example) == Thresholds(5, 60)
+    assert delay_thresholds(example) == Thresholds(60)
     assert trafikverket_key(example) is None
 
 
 def test_delays_is_validated_in_every_mode():
-    cfg = {"auth": {"email": "a@b.se", "password": "x"}, "delays": {"on_time_minutes": -1}}
-    with pytest.raises(SJConfigError, match="on_time_minutes"):
+    cfg = {"auth": {"email": "a@b.se", "password": "x"}, "delays": {"compensation_minutes": -1}}
+    with pytest.raises(SJConfigError, match="compensation_minutes"):
         CfgManager().verify_cfg(cfg, require_search=False)

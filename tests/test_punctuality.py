@@ -36,8 +36,8 @@ THRESHOLDS = Thresholds()
 #
 
 
-def v(minutes, *, cancelled=False, exact=True):
-    return verdict(Arrival(minutes, cancelled, exact, "t", "09:42", None), THRESHOLDS)
+def v(minutes, *, cancelled=False, exact=True, source="tagradar"):
+    return verdict(Arrival(minutes, cancelled, exact, source, "09:42", None), THRESHOLDS)
 
 
 def test_verdict_no_data_when_nobody_answered():
@@ -46,31 +46,36 @@ def test_verdict_no_data_when_nobody_answered():
 
 
 def test_verdict_exact_rows():
+    # no tolerance to hide behind: on the minute is on time, everything else
+    # shows the signed difference, early included
     assert v(0).text == "on time"
-    assert v(-7).text == "on time"  # early counts as on time
-    assert v(5).text == "on time"  # the on_time threshold is inclusive
-    assert v(6).text == "6 min late"
-    assert v(12) == verdict(Arrival(12, False, True, "t", "09:42", None), THRESHOLDS)
-    assert v(12).text == "12 min late"
-    assert v(12).claim is False
-    assert v(59).text == "59 min late"
+    assert v(0).tone == "good"
+    assert v(-7).text == "-7 min"
+    assert v(-1).text == "-1 min"
+    assert v(1).text == "+1 min"
+    assert v(11).text == "+11 min"
+    assert v(11).tone == "late"
+    assert v(11).claim is False
+    assert v(59).text == "+59 min"
     assert v(59).claim is False
-    assert v(60).text == "60 min late · claim compensation"  # inclusive
+    assert v(60).text == "+60 min · claim compensation"  # the threshold is inclusive
     assert v(60).claim is True
-    assert v(64).text == "64 min late · claim compensation"
+    assert v(60).tone == "claim"
+    assert v(64).text == "+64 min · claim compensation"
 
 
 def test_verdict_final_stop_rows():
     assert v(0, exact=False).text == "final stop on time · likely"
-    assert v(-3, exact=False).text == "final stop on time · likely"
-    assert v(5, exact=False).text == "final stop on time · likely"
-    assert v(6, exact=False).text == "final stop 6 min late · likely"
-    assert v(12, exact=False).text == "final stop 12 min late · likely"
-    assert v(12, exact=False).claim is False
+    assert v(0, exact=False).tone == "good"
+    assert v(-3, exact=False).text == "final stop -3 min · likely"
+    assert v(20, exact=False).text == "final stop +20 min · likely"
+    assert v(20, exact=False).tone == "late"
+    assert v(20, exact=False).claim is False
     assert v(59, exact=False).claim is False
-    assert v(60, exact=False).text == "final stop 60 min late · likely, verify"
-    assert v(78, exact=False).text == "final stop 78 min late · likely, verify"
+    assert v(60, exact=False).text == "final stop +60 min · likely, verify"
+    assert v(78, exact=False).text == "final stop +78 min · likely, verify"
     assert v(78, exact=False).claim is True
+    assert v(78, exact=False).tone == "claim"
 
 
 def test_verdict_cancelled_is_hedged_when_only_the_final_stop_says_so():
@@ -86,11 +91,24 @@ def test_verdict_cancelled_is_hedged_when_only_the_final_stop_says_so():
     assert v(99, cancelled=True, exact=False).text == final.text
 
 
-def test_verdict_reads_the_configured_thresholds():
-    lenient = Thresholds(on_time=15, compensation=120)
-    assert verdict(Arrival(12, False, True, "t", "09:42", None), lenient).text == "on time"
-    assert verdict(Arrival(64, False, True, "t", "09:42", None), lenient).text == "64 min late"
-    assert verdict(Arrival(120, False, True, "t", "09:42", None), lenient).claim is True
+def test_verdict_reads_the_configured_threshold():
+    strict = Thresholds(compensation=20)
+    assert verdict(Arrival(20, False, True, "sj", "09:42", None), strict).claim is True
+    assert verdict(Arrival(19, False, True, "sj", "09:42", None), strict).claim is False
+    lenient = Thresholds(compensation=120)
+    assert verdict(Arrival(64, False, True, "sj", "09:42", None), lenient).text == "+64 min"
+    assert verdict(Arrival(120, False, True, "sj", "09:42", None), lenient).claim is True
+
+
+def test_verdict_names_the_source_it_came_from():
+    assert v(11, source="sj").source_label == "sj.se"
+    assert v(11, source="trafikverket").source_label == "trafikverket.se"
+    assert v(11, source="tagradar").source_label == "tagradar.nu"
+    # both Tågstatistik services are one site to the reader
+    assert v(11, source="tagstatistik").source_label == "tågstatistik"
+    assert v(11, exact=False, source="tagstatistik-summary").source_label == "tågstatistik"
+    assert verdict(None, THRESHOLDS).source_label == ""  # nothing to credit
+    assert verdict(None, THRESHOLDS).tone == "none"
 
 
 #
@@ -520,7 +538,7 @@ def test_tagstatistik_summary_is_exact_only_when_the_final_stop_is_ours():
     got = tagstatistik_summary(LEG, http)
     assert got.exact is False
     assert got.minutes_late == 12
-    assert verdict(got, THRESHOLDS).text == "final stop 12 min late · likely"
+    assert verdict(got, THRESHOLDS).text == "final stop +12 min · likely"
 
 
 def test_tagstatistik_summary_is_never_exact_without_a_readable_final_stop():
@@ -531,7 +549,7 @@ def test_tagstatistik_summary_is_never_exact_without_a_readable_final_stop():
         got = tagstatistik_summary(LEG, http)
         assert got.exact is False
         assert got.planned == LEG.planned_arrival
-        assert verdict(got, THRESHOLDS).text == "final stop 12 min late · likely"
+        assert verdict(got, THRESHOLDS).text == "final stop +12 min · likely"
 
 
 def test_tagstatistik_summary_only_a_filled_in_inst_means_cancelled():

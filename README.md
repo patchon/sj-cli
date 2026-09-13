@@ -130,7 +130,6 @@ service_types = ["SJ_HIGH"]
 seat_preference = ["avoid table", "single", "aisle", "window", "forward"]
 
 [delays]                          # valfritt, för --list-bookings --delays
-on_time_minutes = 5               # "on time" upp till så här många minuter sent
 compensation_minutes = 60         # "claim compensation" från så här många minuter
 # trafikverket_key = "..."        # valfritt, gratis från data.trafikverket.se
 ```
@@ -233,15 +232,19 @@ Använd `--show-cancelled` i kombination med `--list-bookings` för att även
 lista avbokade bokningar (markerade `cancelled`). Går att kombinera med
 `--since` för att nå längre bakåt än idag.
 
-Med `--delays` tillsammans med `--list-bookings` slår verktyget upp, direkt när du
-kör, om varje tidigare resa kom fram i tid: `on time`, `12 min late` eller
-`64 min late · claim compensation` när förseningen är stor nog att söka
-förseningsersättning för (gränserna sätts i `[delays]`, 5 respektive 60 minuter
-som standard). Uppgifterna hämtas från SJ:s trafikinfo, Trafikverkets öppna
-data (med egen nyckel — den källan är oprövad tills en nyckel har använts en
-gång) och Tågstatistik; exakt ankomst till din station finns i
-ungefär fyra dagar, därefter visas tågets slutstationstid som en indikation
-(`final stop 78 min late · likely, verify`). Inget sparas mellan körningarna.
+Med `--delays` tillsammans med `--list-bookings` slår verktyget upp, direkt när
+du kör, om varje tidigare resa kom fram i tid. Ingen marginal döljs: `on time`
+betyder att tåget kom på utsatt minut, allt annat visas med tecken — `+11 min`,
+och `-1 min` för ett tåg som kom före tiden, vilket är lika sant. Från
+`compensation_minutes` (60 som standard, se `[delays]`) läggs
+`· claim compensation` till. Efter omdömet står källan inom parentes:
+`+64 min · claim compensation (tagradar.nu)`. Cellen färgas efter innebörd —
+grönt i tid, gult försenat, orange det som är värt att söka ersättning för.
+Uppgifterna hämtas från SJ:s trafikinfo, Trafikverkets öppna data (med egen
+nyckel — den källan är oprövad tills en nyckel har använts en gång) och
+Tågstatistik; exakt ankomst till din station finns i ungefär fyra dagar,
+därefter visas tågets slutstationstid som en indikation
+(`final stop +78 min · likely, verify`). Inget sparas mellan körningarna.
 
 Du kan också hoppa över kopieringen av konfigurationsfilen: kör `--login` i en
 terminal, så erbjuder sig verktyget att skapa konfigurationen åt dig och frågar

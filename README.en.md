@@ -127,7 +127,6 @@ service_types = ["SJ_HIGH"]
 seat_preference = ["avoid table", "single", "aisle", "window", "forward"]
 
 [delays]                          # optional, for --list-bookings --delays
-on_time_minutes = 5               # "on time" up to this many minutes late
 compensation_minutes = 60         # "claim compensation" from this many minutes late
 # trafikverket_key = "..."        # optional, free from data.trafikverket.se
 ```
@@ -229,14 +228,18 @@ bookings (marked `cancelled`). Combine it with `--since` to reach back past
 today.
 
 With `--delays` together with `--list-bookings` the tool looks up, live as it
-runs, whether each past leg arrived on time: `on time`, `12 min late`, or
-`64 min late · claim compensation` when the delay is long enough to claim for
-(thresholds in `[delays]`, 5 and 60 minutes by default). The data comes from
-SJ's traffic info, Trafikverket's open data (with your own key — that source is
-unverified until a key has been used once) and Tågstatistik; the exact arrival
-at your station exists for about four days,
-after which the train's final-stop time is shown as an indication
-(`final stop 78 min late · likely, verify`). Nothing is stored between runs.
+runs, whether each past leg arrived on time. No tolerance is hidden: `on time`
+means the train arrived on its planned minute, and anything else is shown with
+its sign — `+11 min`, and `-1 min` for a train that was early, which is just as
+true. From `compensation_minutes` (60 by default, see `[delays]`) the cell adds
+`· claim compensation`. The source is named after the verdict, in parentheses:
+`+64 min · claim compensation (tagradar.nu)`. The cell is coloured by meaning —
+green on time, yellow late, orange for what is worth claiming for. The data
+comes from SJ's traffic info, Trafikverket's open data (with your own key —
+that source is unverified until a key has been used once) and Tågstatistik; the
+exact arrival at your station exists for about four days, after which the
+train's final-stop time is shown as an indication
+(`final stop +78 min · likely, verify`). Nothing is stored between runs.
 
 You can also skip copying the config file: run `--login` in a terminal and the
 tool offers to create the configuration for you, asking for your email and

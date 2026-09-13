@@ -333,11 +333,11 @@ class CfgManager:
         """
         Validate the optional [delays] section (--list-bookings --delays).
 
-        Absence is never an error — the two thresholds have defaults and the
+        Absence is never an error — the threshold has a default and the
         Trafikverket key is one source out of five — but a section that is
-        there has to make sense: minutes are whole and non-negative, and
-        compensation has to be the later of the two or the middle band
-        ("N min late", nothing to claim) would be empty.
+        there has to make sense: the threshold is a whole number of minutes,
+        at least 1 (there is no tolerance band to be greater than: a verdict
+        reports the signed minutes and only the claim note is a threshold).
         """
         delays = cfg.get("delays")
         if delays is None:
@@ -346,23 +346,12 @@ class CfgManager:
             errors.append("[delays] must be a section")
             return
 
-        thresholds = Thresholds()
-        minutes: dict[str, int] = {}
-        for key, default, lowest in (
-            ("on_time_minutes", thresholds.on_time, 0),
-            ("compensation_minutes", thresholds.compensation, 1),
-        ):
-            value = delays.get(key)
-            if value is None:
-                minutes[key] = default
-            elif not isinstance(value, int) or isinstance(value, bool):
-                errors.append(f"{key} must be a whole number of minutes")
-            elif value < lowest:
-                errors.append(f"{key} must be at least {lowest}")
-            else:
-                minutes[key] = value
-        if len(minutes) == 2 and minutes["compensation_minutes"] <= minutes["on_time_minutes"]:
-            errors.append("compensation_minutes must be greater than on_time_minutes")
+        value = delays.get("compensation_minutes")
+        if value is not None:
+            if not isinstance(value, int) or isinstance(value, bool):
+                errors.append("compensation_minutes must be a whole number of minutes")
+            elif value < 1:
+                errors.append("compensation_minutes must be at least 1")
 
         key_value = delays.get("trafikverket_key")
         if key_value is not None and (not isinstance(key_value, str) or not key_value.strip()):
@@ -425,7 +414,7 @@ class CfgManager:
 
 def delay_thresholds(cfg: dict[str, Any]) -> Thresholds:
     """
-    The two minute thresholds from [delays], or their defaults.
+    The compensation threshold from [delays], or its default.
 
     Reads a validated config: verify_cfg has already rejected a value that
     is not a whole number of minutes, so anything odd left here is simply
@@ -434,16 +423,10 @@ def delay_thresholds(cfg: dict[str, Any]) -> Thresholds:
     delays = cfg.get("delays") or {}
     if not isinstance(delays, dict):
         return Thresholds()
-    defaults = Thresholds()
-
-    def minutes(key: str, default: int) -> int:
-        value = delays.get(key)
-        return value if isinstance(value, int) and not isinstance(value, bool) else default
-
-    return Thresholds(
-        on_time=minutes("on_time_minutes", defaults.on_time),
-        compensation=minutes("compensation_minutes", defaults.compensation),
-    )
+    value = delays.get("compensation_minutes")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return Thresholds(compensation=value)
+    return Thresholds()
 
 
 def trafikverket_key(cfg: dict[str, Any]) -> str | None:

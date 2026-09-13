@@ -1033,8 +1033,10 @@ def _delay_rows():
             "arrival": "11:36",
             "route": "A → B",
             "booking_number": "NUM1",
-            "delay": "64 min late · claim compensation",
+            "delay": "+64 min · claim compensation",
             "claim": True,
+            "delay_tone": "claim",
+            "delay_source": "(tagradar.nu)",
             "past": "Y",
         },
         {
@@ -1044,6 +1046,8 @@ def _delay_rows():
             "booking_number": "NUM2",
             "delay": "on time",
             "claim": False,
+            "delay_tone": "good",
+            "delay_source": "(sj.se)",
             "past": "Y",
         },
     ]
@@ -1053,29 +1057,59 @@ def test_delay_cell_sits_after_the_booking_number_and_before_the_cancelled_marke
     rows = _delay_rows()
     rows[0]["cancelled"] = "cancelled"
     assert leg_lines(rows) == [
-        "→ 06:59 – 11:36   NUM1   64 min late · claim compensation   cancelled",
-        "← 17:22 – 21:53   NUM2   on time",  # trailing padding is stripped
+        "→ 06:59 – 11:36   NUM1   +64 min · claim compensation   (tagradar.nu)   cancelled",
+        "← 17:22 – 21:53   NUM2   on time                        (sj.se)",
     ]
 
 
 def test_a_leg_without_a_delay_drops_the_cell_entirely():
     rows = _delay_rows()
     rows[1]["delay"] = ""  # not looked up (not departed, or no train number)
+    rows[1]["delay_source"] = ""
     lines = leg_lines(rows)
-    assert lines[0] == "→ 06:59 – 11:36   NUM1   64 min late · claim compensation"
+    assert lines[0] == "→ 06:59 – 11:36   NUM1   +64 min · claim compensation   (tagradar.nu)"
     assert lines[1] == "← 17:22 – 21:53   NUM2"  # no em-dash placeholder either
     assert "—" not in "".join(lines)
 
 
-def test_a_claim_cell_is_yellow_and_the_rest_dim(monkeypatch):
+def test_the_delay_cell_is_coloured_by_what_it_means(monkeypatch):
+    # a past row is dim throughout, so the verdict is painted at full
+    # strength: green on time, yellow for a deviation, and for a claim the
+    # figure yellow with the note in orange (the one non-theme colour)
     monkeypatch.setattr(output, "color_enabled", lambda: True)
-    claim, on_time = leg_lines(_delay_rows())
-    # the warning colour, the same one the '!' line uses — a past row is dim
-    # throughout and the cell would otherwise disappear into it
-    assert "\x1b[93m64 min late · claim compensation\x1b[0m" in claim
-    assert "\x1b[2mon time" in on_time
-    assert "\x1b[93m" not in on_time
+    claim, good = leg_lines(_delay_rows())
+    assert "\x1b[93m+64 min\x1b[0m\x1b[38;5;208m · claim compensation\x1b[0m" in claim
+    assert "\x1b[92mon time\x1b[0m" in good
+    assert "\x1b[93m" not in good
     assert "\x1b[1m" not in claim  # never bold: the booking number is the one emphasis
+    # the source is provenance, not news: dim in both
+    assert "\x1b[2m(tagradar.nu)\x1b[0m" in claim
+    assert "\x1b[2m(sj.se)\x1b[0m" in good
+
+    rows = _delay_rows()
+    rows[0].update(delay="+11 min", delay_tone="late", claim=False)
+    rows[1].update(delay="no data", delay_tone="none", delay_source="")
+    late, none = leg_lines(rows)
+    assert "\x1b[93m+11 min\x1b[0m" in late
+    assert "\x1b[38;5;208m" not in late  # nothing to claim, nothing orange
+    assert "\x1b[2mno data\x1b[0m" in none
+    assert "\x1b[92m" not in none
+
+    verify = _delay_rows()
+    verify[0].update(delay="final stop +78 min · likely, verify", delay_tone="claim")
+    assert (
+        "\x1b[93mfinal stop +78 min\x1b[0m\x1b[38;5;208m · likely, verify\x1b[0m"
+        in leg_lines(verify)[0]
+    )
+
+
+def test_the_source_label_is_named_after_the_verdict():
+    rows = _delay_rows()
+    assert leg_lines(rows)[0].endswith("(tagradar.nu)")
+    assert leg_lines(rows)[1].endswith("(sj.se)")
+    # no source to credit (no data): no parenthetical at all
+    rows[1].update(delay="no data", delay_tone="none", delay_source="")
+    assert leg_lines(rows)[1].endswith("no data")
 
 
 def test_a_styled_delay_cell_carries_no_padding_inside_the_escape(monkeypatch):
@@ -1087,7 +1121,8 @@ def test_a_styled_delay_cell_carries_no_padding_inside_the_escape(monkeypatch):
     for line in (claim, on_time):
         assert not line.endswith(" ")
         assert line.endswith("\x1b[0m")
-    assert "\x1b[2mon time\x1b[0m" in on_time  # the text alone, padding outside
+        assert "  \x1b[0m" not in line  # no padding buried inside an escape
+    assert "\x1b[92mon time\x1b[0m" in on_time  # the text alone, padding outside
 
 
 def test_a_cancelled_row_without_a_delay_keeps_the_marker_column_aligned():
@@ -1097,12 +1132,17 @@ def test_a_cancelled_row_without_a_delay_keeps_the_marker_column_aligned():
     rows[0]["cancelled"] = "cancelled"
     rows[1]["cancelled"] = "cancelled"
     rows[1]["delay"] = ""
+    rows[1]["delay_source"] = ""
     lines = leg_lines(rows)
     assert lines[0].index("cancelled") == lines[1].index("cancelled")
     assert lines[1] == (
-        "← 17:22 – 21:53   NUM2   " + " " * len("64 min late · claim compensation") + "   cancelled"
+        "← 17:22 – 21:53   NUM2   "
+        + " " * len("+64 min · claim compensation")
+        + "   "
+        + " " * len("(tagradar.nu)")
+        + "   cancelled"
     )
-    # with nothing after it the empty cell is still dropped, not blanked
+    # with nothing after it the empty cells are still dropped, not blanked
     rows[1]["cancelled"] = ""
     assert leg_lines(rows)[1] == "← 17:22 – 21:53   NUM2"
 

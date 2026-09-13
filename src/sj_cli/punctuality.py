@@ -27,7 +27,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import httpx
 
@@ -74,6 +74,17 @@ SOURCE_TRAFIKVERKET = "trafikverket"
 SOURCE_TAGRADAR = "tagradar"
 SOURCE_TAGSTATISTIK = "tagstatistik"
 SOURCE_TAGSTATISTIK_SUMMARY = "tagstatistik-summary"
+
+# What a verdict names as its source: the site the figure came from, in the
+# form a user can go and check it at. Both Tågstatistik services are one
+# site to the reader, so they share a label.
+SOURCE_LABELS = {
+    SOURCE_SJ: "sj.se",
+    SOURCE_TRAFIKVERKET: "trafikverket.se",
+    SOURCE_TAGRADAR: "tagradar.nu",
+    SOURCE_TAGSTATISTIK: "tågstatistik",
+    SOURCE_TAGSTATISTIK_SUMMARY: "tågstatistik",
+}
 
 _TIME = re.compile(r"(?<!\d)([01]\d|2[0-3]):([0-5]\d)(?!\d)")
 
@@ -125,63 +136,74 @@ class Arrival:
 
 
 class Thresholds(NamedTuple):
-    """The two minute thresholds a verdict is read against ([delays] in the config)."""
+    """The minute threshold a verdict is read against ([delays] in the config)."""
 
-    on_time: int = 5
     compensation: int = 60
+
+
+# How the cell should read to the eye: on time, late, worth claiming for, or
+# nothing known. The renderer colours by this and never parses the text.
+Tone = Literal["good", "late", "claim", "none"]
 
 
 @dataclass(frozen=True)
 class Verdict:
-    """The cell shown on a past leg, and whether it is worth claiming for."""
+    """The cell shown on a past leg: its text, whether it is worth claiming for, how it reads."""
 
     text: str
     claim: bool
+    tone: Tone = "none"
+    source_label: str = ""
 
 
 def verdict(arrival: Arrival | None, thresholds: Thresholds) -> Verdict:
     """
     The punctuality cell for one leg.
 
-    No source answered at all is ``no data`` — which is not the same as a
-    train that ran on time. A cancelled train is always worth claiming for.
-    Otherwise an arrival at or below ``on_time`` (early included) is on time,
-    one at or above ``compensation`` is worth claiming for, and anything
-    between is simply reported. A final-stop figure (``exact`` false) says so
-    and stays an indication: it only asks the user to verify once it is over
-    the compensation threshold, where the difference is worth a look — a
-    cancellation included, since the summary's ``inst`` speaks for the
-    train's final stop, not necessarily for our own.
+    There is no tolerance to hide behind: a train is on time when it arrived
+    on the planned minute, and otherwise the cell shows the signed
+    difference — ``+11 min``, and ``-1 min`` for a train that was early,
+    which is just as true. From ``compensation`` minutes the cell adds
+    ``· claim compensation``. No source answering at all is ``no data``,
+    which is not the same as a train that ran on time.
+
+    A final-stop figure (``exact`` false) keeps its hedge: it says which stop
+    it speaks for and only asks the user to verify once it is over the
+    threshold, a cancellation included — the summary's ``inst`` speaks for
+    the train's final stop, not necessarily for our own.
 
     The cell per condition, exact source / final-stop source:
 
     * cancelled — ``train cancelled · claim compensation`` /
       ``final stop cancelled · likely, verify``
-    * late <= on_time — ``on time`` / ``final stop on time · likely``
-    * in between — ``12 min late`` / ``final stop 12 min late · likely``
-    * late >= compensation — ``64 min late · claim compensation`` /
-      ``final stop 78 min late · likely, verify``
+    * arrived on the minute — ``on time`` / ``final stop on time · likely``
+    * early or late — ``-1 min`` / ``+11 min`` /
+      ``final stop +20 min · likely``
+    * late >= compensation — ``+64 min · claim compensation`` /
+      ``final stop +78 min · likely, verify``
     * no source answered — ``no data`` (there is no final-stop form)
 
     """
     if arrival is None:
-        return Verdict("no data", False)
+        return Verdict("no data", False, "none", "")
+    where = SOURCE_LABELS.get(arrival.source, arrival.source)
     if arrival.cancelled:
         if arrival.exact:
-            return Verdict("train cancelled · claim compensation", True)
-        return Verdict("final stop cancelled · likely, verify", True)
+            return Verdict("train cancelled · claim compensation", True, "claim", where)
+        return Verdict("final stop cancelled · likely, verify", True, "claim", where)
     late = arrival.minutes_late
+    claimable = late >= thresholds.compensation
     if arrival.exact:
-        if late <= thresholds.on_time:
-            return Verdict("on time", False)
-        if late >= thresholds.compensation:
-            return Verdict(f"{late} min late · claim compensation", True)
-        return Verdict(f"{late} min late", False)
-    if late <= thresholds.on_time:
-        return Verdict("final stop on time · likely", False)
-    if late >= thresholds.compensation:
-        return Verdict(f"final stop {late} min late · likely, verify", True)
-    return Verdict(f"final stop {late} min late · likely", False)
+        if late == 0:
+            return Verdict("on time", False, "good", where)
+        if claimable:
+            return Verdict(f"{late:+d} min · claim compensation", True, "claim", where)
+        return Verdict(f"{late:+d} min", False, "late", where)
+    if late == 0:
+        return Verdict("final stop on time · likely", False, "good", where)
+    if claimable:
+        return Verdict(f"final stop {late:+d} min · likely, verify", True, "claim", where)
+    return Verdict(f"final stop {late:+d} min · likely", False, "late", where)
 
 
 #

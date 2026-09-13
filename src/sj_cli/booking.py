@@ -3782,6 +3782,20 @@ def _delay_leg(segment: dict) -> punctuality.Leg | None:
     )
 
 
+def _set_delay(row: dict, decided: punctuality.Verdict) -> None:
+    """
+    Put a verdict on a display row: the text, the claim flag, the tone, the source.
+
+    The renderer colours by ``tone`` and dims the source, which is its own
+    column — so the row carries the label as the cell text, parenthesised,
+    and the renderer never parses the verdict or guesses its provenance.
+    """
+    row["delay"] = decided.text
+    row["claim"] = decided.claim
+    row["delay_tone"] = decided.tone
+    row["delay_source"] = f"({decided.source_label})" if decided.source_label else ""
+
+
 def _add_delays(
     client: SJClient,
     tasks: list[tuple[dict, dict]],
@@ -3792,9 +3806,10 @@ def _add_delays(
     """
     Look each departed leg's actual arrival up and fill in its punctuality cell.
 
-    Sets the row's "delay" text ("on time", "12 min late", "64 min late ·
-    claim compensation", a final-stop indication, or "no data") and its
-    "claim" flag, for --delays. Nothing is stored between runs: every leg is
+    Sets the row's "delay" text ("on time", "+11 min", "+64 min · claim
+    compensation", a final-stop indication, or "no data"), its "claim" flag,
+    its "delay_tone" (how the cell should read) and its "delay_source" (the
+    site the figure came from), for --delays. Nothing is stored between runs: every leg is
     looked up live, through punctuality.lookup's cascade of sources, with one
     memo shared by the whole run so two legs on the same train fetch once.
     The spinner counts the legs as it goes (live-only, while legs remain).
@@ -3848,7 +3863,7 @@ def _add_delays(
                         # Nothing to ask with (no train number, no station
                         # codes): say so in the cell rather than dropping it,
                         # and send no request for it.
-                        row["delay"] = punctuality.verdict(None, thresholds).text
+                        _set_delay(row, punctuality.verdict(None, thresholds))
                         continue
                     arrival = punctuality.lookup(
                         leg,
@@ -3864,11 +3879,9 @@ def _add_delays(
                     named = f"{leg.train}/{leg.date}" if leg else "an unreadable segment"
                     logger.warning(f"delay lookup failed for {named}: {e}")
                     failures += 1
-                    row["delay"] = punctuality.verdict(None, thresholds).text
+                    _set_delay(row, punctuality.verdict(None, thresholds))
                     continue
-                decided = punctuality.verdict(arrival, thresholds)
-                row["delay"] = decided.text
-                row["claim"] = decided.claim
+                _set_delay(row, punctuality.verdict(arrival, thresholds))
     finally:
         if owned:
             session.close()

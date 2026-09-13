@@ -651,7 +651,7 @@ def _mock_http():
 
 def test_delays_reads_the_sj_source_for_a_past_leg(capsys):
     c = FakeClient()
-    c.traffic_segments[("520", PAST_DATE)] = _sj_body(minutes_late=2)  # within on_time
+    c.traffic_segments[("520", PAST_DATE)] = _sj_body(minutes_late=0)  # on the planned minute
     c.bookings_list = [_booking_item("NUM1", [_segment(PAST_DATE, "D1")])]
     http, seen = _mock_http()
 
@@ -662,6 +662,7 @@ def test_delays_reads_the_sj_source_for_a_past_leg(capsys):
     assert seen == []  # the first source answered: no external request at all
     out = capsys.readouterr().out
     assert "on time" in out
+    assert "(sj.se)" in out  # the verdict names the source it came from
     assert "to claim" not in out
 
 
@@ -674,7 +675,7 @@ def test_delays_flags_a_leg_worth_claiming_and_counts_it_in_the_footer(capsys):
     handle_list_bookings(c, "TOKEN", {}, delays=True, http=http)
 
     out = capsys.readouterr().out
-    assert "64 min late · claim compensation" in out
+    assert "+64 min · claim compensation   (sj.se)" in out
     assert "1 day(s) · 1 booking(s) · 1 in the past · 1 to claim" in out
 
 
@@ -857,9 +858,10 @@ def test_delays_composes_with_since_and_seat_details(capsys):
     assert ("seatmap", "ID-NUM1", "SM-D1") not in c.calls  # departed: no seat map fetched
     out = capsys.readouterr().out
     past, future = (line for line in out.splitlines() if "carriage 3 seat 39" in line)
-    assert "64 min late · claim compensation" in past
+    assert "+64 min · claim compensation" in past
     assert "carriage 3 seat 39 · table, window, forward" in future
-    assert "min late" not in future
+    assert " min" not in future  # a future leg is never looked up
+    assert "(sj.se)" not in future
     assert "1 to claim" in out
 
 
