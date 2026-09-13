@@ -232,8 +232,9 @@ With `--delays` together with `--list-bookings` the tool looks up, live as it
 runs, whether each past leg arrived on time: `on time`, `12 min late`, or
 `64 min late · claim compensation` when the delay is long enough to claim for
 (thresholds in `[delays]`, 5 and 60 minutes by default). The data comes from
-SJ's traffic info, Trafikverket's open data (with your own key) and
-Tågstatistik; the exact arrival at your station exists for about four days,
+SJ's traffic info, Trafikverket's open data (with your own key — that source is
+unverified until a key has been used once) and Tågstatistik; the exact arrival
+at your station exists for about four days,
 after which the train's final-stop time is shown as an indication
 (`final stop 78 min late · likely, verify`). Nothing is stored between runs.
 

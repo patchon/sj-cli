@@ -1421,8 +1421,8 @@ class SJClient:
         This is the service the sj.se journey view reads its "arrived HH:MM"
         from: per station of the segment, the planned time, the current one
         and whether the train has arrived — the only SJ source that knows how
-        late a train actually was. It answers for about the travel day; older
-        days come back with `missingData`.
+        late a train actually was. It answers for the travel day and the day
+        after; older days come back with `missingData`.
 
         Args:
             dep_uic: The departure station's UIC code.

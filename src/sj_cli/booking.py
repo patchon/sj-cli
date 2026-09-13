@@ -3839,14 +3839,17 @@ def _add_delays(
             for done, (row, segment) in enumerate(tasks):
                 if done:  # legs handled so far, only while more remain
                     update(f"looking up delays · {done} of {total}")
-                leg = _delay_leg(segment)
-                if leg is None:
-                    # Nothing to ask with (no train number, no station
-                    # codes): say so in the cell rather than dropping it,
-                    # and send no request for it.
-                    row["delay"] = punctuality.verdict(None, thresholds).text
-                    continue
+                leg = None
                 try:
+                    # Reading the segment is inside the guard too: a shape we
+                    # did not expect is one cell's problem, never the listing's.
+                    leg = _delay_leg(segment)
+                    if leg is None:
+                        # Nothing to ask with (no train number, no station
+                        # codes): say so in the cell rather than dropping it,
+                        # and send no request for it.
+                        row["delay"] = punctuality.verdict(None, thresholds).text
+                        continue
                     arrival = punctuality.lookup(
                         leg,
                         sj_segments=sj_segments,
@@ -3858,7 +3861,8 @@ def _add_delays(
                 except Exception as e:
                     # The cascade already swallows a source failing; anything
                     # reaching here is unexpected, so it is worth a warning.
-                    logger.warning(f"delay lookup failed for {leg.train}/{leg.date}: {e}")
+                    named = f"{leg.train}/{leg.date}" if leg else "an unreadable segment"
+                    logger.warning(f"delay lookup failed for {named}: {e}")
                     failures += 1
                     row["delay"] = punctuality.verdict(None, thresholds).text
                     continue

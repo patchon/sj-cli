@@ -132,10 +132,11 @@ service_types = ["SJ_HIGH", "SJ_IC"]
 
 # How `--list-bookings --delays` judges a past leg. Optional: leave the whole
 # section out and the defaults below apply. Nothing is stored between runs —
-# every leg is looked up live, through SJ's traffic information and, once that
-# has forgotten the day, three public sources (Trafikverket, Tågradar,
-# Tågstatistik). A source that is down or silent simply hands over to the next
-# one; when none of them answers the leg reads "no data".
+# every leg is looked up live, through five sources in turn: SJ's traffic
+# information and, once that has forgotten the day, Trafikverket, Tågradar and
+# Tågstatistik's two services (four of them without a Trafikverket key of your
+# own). A source that is down or silent simply hands over to the next one;
+# when none of them answers the leg reads "no data".
 [delays]
 
 # Up to this many minutes late still counts as "on time". Optional, a whole
@@ -143,12 +144,16 @@ service_types = ["SJ_HIGH", "SJ_IC"]
 #on_time_minutes = 5
 
 # From this many minutes late the cell says "claim compensation". Optional, a
-# whole number of minutes, defaults to 60 — what SJ compensates from — and it
-# must be greater than on_time_minutes. The tool never files anything: it
-# tells you which journeys are worth claiming for.
+# whole number of minutes, defaults to 60, and it must be greater than
+# on_time_minutes. Swedish law entitles you to compensation from 20 minutes on
+# routes shorter than 150 km and from 60 minutes on longer ones, so the
+# default suits a longer route; set it to 20 for a short one. The tool never
+# files anything: it tells you which journeys are worth claiming for.
 #compensation_minutes = 60
 
 # Your own Trafikverket API key, one of the five sources. Optional and free:
 # register at data.trafikverket.se and paste the key here. Without it that
-# source is skipped and the other four still answer.
+# source is skipped and the other four still answer. Note that it is the one
+# source nobody has run yet: it stays unverified until a key has been used
+# once, so treat its first answers with a little suspicion.
 #trafikverket_key = "your-trafikverket-key"

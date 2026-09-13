@@ -6,7 +6,8 @@ to be looked up upstream, live, on every run — nothing is stored between
 runs. Five sources answer, first answer wins (``lookup``):
 
 1. SJ's own traffic-info service (passed in as a callable, so this module
-   never talks to the SJ client), exact, reaches about the travel day
+   never talks to the SJ client), exact, reaches the travel day and the
+   day after
 2. Trafikverket's open API, exact, ~4 days, needs a key — unverified
 3. the Tågradar worker, exact, ~4 days
 4. Tågstatistik's per-train detail, exact, ~4 days
@@ -87,9 +88,9 @@ class Leg:
     dep_uic: str
     arr_uic: str
     arr_short: str  # short station name, e.g. "Linköping C" — where a source keys by name
-    # The Swedish date the train is due to arrive, when that is not the
-    # departure day: a night train leaving 23:30 arrives on the next one.
-    # None means "the same day", which is the ordinary case.
+    # The Swedish date the train is due to arrive — the day after `date` for
+    # a night train leaving 23:30. `_delay_leg` always fills it in; the None
+    # default is for a Leg built by hand, and reads as "the departure day".
     arrival_date: str | None = None
 
     @property
@@ -148,12 +149,27 @@ def verdict(arrival: Arrival | None, thresholds: Thresholds) -> Verdict:
     one at or above ``compensation`` is worth claiming for, and anything
     between is simply reported. A final-stop figure (``exact`` false) says so
     and stays an indication: it only asks the user to verify once it is over
-    the compensation threshold, where the difference is worth a look.
+    the compensation threshold, where the difference is worth a look — a
+    cancellation included, since the summary's ``inst`` speaks for the
+    train's final stop, not necessarily for our own.
+
+    The cell per condition, exact source / final-stop source:
+
+    * cancelled — ``train cancelled · claim compensation`` /
+      ``final stop cancelled · likely, verify``
+    * late <= on_time — ``on time`` / ``final stop on time · likely``
+    * in between — ``12 min late`` / ``final stop 12 min late · likely``
+    * late >= compensation — ``64 min late · claim compensation`` /
+      ``final stop 78 min late · likely, verify``
+    * no source answered — ``no data`` (there is no final-stop form)
+
     """
     if arrival is None:
         return Verdict("no data", False)
     if arrival.cancelled:
-        return Verdict("train cancelled · claim compensation", True)
+        if arrival.exact:
+            return Verdict("train cancelled · claim compensation", True)
+        return Verdict("final stop cancelled · likely, verify", True)
     late = arrival.minutes_late
     if arrival.exact:
         if late <= thresholds.on_time:
@@ -675,7 +691,12 @@ def lookup(
                 (
                     SOURCE_SJ,
                     lambda: sj_arrival(
-                        leg, _cached(memo, (SOURCE_SJ, leg.train, leg.date), lambda: fetch_sj(leg))
+                        leg,
+                        _cached(
+                            memo,
+                            (SOURCE_SJ, leg.train, leg.date, leg.dep_uic, leg.arr_uic),
+                            lambda: fetch_sj(leg),
+                        ),
                     ),
                 )
             )

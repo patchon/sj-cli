@@ -73,11 +73,17 @@ def test_verdict_final_stop_rows():
     assert v(78, exact=False).claim is True
 
 
-def test_verdict_cancelled_wins_over_exactness_and_minutes():
-    for exact in (True, False):
-        cell = v(0, cancelled=True, exact=exact)
-        assert cell.text == "train cancelled · claim compensation"
-        assert cell.claim is True
+def test_verdict_cancelled_is_hedged_when_only_the_final_stop_says_so():
+    exact = v(0, cancelled=True)
+    assert exact.text == "train cancelled · claim compensation"
+    assert exact.claim is True
+    # the summary's `inst` speaks for the train's final stop, not for ours
+    final = v(0, cancelled=True, exact=False)
+    assert final.text == "final stop cancelled · likely, verify"
+    assert final.claim is True
+    # and the minutes are ignored either way — a cancelled train never arrived
+    assert v(99, cancelled=True).text == exact.text
+    assert v(99, cancelled=True, exact=False).text == final.text
 
 
 def test_verdict_reads_the_configured_thresholds():
@@ -269,6 +275,18 @@ def test_sj_arrival_passes_on_missing_data_and_null_stations():
     assert sj_arrival(LEG, None) is None
 
 
+def test_sj_arrival_refuses_a_segment_that_disclaims_its_own_stations():
+    # both flags win over a populated stations list that would otherwise
+    # match: SJ is saying it does not stand behind what is in there
+    assert sj_arrival(LEG, sj_body()) is not None  # the same body, unflagged
+    body = sj_body()
+    body["segments"][0]["missingData"] = True
+    assert sj_arrival(LEG, body) is None
+    body = sj_body()
+    body["segments"][0]["trafficInformationUnavailableReason"] = "NO_REALTIME_DATA"
+    assert sj_arrival(LEG, body) is None
+
+
 def test_sj_arrival_passes_when_the_train_has_not_arrived_yet():
     assert sj_arrival(LEG, sj_body(arrived=False)) is None
     body = sj_body(arrival={"originalTime": "2026-09-11 09:42", "currentTime": None})
@@ -332,6 +350,17 @@ def test_trafikverket_happy_path_and_request_shape():
     assert "<INCLUDE>TimeAtLocation</INCLUDE>" in body
 
 
+def test_trafikverket_escapes_a_value_for_the_xml_attribute():
+    from sj_cli.punctuality import _xml_attr
+
+    assert _xml_attr('a&b<c>d"e') == "a&amp;b&lt;c&gt;d&quot;e"
+    http, seen = transport({TRV: trv_body()})
+    trafikverket(LEG, http, 'k&y<"x">')
+    body = seen[0].content.decode()
+    assert 'authenticationkey="k&amp;y&lt;&quot;x&quot;&gt;"' in body
+    assert '<LOGIN authenticationkey="k&y' not in body  # never the raw value
+
+
 def test_trafikverket_passes_without_an_actual_time_and_reports_cancelled():
     http, _ = transport({TRV: trv_body(TimeAtLocation=None)})
     assert trafikverket(LEG, http, "K") is None
@@ -365,6 +394,11 @@ def test_tagradar_happy_path_and_request_shape():
 def test_tagradar_passes_on_no_announcements():
     http, _ = transport({WORKER: {"code": "NO_TRAIN_ANNOUNCEMENTS", "message": "none"}})
     assert tagradar_worker(LEG, http) is None
+    # the code wins even when the body also carries stops that would match:
+    # the worker answers this instead of an error, and it is not an answer
+    refused = {**worker_body(), "code": "NO_TRAIN_ANNOUNCEMENTS"}
+    assert tagradar_worker(LEG, transport({WORKER: refused})[0]) is None
+    assert tagradar_worker(LEG, transport({WORKER: worker_body()})[0]) is not None
 
 
 NIGHT = Leg(
@@ -519,12 +553,16 @@ def test_tagstatistik_summary_cancelled_and_missing_rows():
 
 
 def test_tagstatistik_summary_is_memoised_per_train():
+    # one call returns the train's whole year, so a second leg on another day
+    # of the same train is served from it — the memo is keyed by the train
     memo = {}
-    http, seen = transport({SUMMARY: summary_body()})
-    other = Leg("123", "2026-09-11", "09:42", "740000901", "740000902", "Kvarnhöjden C")
+    body = summary_body()
+    body["data"][0] = {**body["data"][-1], "datum": "2026-09-10", "ankdiff": "-3"}
+    http, seen = transport({SUMMARY: body})
+    other = Leg("123", "2026-09-10", "09:42", "740000901", "740000902", "Kvarnhöjden C")
     assert tagstatistik_summary(LEG, http, memo).minutes_late == 12
-    assert tagstatistik_summary(other, http, memo).minutes_late == 12
-    assert len(seen) == 1  # one call for the whole year, shared by both legs
+    assert tagstatistik_summary(other, http, memo).minutes_late == 3
+    assert len(seen) == 1
 
 
 #

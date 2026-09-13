@@ -238,7 +238,8 @@ kör, om varje tidigare resa kom fram i tid: `on time`, `12 min late` eller
 `64 min late · claim compensation` när förseningen är stor nog att söka
 förseningsersättning för (gränserna sätts i `[delays]`, 5 respektive 60 minuter
 som standard). Uppgifterna hämtas från SJ:s trafikinfo, Trafikverkets öppna
-data (med egen nyckel) och Tågstatistik; exakt ankomst till din station finns i
+data (med egen nyckel — den källan är oprövad tills en nyckel har använts en
+gång) och Tågstatistik; exakt ankomst till din station finns i
 ungefär fyra dagar, därefter visas tågets slutstationstid som en indikation
 (`final stop 78 min late · likely, verify`). Inget sparas mellan körningarna.
 
