@@ -105,8 +105,8 @@ def test_verdict_names_the_source_it_came_from():
     assert v(11, source="trafikverket").source_label == "trafikverket.se"
     assert v(11, source="tagradar").source_label == "tagradar.nu"
     # both Tågstatistik services are one site to the reader
-    assert v(11, source="tagstatistik").source_label == "tågstatistik"
-    assert v(11, exact=False, source="tagstatistik-summary").source_label == "tågstatistik"
+    assert v(11, source="tagstatistik").source_label == "tågexperterna.nu"
+    assert v(11, exact=False, source="tagstatistik-summary").source_label == "tågexperterna.nu"
     assert verdict(None, THRESHOLDS).source_label == ""  # nothing to credit
     assert verdict(None, THRESHOLDS).tone == "none"
 

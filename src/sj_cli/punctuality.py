@@ -82,8 +82,10 @@ SOURCE_LABELS = {
     SOURCE_SJ: "sj.se",
     SOURCE_TRAFIKVERKET: "trafikverket.se",
     SOURCE_TAGRADAR: "tagradar.nu",
-    SOURCE_TAGSTATISTIK: "tågstatistik",
-    SOURCE_TAGSTATISTIK_SUMMARY: "tågstatistik",
+    SOURCE_TAGSTATISTIK: "tågexperterna.nu",
+    SOURCE_TAGSTATISTIK_SUMMARY: "tågexperterna.nu",
+    # Tågstatistik lives at statistik.tågexperterna.nu; its backend host (tydalsystems.se)
+    # is not a name a reader knows, so the label is the site's apex domain like the others.
 }
 
 _TIME = re.compile(r"(?<!\d)([01]\d|2[0-3]):([0-5]\d)(?!\d)")
