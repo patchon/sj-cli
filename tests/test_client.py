@@ -541,6 +541,37 @@ def test_get_stations_is_public_and_returns_the_list():
     assert t.request.headers["ocp-apim-subscription-key"]
 
 
+def test_get_traffic_segments_is_public_and_posts_the_segment():
+    t = RecordingTransport({"segments": [{"stations": []}]})
+    c = _client_with(t)
+    assert c.get_traffic_segments("740000901", "740000902", "123", "2026-09-11") == {
+        "segments": [{"stations": []}]
+    }
+    assert t.request.method == "POST"
+    assert t.request.url.path.endswith("/trafficinfo-api/v2/rest/segments")
+    assert "authorization" not in t.request.headers  # public endpoint
+    assert t.request.headers["ocp-apim-subscription-key"] == SJClient.H_OCP_APIM_TRAFFIC_KEY
+    assert SJClient.H_OCP_APIM_TRAFFIC_KEY != SJClient.H_OCP_APIM_SUB_KEY  # its own key
+    assert json.loads(t.request.content) == {
+        "segments": [
+            {
+                "departureUicStationCode": "740000901",
+                "arrivalUicStationCode": "740000902",
+                "serviceName": "123",
+                "ricsCode": "74",
+                "serviceScheduleDate": "2026-09-11",
+                "transportMethod": "TRAIN",
+            }
+        ]
+    }
+
+
+def test_get_traffic_segments_raises_on_an_error_response():
+    t = RecordingTransport({"errorCode": "E1", "message": "nope"}, status=400)
+    with pytest.raises(SJAPIError):
+        _client_with(t).get_traffic_segments("1", "2", "123", "2026-09-11")
+
+
 def test_get_stations_rejects_a_non_list_body():
     c = _client_with(RecordingTransport(body={"oops": 1}))
     with pytest.raises(SJAPIError):

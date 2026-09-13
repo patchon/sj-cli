@@ -272,6 +272,10 @@ class SJClient:
     H_CONTENT_TYPE_JSON = "application/json"
     H_CONTENT_TYPE_FORM = "application/x-www-form-urlencoded; charset=UTF-8"
     H_OCP_APIM_SUB_KEY = "d6625619def348d38be070027fd24ff6"
+    # The traffic-info API takes its own subscription key, not the sales one
+    # above. Like it, this is a public key embedded in sj.se's front end
+    # (every visitor's browser sends it) — not a user secret.
+    H_OCP_APIM_TRAFFIC_KEY = "39296c1a13304493b44236e1bcb7f544"
     H_SEC_CH_UA = '"Google Chrome";v="120", "Chromium";v="120", "Not?A_Brand";v="24"'
     H_SEC_CH_UA_MOBILE = "?0"
     H_SEC_CH_UA_PLATFORM = '"macOS"'
@@ -290,6 +294,7 @@ class SJClient:
     URL_API = "https://prod-api.adp.sj.se/public"
     URL_API_BOOKING = f"{URL_API}/sales/booking/v3"
     URL_API_SECURE_BOOKING = f"{URL_API}/sales/secure/booking/v3"
+    URL_API_TRAFFIC = f"{URL_API}/trafficinfo-api/v2/rest"
     X_CLIENT_VERSION = "20251217.0004-prod"
 
     def __init__(self) -> None:
@@ -1405,6 +1410,62 @@ class SJClient:
 
         logger.info(f"fetching bookings (page {page}) from {start_date} to {end_date} ...")
         resp = self.client.get(url_api, params=params, headers=headers)
+        return _json_or_raise(resp)
+
+    def get_traffic_segments(
+        self, dep_uic: str, arr_uic: str, train: str, date: str
+    ) -> dict[str, Any]:
+        """
+        Fetches traffic information for one train leg (public: no access token).
+
+        This is the service the sj.se journey view reads its "arrived HH:MM"
+        from: per station of the segment, the planned time, the current one
+        and whether the train has arrived — the only SJ source that knows how
+        late a train actually was. It answers for about the travel day; older
+        days come back with `missingData`.
+
+        Args:
+            dep_uic: The departure station's UIC code.
+            arr_uic: The arrival station's UIC code.
+            train: The public train number (e.g. "520").
+            date: The service's schedule date (YYYY-MM-DD).
+
+        Returns:
+            The response dict: {"segments": [{"stations": [...], ...}]}.
+
+        Raises:
+            SJAPIError: If the API reports an error or the body is unusable.
+            httpx.HTTPError: On a non-2xx response or a network failure.
+
+        """
+        url_api = f"{self.URL_API_TRAFFIC}/segments"
+
+        payload = {
+            "segments": [
+                {
+                    "departureUicStationCode": dep_uic,
+                    "arrivalUicStationCode": arr_uic,
+                    "serviceName": train,
+                    "ricsCode": "74",  # SJ AB, the carrier code the web app sends
+                    "serviceScheduleDate": date,
+                    "transportMethod": "TRAIN",
+                }
+            ]
+        }
+
+        # No Authorization: the traffic-info API is public and takes its own
+        # subscription key rather than the sales one.
+        headers = {
+            "Accept": self.H_ACCEPT_JSON,
+            "Content-Type": self.H_CONTENT_TYPE_JSON,
+            "ocp-apim-subscription-key": self.H_OCP_APIM_TRAFFIC_KEY,
+            "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
+            "Origin": self.URL_SJ,
+            "Referer": f"{self.URL_SJ}/",
+        }
+
+        logger.info(f"fetching traffic info for train {train} on {date} from {url_api} ...")
+        resp = self.client.post(url_api, json=payload, headers=headers)
         return _json_or_raise(resp)
 
     def resolve_station(self, station_name: str) -> str:

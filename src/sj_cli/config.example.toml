@@ -129,3 +129,26 @@ service_types = ["SJ_HIGH", "SJ_IC"]
 #seat_preference = "ask"
 #seat_preference = ["window", "table", "forward"]
 #seat_preference = ["avoid table", "single", "aisle", "window", "forward"]
+
+# How `--list-bookings --delays` judges a past leg. Optional: leave the whole
+# section out and the defaults below apply. Nothing is stored between runs —
+# every leg is looked up live, through SJ's traffic information and, once that
+# has forgotten the day, three public sources (Trafikverket, Tågradar,
+# Tågstatistik). A source that is down or silent simply hands over to the next
+# one; when none of them answers the leg reads "no data".
+[delays]
+
+# Up to this many minutes late still counts as "on time". Optional, a whole
+# number of minutes, defaults to 5. Arriving early counts as on time too.
+#on_time_minutes = 5
+
+# From this many minutes late the cell says "claim compensation". Optional, a
+# whole number of minutes, defaults to 60 — what SJ compensates from — and it
+# must be greater than on_time_minutes. The tool never files anything: it
+# tells you which journeys are worth claiming for.
+#compensation_minutes = 60
+
+# Your own Trafikverket API key, one of the five sources. Optional and free:
+# register at data.trafikverket.se and paste the key here. Without it that
+# source is skipped and the other four still answer.
+#trafikverket_key = "your-trafikverket-key"

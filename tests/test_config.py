@@ -1,7 +1,8 @@
 import pytest
 
-from sj_cli.config import SERVICE_TYPE_NAMES, CfgManager
+from sj_cli.config import SERVICE_TYPE_NAMES, CfgManager, delay_thresholds, trafikverket_key
 from sj_cli.errors import SJConfigError
+from sj_cli.punctuality import Thresholds
 from tests.fakes import base_cfg, future_cfg
 
 
@@ -334,3 +335,69 @@ def test_seat_preference_is_required_even_when_the_section_exists():
     with pytest.raises(SJConfigError) as e:
         CfgManager().verify_cfg(cfg, require_seat_preference=True)
     assert any("seat_preference" in err for err in e.value.errors)
+
+
+#
+# [delays]
+#
+
+
+def delays_cfg(**delays):
+    cfg = future_cfg()
+    cfg["delays"] = delays
+    return cfg
+
+
+def test_delays_is_optional_and_defaults_to_five_and_sixty():
+    cfg = future_cfg()
+    verify(cfg)  # no section at all is fine
+    assert delay_thresholds(cfg) == Thresholds(5, 60)
+    assert delay_thresholds(cfg).on_time == 5
+    assert delay_thresholds(cfg).compensation == 60
+    assert trafikverket_key(cfg) is None
+    assert delay_thresholds(delays_cfg()) == Thresholds(5, 60)  # an empty section too
+
+
+def test_delays_valid_section_is_read_back():
+    cfg = delays_cfg(on_time_minutes=0, compensation_minutes=20, trafikverket_key="  abc123  ")
+    verify(cfg)
+    assert delay_thresholds(cfg) == Thresholds(0, 20)
+    assert trafikverket_key(cfg) == "abc123"
+
+
+def test_delays_rejects_non_integer_and_negative_minutes():
+    assert "on_time_minutes must be a whole number" in errors_of(delays_cfg(on_time_minutes="5"))
+    assert "on_time_minutes must be a whole number" in errors_of(delays_cfg(on_time_minutes=True))
+    assert "on_time_minutes must be at least 0" in errors_of(delays_cfg(on_time_minutes=-1))
+    assert "compensation_minutes must be at least 1" in errors_of(
+        delays_cfg(compensation_minutes=0)
+    )
+    assert "compensation_minutes must be a whole number" in errors_of(
+        delays_cfg(compensation_minutes=1.5)
+    )
+
+
+def test_delays_rejects_a_compensation_threshold_at_or_below_on_time():
+    msg = errors_of(delays_cfg(on_time_minutes=30, compensation_minutes=30))
+    assert "compensation_minutes must be greater than on_time_minutes" in msg
+    assert "compensation_minutes must be greater" in errors_of(delays_cfg(on_time_minutes=90))
+    verify(delays_cfg(on_time_minutes=30, compensation_minutes=31))
+
+
+def test_delays_rejects_an_empty_key_and_a_non_section():
+    assert "trafikverket_key must be a non-empty string" in errors_of(
+        delays_cfg(trafikverket_key="   ")
+    )
+    assert "trafikverket_key must be a non-empty string" in errors_of(
+        delays_cfg(trafikverket_key=7)
+    )
+    cfg = future_cfg()
+    cfg["delays"] = "on"
+    assert "[delays] must be a section" in errors_of(cfg)
+    assert trafikverket_key(cfg) is None  # and the readers survive it
+
+
+def test_delays_is_validated_in_every_mode():
+    cfg = {"auth": {"email": "a@b.se", "password": "x"}, "delays": {"on_time_minutes": -1}}
+    with pytest.raises(SJConfigError, match="on_time_minutes"):
+        CfgManager().verify_cfg(cfg, require_search=False)

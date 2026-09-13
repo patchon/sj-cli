@@ -174,6 +174,7 @@ class FakeClient:
         self._last_dep: dict | None = None
         self._bookings: dict[str, dict] = {}
         self.seatmaps: dict[str, dict] = {}  # seatMapSearchId -> seat map
+        self.traffic_segments: dict[tuple, dict] = {}  # (train, date) -> segments response
         self.seat_updates: list[tuple] = []  # (booking_id, updates, provisional)
         self.seatmap_error: Exception | None = None
         self.seat_update_error: Exception | None = None
@@ -341,6 +342,13 @@ class FakeClient:
             # (2026-09-09); nothing in src/ reads it.
             "filteredCount": 0,
         }
+
+    def get_traffic_segments(self, dep_uic, arr_uic, train, date):
+        self.calls.append(("traffic", dep_uic, arr_uic, train, date))
+        if (train, date) in self.traffic_segments:
+            return self.traffic_segments[(train, date)]
+        # what the live service answers for a day it no longer holds
+        return {"segments": [{"missingData": True, "stations": None}]}
 
     def get_seatmap(self, token, booking_id, seatmap_search_id):
         self.calls.append(("seatmap", booking_id, seatmap_search_id))

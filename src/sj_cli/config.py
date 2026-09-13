@@ -14,6 +14,7 @@ from sj_cli.dates import normalise_date_selection, parse_date_selection, sweden_
 from sj_cli.errors import SJConfigError
 from sj_cli.logger import log_json
 from sj_cli.output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
+from sj_cli.punctuality import Thresholds
 from sj_cli.seats import parse_preference
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,9 @@ class CfgManager:
             else:
                 self._validate_search_params(params, errors, require_dates, require_seat_preference)
 
+        # [delays] is optional in every mode: absent means the defaults.
+        self._validate_delays(cfg, errors)
+
         # seat_preference is validated even when the rest of [search_parameters]
         # is not: the change-seat modes need the key and nothing else.
         if not require_search:
@@ -325,6 +329,45 @@ class CfgManager:
         # word list does, and the booking layer must never see the raw string.
         params["seat_preference"] = preference
 
+    def _validate_delays(self, cfg: dict[str, Any], errors: list[str]) -> None:
+        """
+        Validate the optional [delays] section (--list-bookings --delays).
+
+        Absence is never an error — the two thresholds have defaults and the
+        Trafikverket key is one source out of five — but a section that is
+        there has to make sense: minutes are whole and non-negative, and
+        compensation has to be the later of the two or the middle band
+        ("N min late", nothing to claim) would be empty.
+        """
+        delays = cfg.get("delays")
+        if delays is None:
+            return
+        if not isinstance(delays, dict):
+            errors.append("[delays] must be a section")
+            return
+
+        thresholds = Thresholds()
+        minutes: dict[str, int] = {}
+        for key, default, lowest in (
+            ("on_time_minutes", thresholds.on_time, 0),
+            ("compensation_minutes", thresholds.compensation, 1),
+        ):
+            value = delays.get(key)
+            if value is None:
+                minutes[key] = default
+            elif not isinstance(value, int) or isinstance(value, bool):
+                errors.append(f"{key} must be a whole number of minutes")
+            elif value < lowest:
+                errors.append(f"{key} must be at least {lowest}")
+            else:
+                minutes[key] = value
+        if len(minutes) == 2 and minutes["compensation_minutes"] <= minutes["on_time_minutes"]:
+            errors.append("compensation_minutes must be greater than on_time_minutes")
+
+        key_value = delays.get("trafikverket_key")
+        if key_value is not None and (not isinstance(key_value, str) or not key_value.strip()):
+            errors.append("trafikverket_key must be a non-empty string if specified")
+
     def _validate_dates(self, params: dict[str, Any], errors: list[str]) -> None:
         """
         Validate the `dates` selection (grammar: dates.parse_date_selection).
@@ -378,3 +421,35 @@ class CfgManager:
                 errors.append(f"{field_name} '{value}' must be a time formatted HH:MM (24-hour)")
             return None
         return value
+
+
+def delay_thresholds(cfg: dict[str, Any]) -> Thresholds:
+    """
+    The two minute thresholds from [delays], or their defaults.
+
+    Reads a validated config: verify_cfg has already rejected a value that
+    is not a whole number of minutes, so anything odd left here is simply
+    ignored in favour of the default.
+    """
+    delays = cfg.get("delays") or {}
+    if not isinstance(delays, dict):
+        return Thresholds()
+    defaults = Thresholds()
+
+    def minutes(key: str, default: int) -> int:
+        value = delays.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+    return Thresholds(
+        on_time=minutes("on_time_minutes", defaults.on_time),
+        compensation=minutes("compensation_minutes", defaults.compensation),
+    )
+
+
+def trafikverket_key(cfg: dict[str, Any]) -> str | None:
+    """The Trafikverket API key from [delays], or None — that source is then skipped."""
+    delays = cfg.get("delays") or {}
+    if not isinstance(delays, dict):
+        return None
+    value = delays.get("trafikverket_key")
+    return value.strip() if isinstance(value, str) and value.strip() else None
