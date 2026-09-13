@@ -41,6 +41,8 @@ _SECRET_KEYS = frozenset(
         "verification_code",  # the SMS code
         "x-csrf-token",
         "csrf_token",
+        "trafikverket_key",  # the user's own API key, from [delays]
+        "authenticationkey",  # the same key, as Trafikverket's XML names it
     }
 )
 _REDACTED = "***redacted***"

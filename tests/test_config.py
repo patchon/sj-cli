@@ -397,6 +397,17 @@ def test_delays_rejects_an_empty_key_and_a_non_section():
     assert trafikverket_key(cfg) is None  # and the readers survive it
 
 
+def test_the_example_config_delays_section_validates_to_the_defaults():
+    import tomllib
+
+    with CfgManager.EXAMPLE_PATH.open("rb") as f:
+        example = tomllib.load(f)
+    example["search_parameters"]["dates"] = future_cfg()["search_parameters"]["dates"]
+    CfgManager().verify_cfg(example)
+    assert delay_thresholds(example) == Thresholds(5, 60)
+    assert trafikverket_key(example) is None
+
+
 def test_delays_is_validated_in_every_mode():
     cfg = {"auth": {"email": "a@b.se", "password": "x"}, "delays": {"on_time_minutes": -1}}
     with pytest.raises(SJConfigError, match="on_time_minutes"):

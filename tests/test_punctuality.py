@@ -9,6 +9,7 @@ from sj_cli.punctuality import (
     Thresholds,
     clock,
     lookup,
+    make_http,
     minutes_between,
     sj_arrival,
     tagradar_worker,
@@ -40,7 +41,6 @@ def v(minutes, *, cancelled=False, exact=True):
 
 
 def test_verdict_no_data_when_nobody_answered():
-    assert verdict(None, THRESHOLDS) == verdict(None, THRESHOLDS)
     assert verdict(None, THRESHOLDS).text == "no data"
     assert verdict(None, THRESHOLDS).claim is False
 
@@ -428,6 +428,25 @@ def test_tagstatistik_summary_is_exact_only_when_the_final_stop_is_ours():
     assert verdict(got, THRESHOLDS).text == "final stop 12 min late · likely"
 
 
+def test_tagstatistik_summary_is_never_exact_without_a_readable_final_stop():
+    # an unreadable anktid cannot be our stop, so the figure stays an
+    # indication rather than printing with the exact wording
+    for anktid in (None, "", "n/a"):
+        http, _ = transport({SUMMARY: summary_body(anktid=anktid)})
+        got = tagstatistik_summary(LEG, http)
+        assert got.exact is False
+        assert got.planned == LEG.planned_arrival
+        assert verdict(got, THRESHOLDS).text == "final stop 12 min late · likely"
+
+
+def test_tagstatistik_summary_only_a_filled_in_inst_means_cancelled():
+    # no non-null inst has ever been seen live, so its shape is unknown: a
+    # falsy value is read as "not cancelled", not as a cancellation
+    for inst in (0, "", None):
+        http, _ = transport({SUMMARY: summary_body(inst=inst)})
+        assert tagstatistik_summary(LEG, http).cancelled is False
+
+
 def test_tagstatistik_summary_cancelled_and_missing_rows():
     http, _ = transport({SUMMARY: summary_body(inst="X")})
     got = tagstatistik_summary(LEG, http)
@@ -445,6 +464,27 @@ def test_tagstatistik_summary_is_memoised_per_train():
     assert tagstatistik_summary(LEG, http, memo).minutes_late == 12
     assert tagstatistik_summary(other, http, memo).minutes_late == 12
     assert len(seen) == 1  # one call for the whole year, shared by both legs
+
+
+#
+# the client the external sources share
+#
+
+
+def test_make_http_is_retried_patient_and_anonymous():
+    from sj_cli.client import RetryTransport
+
+    client = make_http()
+    try:
+        # tighter than the SJ client's 30 s: a listing waits on these, and the
+        # retry policy replays a GET three times over
+        assert client.timeout.read == 15.0
+        assert client.timeout.connect == 5.0
+        assert isinstance(client._transport, RetryTransport)
+        assert "Mozilla/5.0" in client.headers["user-agent"]
+        assert "authorization" not in client.headers  # public third parties
+    finally:
+        client.close()
 
 
 #
@@ -497,6 +537,27 @@ def test_cascade_falls_through_to_each_next_source():
     got, seen = cascade(routes, sj=lambda _leg: None)
     assert got.source == "tagstatistik"
     assert paths(seen) == [WORKER, DETAIL]
+
+
+def test_cascade_caches_a_raising_source_across_two_legs():
+    # SJClient.get_traffic_segments raises by contract (a bad key, a 503):
+    # without caching the failure, a bad day would cost one POST per leg
+    memo = {}
+    calls = []
+
+    def sj(leg):
+        calls.append(leg.planned_arrival)
+        raise httpx.ConnectError("traffic info is unreachable")
+
+    empty = {WORKER: {"stops": []}, DETAIL: {"result": None}, SUMMARY: {"data": []}}
+    http, _seen = transport(empty)
+    other = Leg("123", "2026-09-11", "07:15", "740000901", "740000902", "Brunnsmåla C")
+    for leg in (LEG, other):
+        assert (
+            lookup(leg, sj_segments=sj, http=http, trafikverket_key=None, today=TODAY, memo=memo)
+            is None
+        )
+    assert calls == ["09:42"]  # asked once for the train and day, not once per leg
 
 
 def test_cascade_skips_a_source_that_raises():

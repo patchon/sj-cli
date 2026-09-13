@@ -30,11 +30,16 @@ from typing import Any, NamedTuple
 
 import httpx
 
-from sj_cli.client import HTTP_TIMEOUT, RetryTransport
 from sj_cli.dates import SWEDEN, parse_api_datetime
 from sj_cli.logger import log_request, log_response
+from sj_cli.stations import fold
 
 logger = logging.getLogger(__name__)
+
+# A source is one of five and the user is watching a listing: wait a good
+# deal less on it than on an SJ booking call (the retry policy replays a GET
+# up to three times, so this is the per-attempt patience).
+HTTP_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 
 # How far back the exact sources (1-4) still answer. Beyond this the cascade
 # goes straight to the yearly summary rather than spending four requests
@@ -191,6 +196,8 @@ def minutes_between(planned: str, actual: str, day: str) -> int | None:
     ``day`` (the leg's travel date) dates a value given as a bare time; when
     either side was undated the difference is folded into ±12 h, so a train
     planned at 23:55 and arriving 00:07 is 12 minutes late, not a day early.
+    That fold is also a cap: an undated delay of more than 12 h is not
+    representable, and no train we look up is that late.
     """
     left = _as_datetime(planned, day)
     right = _as_datetime(actual, day)
@@ -198,13 +205,10 @@ def minutes_between(planned: str, actual: str, day: str) -> int | None:
         return None
     minutes = round((right[0] - left[0]).total_seconds() / 60)
     if not (left[1] and right[1]):
+        # Undated times cannot say which day they are on, so the fold caps
+        # such a delay at 12 h by design: past that it reads as early instead.
         minutes = (minutes + _HALF_DAY) % _DAY - _HALF_DAY
     return int(minutes)
-
-
-def _fold(name: str) -> str:
-    """Casefold a station name and collapse its whitespace, for comparing."""
-    return " ".join(name.split()).casefold()
 
 
 def _pick_stop(
@@ -226,7 +230,7 @@ def _pick_stop(
     if name_of is not None:
         for stop in rows:
             name = name_of(stop)
-            if isinstance(name, str) and _fold(name) == _fold(leg.arr_short):
+            if isinstance(name, str) and fold(name) == fold(leg.arr_short):
                 return stop
     return None
 
@@ -241,9 +245,17 @@ def make_http() -> httpx.Client:
     An HTTP client for the external sources, built like the SJ one.
 
     Same retry policy (GETs replayed on 502/503, timeouts and connection
-    errors) and same timeout, but no SJ headers and no auth: these are
-    public third-party endpoints.
+    errors), but no SJ headers and no auth: these are public third-party
+    endpoints. The timeout is tighter than the SJ client's — a listing waits
+    on these, and a booking POST's 30 s allowance retried three times would
+    stall a whole run on one source being slow.
+
+    The retry transport is imported here rather than at module level so this
+    module (and everything that reads a verdict from it) carries no
+    dependency on the SJ HTTP client.
     """
+    from sj_cli.client import RetryTransport
+
     return httpx.Client(
         transport=RetryTransport(httpx.HTTPTransport()),
         http2=False,
@@ -277,13 +289,19 @@ def _cached(memo: dict[Any, Any] | None, key: tuple[str, ...], fetch: Callable[[
     """
     One fetch per (source, train, date) in a run — two legs on a train share it.
 
-    A failure caches as None too: if the source was down for the first leg
-    it will be down for the second.
+    A failure caches as None too — including a fetch that raises (the SJ
+    client raises by contract): a bad key or a 503 would otherwise cost one
+    request per leg instead of one per train and day. The exception still
+    propagates, so the caller's own handling is unchanged.
     """
     if memo is None:
         return fetch()
     if key not in memo:
-        memo[key] = fetch()
+        try:
+            memo[key] = fetch()
+        except BaseException:
+            memo[key] = None
+            raise
     return memo[key]
 
 
@@ -301,6 +319,10 @@ def sj_arrival(leg: Leg, body: Any) -> Arrival | None:
     reason why traffic information is unavailable, or carries no stations
     tells us nothing, and a stop the train has not ``arrived`` at yet has no
     actual time — both pass to the next source.
+
+    A station's ``name`` is verified live to carry the short form
+    ("Linköping C"), which is what the leg's ``arr_short`` holds, so the
+    name fallback in ``_pick_stop`` really does catch a moved minute here.
     """
     if not isinstance(body, dict):
         return None
@@ -543,7 +565,9 @@ def tagstatistik_summary(
     stop only when its planned time is the leg's planned arrival — otherwise
     the arrival comes back inexact and the verdict words it as an
     indication. ``ankdiff`` carries the same inverted sign as the detail
-    source, and a non-null ``inst`` means the run was cancelled.
+    source, and a filled-in ``inst`` means the run was cancelled — no such
+    row has been seen live, so it is read for truthiness rather than trusting
+    a shape nobody has observed.
     """
     try:
         body = _cached(
@@ -569,9 +593,12 @@ def tagstatistik_summary(
         )
         if row is None:
             return None
-        planned = clock(row.get("anktid")) or leg.planned_arrival
-        exact = planned == leg.planned_arrival
-        if row.get("inst") is not None:
+        # A row whose final stop we cannot read is never our stop: the
+        # figure stays an indication rather than passing as exact.
+        final_stop = clock(row.get("anktid"))
+        exact = final_stop is not None and final_stop == leg.planned_arrival
+        planned = final_stop or leg.planned_arrival
+        if row.get("inst"):
             return Arrival(0, True, exact, SOURCE_TAGSTATISTIK_SUMMARY, planned, None)
         diff = row.get("ankdiff")
         if diff is None or diff == "":

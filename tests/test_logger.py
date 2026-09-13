@@ -33,6 +33,17 @@ def test_log_json_is_pretty_and_redacted():
     assert json.loads(s) == {"password": "***redacted***", "n": 1}
 
 
+def test_log_json_redacts_the_trafikverket_key():
+    # config.py logs the whole loaded config at DEBUG, and [delays] holds the
+    # user's own API key; Trafikverket's XML spells the same key
+    # "authenticationkey".
+    out = log_json({"delays": {"trafikverket_key": "x", "on_time_minutes": 5}})
+    assert json.loads(out) == {
+        "delays": {"trafikverket_key": "***redacted***", "on_time_minutes": 5}
+    }
+    assert redact({"authenticationkey": "x"}) == {"authenticationkey": "***redacted***"}
+
+
 def test_log_json_survives_unserialisable():
     assert "failed to serialize" not in log_json({"when": object()})  # default=str handles it
 
