@@ -110,6 +110,18 @@ def test_minutes_between_signs_and_midnight():
     assert minutes_between("nonsense", "09:54", "2026-09-11") is None
 
 
+def test_minutes_between_truncates_to_the_clock_minute():
+    # every official figure reads the clock, never the seconds: 20:06:33 is
+    # 20:06, so the train is 64 late — the same as Tågstatistik reports
+    assert minutes_between("2026-09-11T19:02:00+02:00", "2026-09-11T20:06:33+02:00", "x") == 64
+    # and rounding would turn a 59-minute delay into a claimable 60
+    assert minutes_between("2026-09-11T08:38:00+02:00", "2026-09-11T09:37:59+02:00", "x") == 59
+    # an early arrival reads the same way: 18:02:51 is 18:02, one minute early
+    assert minutes_between("2026-09-11T18:03:00+02:00", "2026-09-11T18:02:51+02:00", "x") == -1
+    # seconds on the planned side are dropped too
+    assert minutes_between("2026-09-11 09:42:40", "2026-09-11 09:54:10", "2026-09-11") == 12
+
+
 #
 # the mock transports
 #

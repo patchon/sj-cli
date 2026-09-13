@@ -193,6 +193,12 @@ def minutes_between(planned: str, actual: str, day: str) -> int | None:
     """
     Whole minutes from ``planned`` to ``actual``, negative when early.
 
+    Both sides are read at minute resolution — seconds are dropped, never
+    rounded — because that is what every official figure does: a train
+    planned 19:02 that arrives 20:06:33 is 64 minutes late, the same as
+    Tågstatistik reports and the worker's own ``actual`` of 20:06 says.
+    Rounding would make 59:31 a claimable 60.
+
     ``day`` (the leg's travel date) dates a value given as a bare time; when
     either side was undated the difference is folded into ±12 h, so a train
     planned at 23:55 and arriving 00:07 is 12 minutes late, not a day early.
@@ -203,7 +209,9 @@ def minutes_between(planned: str, actual: str, day: str) -> int | None:
     right = _as_datetime(actual, day)
     if left is None or right is None:
         return None
-    minutes = round((right[0] - left[0]).total_seconds() / 60)
+    planned_minute = left[0].replace(second=0, microsecond=0)
+    actual_minute = right[0].replace(second=0, microsecond=0)
+    minutes = int((actual_minute - planned_minute).total_seconds() // 60)
     if not (left[1] and right[1]):
         # Undated times cannot say which day they are on, so the fold caps
         # such a delay at 12 h by design: past that it reads as early instead.
