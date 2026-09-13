@@ -138,6 +138,11 @@ skip_weekends = true              # optional, default true
 skip_holidays = true              # optional, default true
 service_types = ["SJ_HIGH", "SJ_IC"]  # optional; omit or ["ALL"] for no filter
 seat_preference = ["window", "table", "forward"]  # optional; or "ask" to be prompted (§4.3)
+
+[delays]                          # optional (§4.3, §5.5); every key has a default
+on_time_minutes = 5               # "on time" up to and including this many minutes late
+compensation_minutes = 60         # "claim compensation" from this many minutes late
+# trafikverket_key = "..."        # optional; the Trafikverket source is skipped without it
 ```
 
 ### 4.3 Validation rules
@@ -163,6 +168,7 @@ Validation runs at startup before any API calls, scoped to the operation: `[auth
 | `skip_holidays` | Optional. Boolean. Defaults to `true`. Skip Swedish red days (see §6.4). |
 | `service_types` | Optional. List of strings from `ALL, SJ_HIGH, SJ_IC, SJ_REG, SJ_NT, X_TRAINOPS, X_PTA, X_EXPBUS`. `ALL` cannot be combined with other values. |
 | `seat_preference` | Optional (absent means SJ assigns the seat); required for `--change-seat-date` / `--change-seat-booking` (§5.4). Either the literal `"ask"` (prompt for every leg) or a list of ranked vocabulary words: `window`, `aisle`, `table`, `solo`, `single`, `easy access`, `no animals`, `forward`, `backward` — an earlier word in the list outweighs every later one combined. Any word may also be negated as `avoid <word>` (`avoid table`), which is met by exactly the seats the plain word is not; the ranking is unchanged (lexicographic), so the position sets the strength — `["avoid table", "single", "aisle", "window", "forward"]` puts every table-free seat ahead of every table seat, then singles, then aisle-forward, aisle-backward, window-forward, window-backward. A negation is best-effort like every other wish: when only avoided seats are free, one is taken anyway (§5.4). `solo` is SJ's first-class "Singelplats" product (a marketed property code); `single` is any seat with no neighbour, computed from the carriage's 2+1 layout geometry rather than read from a code — the two are not the same and a seat can be either, both or neither. Words are normalised in place (lower-cased, inner whitespace collapsed to one space). Rejected: a value that is neither `"ask"` nor a list of strings (`seat_preference must be "ask" or a list of: aisle, backward, easy access, forward, no animals, single, solo, table, window — each also as "avoid <word>"`); an empty list (`seat_preference is empty — omit the key to let SJ assign the seat`); an unknown word, including an `avoid` naming one (`seat_preference: unknown "middle". Valid words: …`, `seat_preference: unknown "avoid middle". Valid words: …` — the listing ends `— each also as "avoid <word>"`); a wish listed twice, negated or not (`seat_preference lists window twice`); `forward`+`backward` together (`seat_preference cannot ask for both forward and backward`) — every seat is one or the other, so naming both can never change the order and is a typo rather than a wish — and that same pair negated, which says as little (`seat_preference cannot ask for both avoid forward and avoid backward`); and any word together with its own negation (`seat_preference cannot ask for both table and avoid table`). `window`+`aisle` is **allowed**, and so is `single`+`aisle`: a seat can be neither, and an earlier word outranks a later one, so `["aisle", "window"]` is a fallback order — aisle seats first, window seats next, the rest last — not a contradiction. Nothing in a list is a guarantee anyway: the best remaining seat is taken whatever it satisfies. |
+| `[delays]` | Optional table, validated in every mode (absence is fine, defaults apply): `on_time_minutes` an integer ≥ 0 (default 5); `compensation_minutes` an integer ≥ 1 and greater than `on_time_minutes` (default 60 — Swedish law sets 20 minutes on routes under 150 km and 60 above); `trafikverket_key` an optional non-empty string (free registration at data.trafikverket.se). Read by `--list-bookings --delays` only (§5.5). |
 
 Report all validation errors at once (don't stop at the first one).
 
@@ -379,6 +385,29 @@ W22
 
 The footer's `N cancelled` counts legs carrying the marker, shown only when non-zero, on the same pattern as `N in the past`. A cancelled leg is never sent to the seat-details fetch (above), even under `--seat-details`: a cancelled ticket has no seat to read. Without `--show-cancelled`, listing is exactly as it was — non-cancelled bookings only, regardless of `--since`.
 
+**`--delays`** (modifier, `--list-bookings` only, §5.8): looks up, live, whether each past leg arrived on time, and puts a further column after the booking number — `on time`, `12 min late`, `64 min late · claim compensation`, `train cancelled · claim compensation`, or `no data`. Nothing is stored between runs. SJ's booking data never records an arrival, so the tool asks five sources in order and takes the first answer:
+
+| # | source | our stop | reach |
+|---|---|---|---|
+| 1 | SJ's traffic-info API (the one sj.se's "your journeys" page uses) | exact | the travel day and the day after |
+| 2 | Trafikverket's open API, only with `[delays].trafikverket_key` | exact | about four days (unverified until a key exists) |
+| 3 | Tågradar's search backend | exact | about four days |
+| 4 | Tågstatistik's per-train detail | exact | about four days |
+| 5 | Tågstatistik's yearly per-train summary | the train's **final stop** | about a year, lagging some days |
+
+A leg older than five days goes straight to source 5. Our stop is the one whose planned arrival matches the leg's to the minute. When only the final-stop figure exists the cell says so and claims only cautiously: `final stop on time · likely`, `final stop 12 min late · likely`, `final stop 78 min late · likely, verify` — for a train that ends at the leg's own arrival station the summary is exact and reads like the others. The thresholds are `[delays]` (§4.3): `on time` up to `on_time_minutes` (early counts as on time), `claim compensation` from `compensation_minutes`. Booking-cancelled legs (`--show-cancelled`) and future legs are never looked up. The spinner counts the legs — `looking up delays · 5 of 38` — like seat details; a source that fails or answers nothing is skipped silently, an unexpected error is one aggregated `! delay lookup failed for N leg(s)`, and the listing never fails on it. The footer adds `· N to claim`, counting exact claim verdicts and final-stop `verify` ones. A claim cell is rendered in the warning colour so it stands out on an otherwise dim past row; the rest of the cell is dim.
+
+```
+W37
+  thu 10 sep 2026   Göteborg Central ⇄ Stockholm Central   past
+    → 06:59 – 08:38   1h 39m   X 2000 520   carriage 3 seat 51   2 class calm   FULLFLEX   ABCD1234   118 min late · claim compensation
+    ← 17:22 – 19:02   1h 40m   X 2000 543   carriage 3 seat 27   2 class calm   FULLFLEX   ABCD1234   on time
+
+● 1 day(s) · 1 booking(s) · 2 in the past · 1 to claim
+```
+
+Sources 3–5 are unofficial endpoints run by third parties; they are used lightly (a run memoises every response, one summary call per train number) and may change or disappear, which the cascade absorbs.
+
 ### 5.6 Upgrade-class mode
 
 ```bash
@@ -479,6 +508,7 @@ The closing status is green when a ticket was actually bought, red when any leg 
 | `--seat-details` | Modifier for `--list-bookings` only (§5.5): append each not-yet-departed leg's assigned seat characteristics (window/aisle/table/solo/single/forward/backward) to its seat cell — one extra `get_seatmap` request per eligible leg. When `seat_preference` is a ranked word list, also names a strictly better free seat when one exists (`· could take <n> · <words>`); silent under `"ask"` or an absent preference. Usage error alone or with any flag other than `--list-bookings`. | Only SMS on first login. |
 | `--since DATE` | Modifier for `--list-bookings` only (§5.5): list from `DATE` instead of today. `DATE` is a date, an ISO week, or an offset back from today (`90d`, `6m`); validated up front, a value that resolves to the future is a usage error. Composes with `--show-cancelled`. Usage error alone or with any flag other than `--list-bookings`. | Only SMS on first login. |
 | `--show-cancelled` | Modifier for `--list-bookings` only (§5.5): also list cancelled bookings (their legs, read from `cancelledJourneys`, marked `cancelled`). Composes with `--since` to reach back past today. Usage error alone or with any flag other than `--list-bookings`. | Only SMS on first login. |
+| `--delays` | Modifier for `--list-bookings` only (§5.5): look up live whether each past leg arrived on time and flag delays long enough to claim compensation for (`[delays]`, §4.3); a final-stop indication when only that survives. Composes with `--since`, `--show-cancelled` and `--seat-details`. Usage error alone or with any other flag. | Only SMS on first login; the external sources need none. |
 | `--list-travelpasses` | Display travel passes with validity and receipt details. | Only SMS on first login. |
 | `--login` | Header box (`operation   logging in` + config email), auth trail, then the login-status card. Verdict `● logged in` when a full login ran, `● already logged in` when the cached/refreshed session sufficed. The card judges the session just established, not the cache file; a cache that could not be written is said first (`! token cache not saved: … · the next run will need to log in again`). | Only SMS on first login. |
 | `--logout` | End the sj.se SSO session and delete the cached token and cookies. | No. |

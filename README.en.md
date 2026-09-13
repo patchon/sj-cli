@@ -125,6 +125,11 @@ skip_weekends = true
 skip_holidays = true
 service_types = ["SJ_HIGH"]
 seat_preference = ["avoid table", "single", "aisle", "window", "forward"]
+
+[delays]                          # optional, for --list-bookings --delays
+on_time_minutes = 5               # "on time" up to this many minutes late
+compensation_minutes = 60         # "claim compensation" from this many minutes late
+# trafikverket_key = "..."        # optional, free from data.trafikverket.se
 ```
 
 With the configuration above the tool will:
@@ -222,6 +227,15 @@ week (`W38`, `2026-W38`), or an offset back from today (`90d`, `6m`).
 Use `--show-cancelled` together with `--list-bookings` to also list cancelled
 bookings (marked `cancelled`). Combine it with `--since` to reach back past
 today.
+
+With `--delays` together with `--list-bookings` the tool looks up, live as it
+runs, whether each past leg arrived on time: `on time`, `12 min late`, or
+`64 min late · claim compensation` when the delay is long enough to claim for
+(thresholds in `[delays]`, 5 and 60 minutes by default). The data comes from
+SJ's traffic info, Trafikverket's open data (with your own key) and
+Tågstatistik; the exact arrival at your station exists for about four days,
+after which the train's final-stop time is shown as an indication
+(`final stop 78 min late · likely, verify`). Nothing is stored between runs.
 
 You can also skip copying the config file: run `--login` in a terminal and the
 tool offers to create the configuration for you, asking for your email and

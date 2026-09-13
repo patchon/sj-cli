@@ -128,6 +128,11 @@ skip_weekends = true
 skip_holidays = true
 service_types = ["SJ_HIGH"]
 seat_preference = ["avoid table", "single", "aisle", "window", "forward"]
+
+[delays]                          # valfritt, för --list-bookings --delays
+on_time_minutes = 5               # "on time" upp till så här många minuter sent
+compensation_minutes = 60         # "claim compensation" från så här många minuter
+# trafikverket_key = "..."        # valfritt, gratis från data.trafikverket.se
 ```
 
 Med konfigurationen ovan kommer verktyget att:
@@ -227,6 +232,15 @@ idag (`90d`, `6m`).
 Använd `--show-cancelled` i kombination med `--list-bookings` för att även
 lista avbokade bokningar (markerade `cancelled`). Går att kombinera med
 `--since` för att nå längre bakåt än idag.
+
+Med `--delays` tillsammans med `--list-bookings` slår verktyget upp, direkt när du
+kör, om varje tidigare resa kom fram i tid: `on time`, `12 min late` eller
+`64 min late · claim compensation` när förseningen är stor nog att söka
+förseningsersättning för (gränserna sätts i `[delays]`, 5 respektive 60 minuter
+som standard). Uppgifterna hämtas från SJ:s trafikinfo, Trafikverkets öppna
+data (med egen nyckel) och Tågstatistik; exakt ankomst till din station finns i
+ungefär fyra dagar, därefter visas tågets slutstationstid som en indikation
+(`final stop 78 min late · likely, verify`). Inget sparas mellan körningarna.
 
 Du kan också hoppa över kopieringen av konfigurationsfilen: kör `--login` i en
 terminal, så erbjuder sig verktyget att skapa konfigurationen åt dig och frågar
