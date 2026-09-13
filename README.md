@@ -235,17 +235,16 @@ lista avbokade bokningar (markerade `cancelled`). Går att kombinera med
 Med `--delays` tillsammans med `--list-bookings` slår verktyget upp, direkt när
 du kör, om varje tidigare resa kom fram i tid. `on time` betyder att tåget kom
 på utsatt minut, allt annat visas med tecken — `+11 min` för ett tåg som kom
-efter tiden, och `-1 min` för ett tåg som kom före utsatt tid.
-
-Om `compensation_minutes` (60 som standard, se `[delays]`) överskrids, läggs
+efter tiden, och `-1 min` för ett tåg som kom före utsatt tid. Om
+`compensation_minutes` (60 som standard, se `[delays]`) överskrids, läggs
 texten `· claim compensation` till. Efter omdömet står källan inom parentes
 `+64 min · claim compensation (tagradar.nu)`. Texten färgas efter innebörd —
 grönt i tid, gult försenat samt orange för det som är värt att söka ersättning
 för. Uppgifterna hämtas från fem källor i tur och ordning: SJ:s trafikinfo,
-Trafikverkets öppna data (med egen nyckel; en nyckel som avvisas rapporteras
-en gång per körning), Tågradar och Tågstatistiks två tjänster; exakt ankomst till din station finns i ungefär fyra dagar,
-därefter visas tågets slutstationstid som en indikation
-(`final stop +78 min · likely, verify`). Inget sparas mellan körningarna.
+Trafikverkets öppna data (med egen api-nyckel, `[delays]`), Tågradar och
+Tågstatistiks två tjänster; exakt ankomst till din station finns i ungefär fyra
+dagar, därefter visas tågets slutstationstid som en indikation
+(`final stop +78 min · likely, verify`).
 
 Du kan också hoppa över kopieringen av konfigurationsfilen: kör `--login` i en
 terminal, så erbjuder sig verktyget att skapa konfigurationen åt dig och frågar
