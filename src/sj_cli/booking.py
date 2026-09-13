@@ -3679,7 +3679,7 @@ def _add_seat_details(
     access_token: str,
     tasks: list[tuple[dict, str, str]],
     seat_preference: list[str] | str | None = None,
-) -> None:
+) -> bool:
     """
     Fetch each eligible segment's seat map once and append its characteristics.
 
@@ -3705,6 +3705,11 @@ def _add_seat_details(
     detail is never worth breaking the listing over. Individual causes are
     logged; the failures are reported as one aggregated `pwarn` afterwards,
     not one per leg.
+
+    Returns:
+        Whether the aggregated seat-details warning was printed, so the caller
+        can leave a blank line before the table rather than let a `!` line sit
+        on the first week line.
 
     """
     wishes = seat_preference if isinstance(seat_preference, list) else None
@@ -3735,6 +3740,7 @@ def _add_seat_details(
 
     if failures:
         pwarn(f"seat details unavailable for {failures} leg(s)")
+    return bool(failures)
 
 
 def _delay_leg(segment: dict) -> punctuality.Leg | None:
@@ -3802,7 +3808,7 @@ def _add_delays(
     thresholds: punctuality.Thresholds,
     trafikverket_key: str | None = None,
     http: httpx.Client | None = None,
-) -> None:
+) -> bool:
     """
     Look each departed leg's actual arrival up and fill in its punctuality cell.
 
@@ -3830,6 +3836,11 @@ def _add_delays(
     all end as "no data" — a punctuality cell is never
     worth breaking the listing over. The failures are reported as one
     aggregated `pwarn` afterwards, not one per leg.
+
+    Returns:
+        Whether a rejected-key issue or the aggregated lookup-failure warning
+        was printed, so the caller can leave a blank line before the table
+        rather than let a `!` line sit on the first week line.
 
     """
 
@@ -3895,6 +3906,7 @@ def _add_delays(
         pwarn(issue)
     if failures:
         pwarn(f"delay lookup failed for {failures} leg(s)")
+    return bool(issues or failures)
 
 
 def handle_list_bookings(
@@ -4004,17 +4016,20 @@ def handle_list_bookings(
         pstatus(False, f"no bookings found between {b_start} and {b_end}")
         return
 
+    warned = False
     if seat_tasks:
-        _add_seat_details(client, access_token, seat_tasks, seat_preference)
+        warned |= _add_seat_details(client, access_token, seat_tasks, seat_preference)
 
     if delay_tasks:
-        _add_delays(
+        warned |= _add_delays(
             client,
             delay_tasks,
             thresholds or punctuality.Thresholds(),
             trafikverket_key,
             http,
         )
+    if warned:
+        blank()  # a `!` line right above the first week line reads as part of it
 
     # Sort by date, then departure time
     display_rows.sort(key=lambda r: r.pop("_sort_key", ""))

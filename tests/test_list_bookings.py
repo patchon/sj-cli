@@ -836,6 +836,7 @@ def test_an_unexpected_lookup_failure_warns_once(capsys):
     assert out.count("no data") == 2
     assert out.count("delay lookup failed") == 1  # aggregated, not one per leg
     assert "! delay lookup failed for 2 leg(s)" in out
+    assert "leg(s)\n\n" in out  # a blank line separates it from the week line
 
 
 def test_delays_composes_with_since_and_seat_details(capsys):
@@ -895,6 +896,8 @@ def test_a_rejected_trafikverket_key_is_warned_about_once(capsys):
 
     out = capsys.readouterr().out
     assert out.count("! trafikverket rejected the key") == 1
+    # the warning must not sit directly above the first week line
+    assert "or remove it\n\n" in out
     assert "check [delays].trafikverket_key or remove it" in out
     assert seen.count("/v2/data.json") == 1  # the second leg never asked again
     assert "no data" in out  # the listing still says what it knows
