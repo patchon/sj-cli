@@ -139,7 +139,6 @@ class _Held(NamedTuple):
     """A booked segment on a chosen date or the evening before (Swedish wall clock)."""
 
     number: str
-    day: str
     origin: str
     dest: str
     dep: datetime
@@ -154,8 +153,9 @@ def _held_segments(
     The account's active booked segments on `dates` and on the day before each.
 
     A night train leaving the evening before still runs into a chosen
-    date's morning, so the day before is collected too; `_Held.day` stays
-    the segment's own departure day, which is what the summary filters on.
+    date's morning, so the day before is collected too. Every held segment
+    is only ever named on the row it refuses, never in a summary: the row
+    is where the refusal is decided, and a summary would repeat it.
     Deliberately one-sided: the day *after* is not collected, so a chosen
     departure that runs past midnight cannot see a ticket held the next
     morning — a candidate list is drawn for its own day, and widening this
@@ -197,7 +197,6 @@ def _held_segments(
                 held.append(
                     _Held(
                         number=number,
-                        day=day,
                         origin=(seg.get("departureStation") or {}).get("name") or "—",
                         dest=(seg.get("arrivalStation") or {}).get("name") or "—",
                         dep=dep,
@@ -206,24 +205,6 @@ def _held_segments(
                     )
                 )
     return held
-
-
-def _warn_held_bookings(held: Sequence[_Held], dates: set[str]) -> None:
-    """
-    Name every ticket the account holds on the chosen dates.
-
-    A search sometimes still offers seats on a departure that overlaps a
-    held ticket, so the list would show them as available: say why they are
-    refused. Segments picked up from the evening before are not on a chosen
-    date and stay out of this summary — the row they overlap still names them.
-    """
-    for h in held:
-        if h.day not in dates:
-            continue
-        pwarn(
-            f"you hold booking {h.number} on {h.day} ({h.origin} → {h.dest} "
-            f"{h.dep.strftime('%H:%M')}) · departures overlapping it are not selectable"
-        )
 
 
 def _overlap(departure: dict, held: Sequence[_Held]) -> _Held | None:
@@ -560,7 +541,6 @@ def handle_book_journey(
         return False
     dates = {date_str, *([return_str] if return_str else [])}
     held = _held_segments(client, access_token, active_pass, dates)
-    _warn_held_bookings(held, dates)
 
     # The picks
     passenger_token = found["passenger_token"]

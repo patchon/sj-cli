@@ -405,16 +405,15 @@ def held(
     }
 
 
-def test_held_booking_on_the_date_is_pointed_out(monkeypatch, capsys):
+def test_a_held_booking_is_named_on_its_row_only(monkeypatch, capsys):
     c = FakeClient({"OUT": [*OUT, dep("o-clear", D, "12:00", "13:40")]})
     c.bookings_list = [held("HELD1", D)]
     s = Script(D, "", "", "n", 3, False)  # every OUT row is held or overlaps it
     wire(monkeypatch, s)
     assert run(c, s) is False
-    assert (
-        f" ! you hold booking HELD1 on {D} (Göteborg Central → Stockholm Central 06:59)"
-        " · departures overlapping it are not selectable\n"
-    ) in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "you hold booking" not in out  # the rows say it, there is no summary line
+    assert "already booked in HELD1" in "\n".join(s.lists[0][1])
 
 
 def test_return_on_another_date_prints_two_cards(monkeypatch, capsys):
@@ -546,7 +545,8 @@ def test_a_cancelled_booking_and_another_day_are_not_named(monkeypatch, capsys):
     s = Script(D, "", "", "n", "", False)
     wire(monkeypatch, s)
     assert run(c, s) is False
-    assert "you hold booking" not in capsys.readouterr().out
+    assert "GONE1" not in capsys.readouterr().out
+    assert "OTHER1" not in "\n".join(s.lists[0][1])
 
 
 def test_a_failed_bookings_fetch_is_only_a_note(monkeypatch, capsys):
@@ -720,7 +720,6 @@ def _held(number, dep_time, arr_time, day=None, arr_day=None, train=""):
     day = day or D
     return journey._Held(
         number=number,
-        day=day,
         origin="Göteborg Central",
         dest="Stockholm Central",
         dep=to_sweden(f"{day}T{dep_time}:00+02:00"),
@@ -801,7 +800,6 @@ def test_booked_needs_the_same_instant_and_train_or_route():
     same_route = _held("R", "06:59", "11:36")
     other_route_same_train = journey._Held(
         number="T",
-        day=D,
         origin="Uppsala Central",
         dest="Stockholm Central",
         dep=to_sweden(f"{D}T06:59:00+02:00"),
@@ -846,8 +844,7 @@ def test_a_night_train_from_the_evening_before_overlaps_the_morning(monkeypatch,
         r"2 class calm\s+overlaps NIGHT · Göteborg Central → Stockholm Central 23:50–06:00$",
         rows[0],
     )
-    # the summary names tickets on the chosen dates; this one is on the day before
-    assert "you hold booking NIGHT" not in capsys.readouterr().out
+    assert "you hold booking NIGHT" not in capsys.readouterr().out  # no summary line
 
 
 def test_the_note_always_names_the_held_route():
@@ -855,7 +852,6 @@ def test_the_note_always_names_the_held_route():
     route = "Göteborg Central → Stockholm Central"
     other = journey._Held(
         number="HELD1",
-        day=D,
         origin="Uppsala Central",
         dest="Stockholm Central",
         dep=to_sweden(f"{D}T06:59:00+02:00"),
