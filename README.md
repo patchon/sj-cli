@@ -256,6 +256,17 @@ Tågstatistiks två tjänster; exakt ankomst till din station finns i ungefär f
 dagar, därefter visas tågets slutstationstid som en indikation
 (`final stop +78 min · likely, verify`).
 
+Med `--request-compensation <bokningsnummer>` begär du förseningsersättning för
+en biljett på en bokning, samma väg som formuläret på sj.se. Verktyget slår upp
+vilka biljetter SJ anser berättigade, kontrollerar med samma uppslag som
+`--delays` om tåget kom fram sent och varnar om det inte verkar så (SJ avgör
+ändå), låter dig välja biljett om det finns flera, frågar efter ditt
+personnummer om det inte står i `[compensation]`, visar allt det skickar och
+frågar en gång. Utbetalning sker via Swish till mobilnumret på ditt SJ-konto.
+Med `--dry-run` visas biljetterna och förseningarna, inget skickas. `--list-claims`
+listar de ärenden SJ har på dina bokningar, med ärendenummer — SJ lämnar ingen
+status, bara att ärendet finns.
+
 Du kan också hoppa över kopieringen av konfigurationsfilen: kör `--login` i en
 terminal, så erbjuder sig verktyget att skapa konfigurationen åt dig och frågar
 efter e-post och lösenord. Parametrarna för resan måste dock alltid fyllas i

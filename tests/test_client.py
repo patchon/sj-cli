@@ -583,3 +583,113 @@ def test_resolve_station_passes_a_uic_code_through(caplog):
     assert c.resolve_station("740000002") == "740000002"
     assert c.resolve_station(" 740000002 ") == "740000002"
     assert "not found in station map" not in caplog.text
+
+
+# --- the delay-compensation API (--request-compensation) ------------------------
+
+COMP = "/delay-compensation/v1/compensation"
+
+
+def _comp_headers(t):
+    h = t.request.headers
+    assert "authorization" not in h  # the compensation API is public: no bearer token
+    assert h["ocp-apim-subscription-key"] == SJClient.H_OCP_APIM_COMPENSATION_KEY
+    assert h["x-client-name"] == "sjse-delay-compensation-client"
+    assert h["x-api.sj.se-language"] == "sv"
+
+
+def test_compensation_key_is_its_own():
+    assert SJClient.H_OCP_APIM_COMPENSATION_KEY not in (
+        SJClient.H_OCP_APIM_SUB_KEY,
+        SJClient.H_OCP_APIM_TRAFFIC_KEY,
+    )
+
+
+def test_create_compensation_token_posts_the_identity_of_the_claim():
+    t = RecordingTransport({"delayCompensationToken": "eJx", "eligibleOrderItems": []}, 201)
+    c = _client_with(t)
+    assert c.create_compensation_token("a@b.se", "1234", "Årskort Silver", "ABCD1234") == {
+        "delayCompensationToken": "eJx",
+        "eligibleOrderItems": [],
+    }
+    assert t.request.method == "POST"
+    assert t.request.url.path.endswith(f"{COMP}/delaycompensationtokens")
+    _comp_headers(t)
+    assert json.loads(t.request.content) == {
+        "orderSecurity": "a@b.se",
+        "commuterCardNumber": "1234",
+        "commuterCardType": "Årskort Silver",
+        "orderOrTicketNumber": "ABCD1234",
+    }
+
+
+def test_put_compensation_travel_details_is_a_multipart_form_with_a_json_blob():
+    t = RecordingTransport({"delayCompensationToken": "eJy", "bankAccountInfoRequirement": {}})
+    c = _client_with(t)
+    assert c.put_compensation_travel_details("eJx", ["ABCD1234-001"])["delayCompensationToken"] == (
+        "eJy"
+    )
+    assert t.request.method == "PUT"
+    assert t.request.url.path.endswith(f"{COMP}/eJx/v2/traveldetails")
+    _comp_headers(t)
+    assert t.request.headers["content-type"].startswith("multipart/form-data; boundary=")
+    body = t.request.read()  # a multipart body streams; read it to inspect it
+    assert b'name="data"; filename="blob"' in body
+    assert b"Content-Type: application/json" in body
+    assert b'{"ticketNumbers": ["ABCD1234-001"], "expenses": []}' in body
+
+
+def test_put_compensation_contact_sends_the_person():
+    t = RecordingTransport({"delayCompensationToken": "eJz"})
+    c = _client_with(t)
+    assert c.put_compensation_contact("eJy", "a@b.se", "+46701234567", "Anna", "Svensson") == {
+        "delayCompensationToken": "eJz"
+    }
+    assert t.request.method == "PUT"
+    assert t.request.url.path.endswith(f"{COMP}/eJy/contactinformation")
+    _comp_headers(t)
+    assert json.loads(t.request.content) == {
+        "emailAddress": "a@b.se",
+        "mobilePhoneNumber": "+46701234567",
+        "personName": {"firstName": "Anna", "lastName": "Svensson"},
+    }
+
+
+def test_create_swish_payout_posts_the_identity_number_and_the_token():
+    t = RecordingTransport({"barId": "SWS1"}, 201)
+    c = _client_with(t)
+    assert c.create_swish_payout("eJz", "19850315-0008", "+46701234567") == {"barId": "SWS1"}
+    assert t.request.method == "POST"
+    assert t.request.url.path.endswith(f"{COMP}/bankaccountrecords")
+    _comp_headers(t)
+    assert json.loads(t.request.content) == {
+        "personalIdentityNumber": "19850315-0008",
+        "swishPhoneNumber": "+46701234567",
+        "delayCompensationToken": "eJz",
+    }
+
+
+def test_confirm_compensation_posts_the_payout_id():
+    t = RecordingTransport({"ticketCompensationServiceRequests": ["1-1"]}, 201)
+    c = _client_with(t)
+    assert c.confirm_compensation("eJz", "SWS1") == {"ticketCompensationServiceRequests": ["1-1"]}
+    assert t.request.method == "POST"
+    assert t.request.url.path.endswith(f"{COMP}/eJz/confirmations")
+    _comp_headers(t)
+    assert json.loads(t.request.content) == {"paynovaBarIds": {"ticketCompensation": "SWS1"}}
+
+
+def test_compensation_calls_raise_on_an_error_envelope():
+    t = RecordingTransport({"errorCode": "E1", "message": "nope"}, status=400)
+    with pytest.raises(SJAPIError):
+        _client_with(t).create_compensation_token("a@b.se", "1", "T", "N")
+
+
+def test_get_customer_session_is_authenticated_with_the_sales_key():
+    t = RecordingTransport({"customer": {"privatePhoneNumber": "+4670"}})
+    c = _client_with(t)
+    assert c.get_customer_session("TOK") == {"customer": {"privatePhoneNumber": "+4670"}}
+    assert t.request.method == "GET"
+    assert t.request.url.path.endswith("/sales/secure/customer/v2/session")
+    assert t.request.headers["authorization"] == "Bearer TOK"
+    assert t.request.headers["ocp-apim-subscription-key"] == SJClient.H_OCP_APIM_SUB_KEY

@@ -418,3 +418,53 @@ def test_delays_is_validated_in_every_mode():
     cfg = {"auth": {"email": "a@b.se", "password": "x"}, "delays": {"compensation_minutes": -1}}
     with pytest.raises(SJConfigError, match="compensation_minutes"):
         CfgManager().verify_cfg(cfg, require_search=False)
+
+
+# --- [compensation] ---------------------------------------------------------------
+
+
+def compensation_cfg(**keys):
+    cfg = future_cfg()
+    cfg["compensation"] = dict(keys)
+    return cfg
+
+
+def test_compensation_is_optional_and_reads_back_a_normalised_number():
+    from sj_cli.config import personal_identity_number
+
+    cfg = future_cfg()
+    verify(cfg)
+    assert personal_identity_number(cfg) is None
+    assert personal_identity_number(compensation_cfg()) is None  # an empty section too
+    cfg = compensation_cfg(personal_identity_number="850315-0008")
+    verify(cfg)
+    assert personal_identity_number(cfg) == "19850315-0008"
+
+
+def test_compensation_rejects_a_bad_number_with_the_grammar_reason():
+    assert "personal_identity_number: the check digit does not match" in errors_of(
+        compensation_cfg(personal_identity_number="19850315-0009")
+    )
+    assert "personal_identity_number must be a string" in errors_of(
+        compensation_cfg(personal_identity_number=198503150008)
+    )
+    cfg = future_cfg()
+    cfg["compensation"] = "yes"
+    assert "[compensation] must be a section" in errors_of(cfg)
+
+
+def test_compensation_is_validated_in_every_mode():
+    cfg = {
+        "auth": {"email": "a@b.se", "password": "x"},
+        "compensation": {"personal_identity_number": "nope"},
+    }
+    with pytest.raises(SJConfigError, match="personal_identity_number"):
+        CfgManager().verify_cfg(cfg, require_search=False)
+
+
+def test_the_personal_identity_number_is_redacted_in_logs():
+    from sj_cli.logger import log_json
+
+    dumped = log_json({"compensation": {"personal_identity_number": "19850315-0008"}})
+    assert "0008" not in dumped
+    assert "0008" not in log_json({"personalIdentityNumber": "19850315-0008"})

@@ -251,6 +251,17 @@ Tågstatistik's two services; the exact arrival at your station exists for about
 four days, after which the train's final-stop time is shown as an indication
 (`final stop +78 min · likely, verify`).
 
+With `--request-compensation <booking number>` you request delay compensation
+for one ticket of a booking, the same way as the form on sj.se. The tool looks
+up which tickets SJ considers eligible, checks with the same lookup as
+`--delays` whether the train arrived late and warns when it does not seem so
+(SJ decides regardless), lets you pick the ticket when there are several, asks
+for your personal identity number unless `[compensation]` has it, shows
+everything it sends and asks once. The payout is by Swish to the mobile number
+on your SJ account. With `--dry-run` the tickets and delays are shown, nothing
+is sent. `--list-claims` lists the claims SJ holds on your bookings, with their
+claim numbers — SJ gives no status, only that the claim exists.
+
 You can also skip copying the config file: run `--login` in a terminal and the
 tool offers to create the configuration for you, asking for your email and
 password. The trip parameters must still be filled in by hand.

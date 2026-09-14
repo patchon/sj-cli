@@ -64,7 +64,8 @@ def test_dry_run_rejected_for_modes_with_nothing_to_preview(capsys):
     err = capsys.readouterr().err
     assert (
         "● --dry-run only applies to --book, --book-journey, --cancel-date, --cancel-booking, "
-        "--change-seat-date, --change-seat-booking and --upgrade-class" in err
+        "--change-seat-date, --change-seat-booking, --upgrade-class and --request-compensation"
+        in err
     )
 
 
@@ -582,6 +583,77 @@ def test_upgrade_class_needs_the_route_config(tmp_path, monkeypatch, capsys):
     assert "● invalid configuration" in out
     assert "station_from" in out
     assert "station_from" in out
+
+
+# --- --request-compensation ---------------------------------------------------
+
+
+def test_request_compensation_takes_one_booking_number_uppercased():
+    args = parse_args(["--request-compensation", "3ht2neil"])
+    assert args.request_compensation_number == "3HT2NEIL"
+    assert args.dry_run is False
+    args = parse_args(["--request-compensation", "3HT2NEIL", "--dry-run"])
+    assert args.dry_run is True
+    with pytest.raises(SystemExit):
+        parse_args(["--book", "--request-compensation", "3HT2NEIL"])
+
+
+def test_request_compensation_rejects_several_numbers_and_dates(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--request-compensation", "3HT2NEIL,ABCD1234"])
+    assert exc_info.value.code == 1
+    assert "one booking number" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        parse_args(["--request-compensation", "2026-09-14"])
+    out = capsys.readouterr().out
+    assert "● invalid --request-compensation" in out
+    assert "looks like a date or week, not a booking number" in out
+
+
+def test_dry_run_is_allowed_with_request_compensation(capsys):
+    with pytest.raises(SystemExit):
+        parse_args(["--list-bookings", "--dry-run"])
+    assert "--request-compensation" in capsys.readouterr().err  # named in the modifier's list
+
+
+@pytest.mark.parametrize(("ok", "code"), [(True, None), (False, 1)])
+def test_request_compensation_exit_code_follows_the_outcome(tmp_path, monkeypatch, ok, code):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    seen = {}
+
+    def fake(client, access_token, cfg, active_pass, email, *, booking_number, dry_run):
+        seen.update(email=email, dry_run=dry_run, number=booking_number)
+        return ok
+
+    monkeypatch.setattr(cli, "handle_request_compensation", fake)
+    argv = ["--request-compensation", "3HT2NEIL", "--dry-run"]
+    if code is None:
+        cli._run(parse_args(argv), _StubClient())
+    else:
+        with pytest.raises(SystemExit) as exc:
+            cli._run(parse_args(argv), _StubClient())
+        assert exc.value.code == code
+    assert seen == {"email": "a@b.se", "dry_run": True, "number": "3HT2NEIL"}
+
+
+def test_list_claims_is_a_mode_flag_without_a_dry_run():
+    assert parse_args(["--list-claims"]).list_claims is True
+    with pytest.raises(SystemExit):
+        parse_args(["--list-claims", "--dry-run"])
+    with pytest.raises(SystemExit):
+        parse_args(["--list-claims", "--list-bookings"])
+
+
+@pytest.mark.parametrize(("ok", "code"), [(True, None), (False, 1)])
+def test_list_claims_exit_code_follows_the_outcome(tmp_path, monkeypatch, ok, code):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "handle_list_claims", lambda *_a, **_k: ok)
+    if code is None:
+        cli._run(parse_args(["--list-claims"]), _StubClient())
+    else:
+        with pytest.raises(SystemExit) as exc:
+            cli._run(parse_args(["--list-claims"]), _StubClient())
+        assert exc.value.code == code
 
 
 # --- no hidden flag prefixes ------------------------------------------------

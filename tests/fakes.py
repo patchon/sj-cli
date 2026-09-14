@@ -189,6 +189,20 @@ class FakeClient:
         # whole point is that this must be None (a pass-free search); tests assert
         # against it directly rather than digging through .calls' plain tuples.
         self.search_tp_ids: list[str | None] = []
+        # --request-compensation: the customer session and the canned answers
+        # of the delay-compensation API, each step recorded in .calls.
+        self.customer_session: dict = {
+            "customer": {
+                "firstName": "Anna",
+                "lastName": "Svensson",
+                "privatePhoneNumber": "+46701234567",
+                "loginPhoneNumber": "+46709999999",
+                "loginEmailAddress": "a@b.se",
+            }
+        }
+        self.compensation_lookup: dict = {"delayCompensationToken": "eJ1", "eligibleOrderItems": []}
+        self.compensation_lookups: dict[str, dict] = {}  # per booking number, consulted first
+        self.compensation_errors: dict[str, Exception] = {}  # step name -> raised there
 
     def resolve_station(self, name):
         return self.STATIONS.get(name, name)
@@ -342,6 +356,46 @@ class FakeClient:
             # what the live API returned on every page of a 42-booking account
             # (2026-09-09); nothing in src/ reads it.
             "filteredCount": 0,
+        }
+
+    def _compensation_step(self, name, *key):
+        self.calls.append((name, *key))
+        if name in self.compensation_errors:
+            raise self.compensation_errors[name]
+
+    def get_customer_session(self, token):
+        self._compensation_step("session")
+        return self.customer_session
+
+    def create_compensation_token(self, email, card_number, card_type, booking_number):
+        self._compensation_step("comp-token", email, card_number, card_type, booking_number)
+        return self.compensation_lookups.get(booking_number, self.compensation_lookup)
+
+    def put_compensation_travel_details(self, token, ticket_numbers):
+        self._compensation_step("comp-travel", token, tuple(ticket_numbers))
+        return {
+            "delayCompensationToken": "eJ2",
+            "bankAccountInfoRequirement": {
+                "requirementReason": ["TICKET_NOT_POSSIBLE_TO_CREDIT"],
+                "ticketCompensation": True,
+                "expensesCompensation": False,
+            },
+        }
+
+    def put_compensation_contact(self, token, email, phone, first_name, last_name):
+        self._compensation_step("comp-contact", token, email, phone, first_name, last_name)
+        return {"delayCompensationToken": "eJ3"}
+
+    def create_swish_payout(self, token, personal_number, phone):
+        self._compensation_step("comp-swish", token, personal_number, phone)
+        return {"barId": "SWS1"}
+
+    def confirm_compensation(self, token, bar_id):
+        self._compensation_step("comp-confirm", token, bar_id)
+        return {
+            "ticketCompensationServiceRequests": ["1-123"],
+            "expenseCompensationServiceRequests": [],
+            "expenseServiceRequestCreationFailed": False,
         }
 
     def get_traffic_segments(self, dep_uic, arr_uic, train, date):

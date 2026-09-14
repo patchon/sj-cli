@@ -1185,3 +1185,36 @@ def test_the_footer_omits_the_claim_term_when_nothing_is_worth_claiming(capsys):
     ]
     print_bookings_table(rows)
     assert "to claim" not in capsys.readouterr().out
+
+
+def test_a_claim_reference_renders_as_its_own_column_after_the_booking_number():
+    rows = _delay_rows()
+    for row in rows:
+        row["delay"] = row["delay_source"] = ""
+    rows[0]["claim_ref"] = "claim 1-100000012345"
+    lines = leg_lines(rows)
+    assert lines[0].endswith("   NUM1   claim 1-100000012345")
+    assert lines[1].endswith("   NUM2")  # dropped, nothing follows it
+
+
+def test_day_cards_align_their_columns_across_days(capsys):
+    from sj_cli.output import print_day_cards
+
+    base = {
+        "departure": "17:22",
+        "arrival": "19:02",
+        "duration": "1h 40m",
+        "route": "A → B",
+        "comfort_class": "2 class calm",
+        "flexibility": "FULLFLEX",
+        "past": "Y",
+    }
+    print_day_cards(
+        [
+            {**base, "date": "2026-09-02", "train": "SJ Snabbtåg 543", "booking_number": "NUM1"},
+            {**base, "date": "2026-09-10", "train": "X 2000 543", "booking_number": "NUM2"},
+        ]
+    )
+    lines = [line for line in capsys.readouterr().out.splitlines() if "NUM" in line]
+    assert len(lines) == 2
+    assert lines[0].index("NUM1") == lines[1].index("NUM2")  # the wide train name pads both

@@ -26,6 +26,7 @@ from sj_cli.booking import (
     process_date_range,
 )
 from sj_cli.client import SJClient
+from sj_cli.compensation import handle_list_claims, handle_request_compensation
 from sj_cli.config import CfgManager, delay_thresholds, trafikverket_key
 from sj_cli.dates import (
     SWEDEN,
@@ -250,6 +251,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     group.add_argument(
+        "--request-compensation",
+        metavar="BOOKING_NUMBER",
+        help=(
+            "Request delay compensation for one ticket on a booking, by booking number: "
+            "looks up whether the train arrived late, asks which ticket and for your personal "
+            "identity number when [compensation] has none, then files the claim with Swish as "
+            "the payout, after one confirmation. Runs at a terminal; --dry-run shows the "
+            "eligible tickets and their delays and files nothing."
+        ),
+    )
+    group.add_argument(
+        "--list-claims",
+        action="store_true",
+        help=(
+            "List the compensation claims SJ holds on your bookings (every booking in the pass "
+            "window with a departed leg is looked up): ticket, train and claim number. No status "
+            "is available."
+        ),
+    )
+    group.add_argument(
         "--list-bookings",
         action="store_true",
         help="Display all active bookings in a table.",
@@ -294,10 +315,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         or args.change_seat_date is not None
         or args.change_seat_booking is not None
         or args.upgrade_class is not None
+        or args.request_compensation is not None
     ):
         parser.error(
             "--dry-run only applies to --book, --book-journey, --cancel-date, --cancel-booking, "
-            "--change-seat-date, --change-seat-booking and --upgrade-class"
+            "--change-seat-date, --change-seat-booking, --upgrade-class and "
+            "--request-compensation"
         )
 
     if args.seat_details and not args.list_bookings:
@@ -339,6 +362,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         if errors:
             print_status_card(False, "invalid --upgrade-class", lines=errors)
             sys.exit(1)
+    if args.request_compensation is not None:
+        numbers, errors = parse_booking_numbers(args.request_compensation)
+        if not errors and len(numbers) != 1:
+            errors = ["give one booking number: a claim is for one ticket at a time"]
+        if errors:
+            print_status_card(False, "invalid --request-compensation", lines=errors)
+            sys.exit(1)
+        args.request_compensation_number = numbers[0]
     args.since_date = None
     if args.since is not None:
         args.since_date, since_error = parse_since(args.since, today=sweden_now().date())
@@ -899,6 +930,29 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 dry_run=args.dry_run,
                 tp_product_id=tp_product_id,
                 tp_token_id=tp_token_id,
+            ):
+                print()
+                sys.exit(1)
+
+        elif args.list_claims:
+            print_header_box([("operation", "listing claims"), *pass_rows])
+            blank()
+            if not handle_list_claims(client, access_token, active_pass, email):
+                print()
+                sys.exit(1)
+
+        elif args.request_compensation is not None:
+            operation = ("dry run · " if args.dry_run else "") + "requesting compensation"
+            print_header_box([("operation", operation), *pass_rows])
+            blank()
+            if not handle_request_compensation(
+                client,
+                access_token,
+                cfg,
+                active_pass,
+                email,
+                booking_number=args.request_compensation_number,
+                dry_run=args.dry_run,
             ):
                 print()
                 sys.exit(1)

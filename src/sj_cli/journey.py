@@ -35,17 +35,15 @@ from sj_cli.output import (
     blank,
     confirm,
     departure_choice_lines,
-    group_route,
     indented,
     pdim,
+    print_day_cards,
     print_day_header,
-    print_leg_lines,
     pstatus,
     pwarn,
     select_filtered,
     select_list,
     spinner,
-    week_headers,
 )
 from sj_cli.seats import COMFORT_CODES
 from sj_cli.stations import Station, StationIndex, parse_stations
@@ -588,18 +586,6 @@ def _replacement_line(label: str, pick: Pick) -> str:
     )
 
 
-def _print_cards(rows: list[dict]) -> None:
-    """One day card per date in the rows, in date order, under their week lines."""
-    days: dict[str, list[dict]] = {}
-    for row in rows:
-        days.setdefault(row.get("date") or "—", []).append(row)
-    with week_headers():
-        for day in sorted(days):
-            print_day_header(day, group_route(days[day]))
-            with indented():
-                print_leg_lines(days[day])
-
-
 def _aborted() -> bool:
     """The red closing line of an abort, after the blank every closing gets."""
     blank()
@@ -883,7 +869,7 @@ def handle_book_journey(
     chosen = [("Outbound", date_str, outbound)]
     if inbound is not None and return_str:
         chosen.append(("Return", return_str, inbound))
-    _print_cards(_summary_rows(chosen, params.get("flexibility", "FULLFLEX")))
+    print_day_cards(_summary_rows(chosen, params.get("flexibility", "FULLFLEX")))
     replacing = [(direction.lower(), pick) for direction, _, pick in chosen if pick.replaces]
     for label, pick in replacing:
         pwarn(_replacement_line(label, pick))
@@ -969,7 +955,7 @@ def handle_book_journey(
         raise
     number = result["booking_number"] or result["booking_id"]
     try:
-        _print_cards(booked_rows(result["booking"], result["booking_number"]))
+        print_day_cards(booked_rows(result["booking"], result["booking_number"]))
     except Exception as e:  # a rendering slip must not hide a booked ticket
         logger.error(f"could not render booking {number}: {e}")
         pwarn(f"booked as {number}, but the legs could not be shown ({error_text(e)})")

@@ -158,3 +158,10 @@ service_types = ["SJ_HIGH", "SJ_IC"]
 # rejects is reported once per run ("! trafikverket rejected the key"), since
 # every other source failure is quiet and a wrong key would look like one.
 #trafikverket_key = "your-trafikverket-key"
+
+# For `--request-compensation`. Optional: leave the section out and the tool
+# asks for the number at a prompt on every run. Ten or twelve digits, with or
+# without the dash; it is checked (a real date, the check digit) at startup
+# and never logged. Your mobile number and name come from your SJ account.
+#[compensation]
+#personal_identity_number = "19850315-0008"

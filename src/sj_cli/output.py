@@ -531,6 +531,7 @@ _LEG_COLUMNS = (
     "delay",
     "delay_source",
     "cancelled",
+    "claim_ref",
 )
 
 # The tail columns that mean nothing when empty: an absent one is dropped
@@ -538,7 +539,10 @@ _LEG_COLUMNS = (
 # absence is the normal state for all three. One with a later tail cell
 # filled in on the same row is blanked instead of dropped, so the columns
 # after it stay under their neighbours.
-_TAIL_OPTIONAL = ("delay", "delay_source", "cancelled")
+# The optional cells after the booking number, in render order: the delay verdict
+# and its source (--delays), the cancelled marker (--show-cancelled) and the claim
+# reference (--list-claims: "claim 1-…"), each dropped when empty.
+_TAIL_OPTIONAL = ("delay", "delay_source", "cancelled", "claim_ref")
 
 
 def _delay_styled(row: dict, text: str) -> str:
@@ -681,6 +685,26 @@ def print_leg_lines(rows: list[dict]) -> None:
     """Print leg lines at the current indent (used inside a day card)."""
     for line in leg_lines(rows):
         _emit(line)
+
+
+def print_day_cards(rows: list[dict]) -> None:
+    """
+    One day card per date in the rows, in date order, under their week lines.
+
+    The columns are padded across every row first, the way
+    print_bookings_table does it, so a wide cell in one card (a long train
+    name) lines the other cards up with it rather than only its own.
+    """
+    widths = {c: max((visible_len(_cell(row, c)) for row in rows), default=0) for c in _LEG_COLUMNS}
+    days: dict[str, list[dict]] = {}
+    for row in rows:
+        padded = {**row, **{c: pad(str(row[c]), widths[c]) for c in _LEG_COLUMNS if row.get(c)}}
+        days.setdefault(row.get("date") or "\u2014", []).append(padded)
+    with week_headers():
+        for day in sorted(days):
+            print_day_header(day, group_route(days[day]))
+            with indented():
+                print_leg_lines(days[day])
 
 
 def print_seat_choices(seats: list[Seat], comforts: dict[str, str] | None = None) -> None:

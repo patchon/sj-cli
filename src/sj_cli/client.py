@@ -276,6 +276,9 @@ class SJClient:
     # above. Like it, this is a public key embedded in sj.se's front end
     # (every visitor's browser sends it) — not a user secret.
     H_OCP_APIM_TRAFFIC_KEY = "39296c1a13304493b44236e1bcb7f544"
+    # The delay-compensation API's own key, the third public front-end key
+    # (sj.se/ersattning-vid-forsening sends it from every visitor's browser).
+    H_OCP_APIM_COMPENSATION_KEY = "78e7aad0e7b042b685d70e0131d897ca"
     H_SEC_CH_UA = '"Google Chrome";v="120", "Chromium";v="120", "Not?A_Brand";v="24"'
     H_SEC_CH_UA_MOBILE = "?0"
     H_SEC_CH_UA_PLATFORM = '"macOS"'
@@ -295,6 +298,7 @@ class SJClient:
     URL_API_BOOKING = f"{URL_API}/sales/booking/v3"
     URL_API_SECURE_BOOKING = f"{URL_API}/sales/secure/booking/v3"
     URL_API_TRAFFIC = f"{URL_API}/trafficinfo-api/v2/rest"
+    URL_API_COMPENSATION = f"{URL_API}/delay-compensation/v1/compensation"
     X_CLIENT_VERSION = "20251217.0004-prod"
 
     def __init__(self) -> None:
@@ -1466,6 +1470,195 @@ class SJClient:
 
         logger.info(f"fetching traffic info for train {train} on {date} from {url_api} ...")
         resp = self.client.post(url_api, json=payload, headers=headers)
+        return _json_or_raise(resp)
+
+    # --- the customer account -------------------------------------------------
+
+    def get_customer_session(self, access_token: str) -> dict[str, Any]:
+        """
+        Fetches the logged-in customer's session: names, e-mail addresses, phone numbers.
+
+        The endpoint sj.se's account-settings page reads. It carries the
+        private and login phone numbers and says whether SJ holds a personal
+        identity number (`hasSsn`) — never the number itself.
+
+        Args:
+            access_token: The OAuth2 access token.
+
+        Returns:
+            The response dict: {"customer": {...}}.
+
+        Raises:
+            SJAPIError: If the API reports an error or the body is unusable.
+            httpx.HTTPError: On a non-2xx response or a network failure.
+
+        """
+        url_api = f"{self.URL_API}/sales/secure/customer/v2/session"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": self.H_ACCEPT_JSON,
+            "ocp-apim-subscription-key": self.H_OCP_APIM_SUB_KEY,
+            "x-client-name": "sjse-common",
+            "x-client-version": self.X_CLIENT_VERSION,
+            "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
+            "Referer": f"{self.URL_SJ}/",
+        }
+        logger.info(f"fetching the customer session from {url_api} ...")
+        resp = self.client.get(url_api, headers=headers)
+        return _json_or_raise(resp)
+
+    # --- the delay-compensation API (--request-compensation) -------------------
+    #
+    # sj.se's compensation form is public: no bearer token, its own
+    # subscription key, and the state of a claim in progress lives in the
+    # `delayCompensationToken` every step returns (an opaque blob the next
+    # step is addressed with). Nothing is filed until confirm_compensation.
+
+    def _compensation_headers(self, content_type: str | None = None) -> dict[str, str]:
+        headers = {
+            "Accept": self.H_ACCEPT_JSON,
+            "ocp-apim-subscription-key": self.H_OCP_APIM_COMPENSATION_KEY,
+            "x-api.sj.se-language": "sv",
+            "x-client-name": "sjse-delay-compensation-client",
+            "x-client-version": self.X_CLIENT_VERSION,
+            "sec-ch-ua-platform": self.H_SEC_CH_UA_PLATFORM,
+            "Origin": self.URL_SJ,
+            "Referer": f"{self.URL_SJ}/",
+        }
+        if content_type:
+            headers["Content-Type"] = content_type
+        return headers
+
+    def create_compensation_token(
+        self, email: str, card_number: str, card_type: str, booking_number: str
+    ) -> dict[str, Any]:
+        """
+        Starts a claim: identifies the traveller and the booking, returns the eligible tickets.
+
+        Args:
+            email: The account's e-mail address (the form's "order security").
+            card_number: The travel pass's card number.
+            card_type: The pass type as the form names it, e.g. "Årskort Silver".
+            booking_number: The booking (or ticket) number claimed for.
+
+        Returns:
+            {"delayCompensationToken", "eligibleOrderItems": [...],
+            "existingServiceRequests": [...], "upcomingJourneys": [...]}.
+
+        Raises:
+            SJAPIError: If the API reports an error or the body is unusable.
+            httpx.HTTPError: On a non-2xx response or a network failure.
+
+        """
+        url_api = f"{self.URL_API_COMPENSATION}/delaycompensationtokens"
+        payload = {
+            "orderSecurity": email,
+            "commuterCardNumber": card_number,
+            "commuterCardType": card_type,
+            "orderOrTicketNumber": booking_number,
+        }
+        logger.info(f"starting a compensation claim for {booking_number} at {url_api} ...")
+        resp = self.client.post(
+            url_api, json=payload, headers=self._compensation_headers(self.H_CONTENT_TYPE_JSON)
+        )
+        return _json_or_raise(resp)
+
+    def put_compensation_travel_details(
+        self, token: str, ticket_numbers: list[str]
+    ) -> dict[str, Any]:
+        """
+        Names the tickets the claim is for (no expenses), as the form's multipart upload.
+
+        The site sends the JSON as a file part called "data" (the form can
+        attach receipts next to it); the same shape is sent here, with no
+        receipts.
+
+        Returns:
+            {"delayCompensationToken", "bankAccountInfoRequirement": {...}}.
+
+        Raises:
+            SJAPIError: If the API reports an error or the body is unusable.
+            httpx.HTTPError: On a non-2xx response or a network failure.
+
+        """
+        url_api = f"{self.URL_API_COMPENSATION}/{token}/v2/traveldetails"
+        blob = json.dumps({"ticketNumbers": ticket_numbers, "expenses": []}).encode()
+        logger.info(f"sending the claim's travel details to {redact_url(url_api)} ...")
+        resp = self.client.put(
+            url_api,
+            files={"data": ("blob", blob, "application/json")},
+            headers=self._compensation_headers(),
+        )
+        return _json_or_raise(resp)
+
+    def put_compensation_contact(
+        self, token: str, email: str, phone: str, first_name: str, last_name: str
+    ) -> dict[str, Any]:
+        """
+        Sets the claim's contact details.
+
+        Returns:
+            {"delayCompensationToken"}.
+
+        Raises:
+            SJAPIError: If the API reports an error or the body is unusable.
+            httpx.HTTPError: On a non-2xx response or a network failure.
+
+        """
+        url_api = f"{self.URL_API_COMPENSATION}/{token}/contactinformation"
+        payload = {
+            "emailAddress": email,
+            "mobilePhoneNumber": phone,
+            "personName": {"firstName": first_name, "lastName": last_name},
+        }
+        logger.info(f"sending the claim's contact details to {redact_url(url_api)} ...")
+        resp = self.client.put(
+            url_api, json=payload, headers=self._compensation_headers(self.H_CONTENT_TYPE_JSON)
+        )
+        return _json_or_raise(resp)
+
+    def create_swish_payout(self, token: str, personal_number: str, phone: str) -> dict[str, Any]:
+        """
+        Registers a Swish payout for the claim.
+
+        Returns:
+            {"barId": "SWS…"} — the payout id confirm_compensation takes.
+
+        Raises:
+            SJAPIError: If the API reports an error or the body is unusable.
+            httpx.HTTPError: On a non-2xx response or a network failure.
+
+        """
+        url_api = f"{self.URL_API_COMPENSATION}/bankaccountrecords"
+        payload = {
+            "personalIdentityNumber": personal_number,
+            "swishPhoneNumber": phone,
+            "delayCompensationToken": token,
+        }
+        logger.info(f"registering a Swish payout at {url_api} ...")
+        resp = self.client.post(
+            url_api, json=payload, headers=self._compensation_headers(self.H_CONTENT_TYPE_JSON)
+        )
+        return _json_or_raise(resp)
+
+    def confirm_compensation(self, token: str, bar_id: str) -> dict[str, Any]:
+        """
+        Files the claim — the one call with an effect.
+
+        Returns:
+            {"ticketCompensationServiceRequests": ["1-…"], …}: the claim numbers.
+
+        Raises:
+            SJAPIError: If the API reports an error or the body is unusable.
+            httpx.HTTPError: On a non-2xx response or a network failure.
+
+        """
+        url_api = f"{self.URL_API_COMPENSATION}/{token}/confirmations"
+        payload = {"paynovaBarIds": {"ticketCompensation": bar_id}}
+        logger.info(f"filing the compensation claim at {redact_url(url_api)} ...")
+        resp = self.client.post(
+            url_api, json=payload, headers=self._compensation_headers(self.H_CONTENT_TYPE_JSON)
+        )
         return _json_or_raise(resp)
 
     def resolve_station(self, station_name: str) -> str:

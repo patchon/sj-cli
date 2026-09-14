@@ -42,6 +42,8 @@ _SECRET_KEYS = frozenset(
         "x-csrf-token",
         "csrf_token",
         "trafikverket_key",  # the user's own API key, from [delays]
+        "personal_identity_number",  # from [compensation]
+        "personalidentitynumber",  # the same, as the compensation API names it
         "authenticationkey",  # the same key, as Trafikverket's XML names it
     }
 )

@@ -12,6 +12,7 @@ from typing import Any
 from sj_cli.client import STATION_MAP
 from sj_cli.dates import normalise_date_selection, parse_date_selection, sweden_now
 from sj_cli.errors import SJConfigError
+from sj_cli.identity import normalise_personal_number
 from sj_cli.logger import log_json
 from sj_cli.output import ask, blank, pinfo, print_status_card, prompt, pwarn, spinner
 from sj_cli.punctuality import Thresholds
@@ -197,8 +198,10 @@ class CfgManager:
             else:
                 self._validate_search_params(params, errors, require_dates, require_seat_preference)
 
-        # [delays] is optional in every mode: absent means the defaults.
+        # [delays] and [compensation] are optional in every mode: absent means
+        # the defaults (and, for the identity number, the prompt).
         self._validate_delays(cfg, errors)
+        self._validate_compensation(cfg, errors)
 
         # seat_preference is validated even when the rest of [search_parameters]
         # is not: the change-seat modes need the key and nothing else.
@@ -368,6 +371,32 @@ class CfgManager:
         if key_value is not None and (not isinstance(key_value, str) or not key_value.strip()):
             errors.append("trafikverket_key must be a non-empty string if specified")
 
+    def _validate_compensation(self, cfg: dict[str, Any], errors: list[str]) -> None:
+        """
+        Validate the optional [compensation] section (--request-compensation).
+
+        Absence is never an error — the one key, personal_identity_number,
+        is asked for at a prompt when the config has none — but a number
+        that is there must be a real one (identity.normalise_personal_number:
+        a date, the Luhn digit), so a typo is caught at startup, not by SJ.
+        """
+        section = cfg.get("compensation")
+        if section is None:
+            return
+        if not isinstance(section, dict):
+            errors.append("[compensation] must be a section")
+            return
+        value = section.get("personal_identity_number")
+        if value is None:
+            return
+        if not isinstance(value, str):
+            errors.append("personal_identity_number must be a string (quote it)")
+            return
+        try:
+            normalise_personal_number(value)
+        except ValueError as e:
+            errors.append(f"personal_identity_number: {e}")
+
     def _validate_dates(self, params: dict[str, Any], errors: list[str]) -> None:
         """
         Validate the `dates` selection (grammar: dates.parse_date_selection).
@@ -438,6 +467,25 @@ def delay_thresholds(cfg: dict[str, Any]) -> Thresholds:
     if isinstance(value, int) and not isinstance(value, bool):
         return Thresholds(compensation=value)
     return Thresholds()
+
+
+def personal_identity_number(cfg: dict[str, Any]) -> str | None:
+    """
+    The normalised personal identity number from [compensation], or None — then it is asked for.
+
+    Assumes verify_cfg ran: an unreadable value is treated as absent rather
+    than raised on here, the way the other readers survive a bad section.
+    """
+    section = cfg.get("compensation") or {}
+    if not isinstance(section, dict):
+        return None
+    value = section.get("personal_identity_number")
+    if not isinstance(value, str):
+        return None
+    try:
+        return normalise_personal_number(value)
+    except ValueError:
+        return None
 
 
 def trafikverket_key(cfg: dict[str, Any]) -> str | None:
