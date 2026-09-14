@@ -220,6 +220,16 @@ Använd `--dry-run` för att se vad som skulle hända, flaggan förhandsvisar
 `--book`, `--book-journey`, `--cancel-date`, `--cancel-booking`,
 `--change-seat-date`, `--change-seat-booking` samt `--upgrade-class`.
 
+Med `--book-journey` bokar du en enskild resa interaktivt: datum, från, till
+och eventuell återresa frågas (konfigurationen är förvalet), sedan väljer du
+tåg per sträcka i en lista. En avgång som överlappar en biljett du redan har
+på samma sträcka går att välja för att byta tåg — verktyget kontrollerar
+först, utan årskortet, att SJ säljer en plats på den, säger vad som kommer
+att avbokas och frågar en gång (`cancel and book?`). Först då avbokas den
+gamla resan, omedelbart följt av bokningen av den nya. Skulle bokningen ändå
+misslyckas efter avbokningen sägs det tydligt, och verktyget avslutar med
+felkod.
+
 Använd `--seat-details` i kombination med `--list-bookings` för att få
 platsinformation.
 

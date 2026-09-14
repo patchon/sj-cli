@@ -387,6 +387,7 @@ def held(
     """
     brand, _, service = train.rpartition(" ") if train else ("", "", "")
     segment = {
+        "serviceIdentifier": f"SVC-{number}",
         "departureDateTime": f"{day}T{dep_time}:00+02:00",
         "arrivalDateTime": f"{arr_day or day}T{arr_time}:00+02:00",
         "departureStation": {"name": origin},
@@ -725,6 +726,9 @@ def _held(number, dep_time, arr_time, day=None, arr_day=None, train=""):
         dep=to_sweden(f"{day}T{dep_time}:00+02:00"),
         arr=to_sweden(f"{arr_day or day}T{arr_time}:00+02:00") if arr_time else None,
         train=train,
+        booking_id="",
+        journey={},
+        segment={},
     )
 
 
@@ -805,6 +809,9 @@ def test_booked_needs_the_same_instant_and_train_or_route():
         dep=to_sweden(f"{D}T06:59:00+02:00"),
         arr=to_sweden(f"{D}T11:36:00+02:00"),
         train="X 2000 X",
+        booking_id="",
+        journey={},
+        segment={},
     )
     other_route_other_train = other_route_same_train._replace(number="O", train="SJ 3000 1")
     route = "Göteborg Central → Stockholm Central"
@@ -857,6 +864,9 @@ def test_the_note_always_names_the_held_route():
         dep=to_sweden(f"{D}T06:59:00+02:00"),
         arr=to_sweden(f"{D}T11:36:00+02:00"),
         train="SJ 3000 1",  # another train on another route: an overlap, not "booked"
+        booking_id="",
+        journey={},
+        segment={},
     )
     params = base_cfg()["search_parameters"]
     rows = journey._departure_rows([row], route, params, [other])
@@ -903,3 +913,268 @@ def test_the_return_list_gets_its_own_overlaps(monkeypatch):
         s.lists[1][1][0],
     )
     assert re.search(r"2 class calm\s+already booked in H2$", s.lists[1][1][1])
+
+
+# --- replacing a held ticket ----------------------------------------------------------
+
+PROBE_OUT = f"740000002->740000001@{D}"  # the fake's id for a pass-free Göteborg → Stockholm search
+PROBE_IN = f"740000001->740000002@{D}"
+REPLACE_NOTE = "replaces HELD1 · 06:59–11:36"
+REPLACE_LINE = (
+    " ! outbound replaces booking HELD1 · its 06:59 journey is cancelled first, "
+    "the pass offer on 06:30 is only known after that\n"
+)
+
+
+def probed(monkeypatch, out=OUT, **kw):
+    """A client whose pass-free probe sees the same departures as the pass search."""
+    c = FakeClient({"OUT": OUT, PROBE_OUT: list(out), **kw.pop("departures", {})}, **kw)
+    c.bookings_list = [
+        held("HELD1", D)
+    ]  # 06:59 to 11:36 on this route: o-best is it, the rest overlap
+    return c
+
+
+def test_a_same_route_overlap_is_offered_with_the_class_sj_sells(monkeypatch, capsys):
+    c = probed(monkeypatch)
+    s = Script(D, "", "", "n", None)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    _, rows, _, rejected = s.lists[0]
+    assert re.search(rf"2 class calm\s+{REPLACE_NOTE}$", rows[0])
+    assert "already booked in HELD1" in rows[1]
+    assert re.search(rf"2 class calm\s+{REPLACE_NOTE}$", rows[2])
+    assert rejected == ["this journey is already booked in HELD1 · pick another"]
+    # the probe: one pass-free search, offers read for the overlapping rows only
+    assert c.search_tp_ids == ["TP", None]
+    assert [call for call in c.calls if call[0] == "offers"] == [
+        ("offers", "o-early"),
+        ("offers", "o-late"),
+    ]
+    out = capsys.readouterr().out
+    assert " ✓ checking seats on 2 departures overlapping HELD1\n" in out
+    assert "every departure is held" not in out
+
+
+def test_a_replaceable_row_the_probe_finds_no_seats_on_is_refused(monkeypatch):
+    c = probed(monkeypatch, offers_by_dep={"o-early": offers(calm_price=None, second_price=None)})
+    s = Script(D, "", "", "n", None)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    _, rows, _, rejected = s.lists[0]
+    assert re.search(r"—\s+no seats$", rows[0])
+    assert "no seats at 06:30 · pick another" in rejected
+    assert re.search(rf"2 class calm\s+{REPLACE_NOTE}$", rows[2])
+
+
+def test_a_replaceable_row_the_probe_cannot_find_stays_refused(monkeypatch, capsys):
+    # the pass-free search shows only the 07:30, so the 06:30 row's seats are unknown
+    c = probed(monkeypatch, out=[OUT[2]])
+    s = Script(D, "", "", "n", None)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    _, rows, _, rejected = s.lists[0]
+    assert rows[0].endswith("overlaps HELD1 · Göteborg Central → Stockholm Central 06:59–11:36")
+    assert "overlaps booking HELD1 · pick another" in rejected
+    assert re.search(rf"2 class calm\s+{REPLACE_NOTE}$", rows[2])
+
+
+def test_a_failing_probe_is_a_note_and_every_replaceable_row_stays_refused(monkeypatch, capsys):
+    c = probed(monkeypatch)
+    real = c.get_offers
+
+    def flaky(token, dep_id, passenger_token):
+        if len(c.search_tp_ids) == 2:  # inside the probe
+            raise RuntimeError("gateway hiccup")
+        return real(token, dep_id, passenger_token)
+
+    monkeypatch.setattr(c, "get_offers", flaky)
+    s = Script(D, "", "", "n", None)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    _, rows, _, rejected = s.lists[0]
+    assert rows[0].endswith("overlaps HELD1 · Göteborg Central → Stockholm Central 06:59–11:36")
+    assert rejected == [
+        "overlaps booking HELD1 · pick another",
+        "this journey is already booked in HELD1 · pick another",
+        "overlaps booking HELD1 · pick another",
+    ]
+    out = capsys.readouterr().out
+    assert " ✗ checking seats on 2 departures overlapping HELD1\n" in out
+    assert (
+        " ! could not check those seats (gateway hiccup) · the overlapping rows stay refused\n"
+        in out
+    )
+    assert " ! every departure is held or overlaps a held ticket · Esc aborts\n" in out
+
+
+def test_an_overlap_with_a_ticket_on_another_route_is_not_offered(monkeypatch):
+    c = FakeClient({"OUT": OUT, PROBE_OUT: list(OUT)})
+    c.bookings_list = [held("HELD1", D, origin="Uppsala Central")]
+    s = Script(D, "", "", "n", None)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    _, rows, _, rejected = s.lists[0]
+    assert rows[0].endswith("overlaps HELD1 · Uppsala Central → Stockholm Central 06:59–11:36")
+    assert len(rejected) == 3
+    assert c.search_tp_ids == ["TP"]  # nothing to probe
+
+
+def test_a_replacing_pick_releases_the_held_journey_then_books_the_same_departure(
+    monkeypatch, capsys
+):
+    c = probed(monkeypatch)
+    s = Script(D, "", "", "n", 0, True)  # the 06:30, which overlaps HELD1
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    assert s.prompts[-1] == "cancel and book? [y/N]: "
+    assert [call[0] for call in c.calls] == [
+        "stations",
+        "search",
+        "results",
+        "bookings",
+        "search",  # the probe, pass-free
+        "results",
+        "offers",
+        "offers",
+        "cancel",  # after the confirmation: release first
+        "finalize",
+        "search",  # then the pass search again
+        "results",
+        "offers",
+        "create",
+        "customer",
+        "checkout",
+    ]
+    assert c.search_tp_ids == ["TP", None, "TP"]
+    assert c.cancel_payloads == [
+        ("U-HELD1", [{"serviceIdentifier": "SVC-HELD1", "passengerIds": ["passenger_1"]}])
+    ]
+    assert c.calls[-4] == ("offers", "o-early")  # the picked departure, re-found with the pass
+    out = capsys.readouterr().out
+    assert REPLACE_LINE in out
+    assert "replaces HELD1" in out.split(REPLACE_LINE)[0]  # the summary card's note
+    assert " ✓ releasing this journey from booking HELD1\n" in out
+    assert out.rstrip().endswith(" ● booked NUM1")
+
+
+def test_a_dry_run_with_a_replacement_says_what_it_would_cancel_and_writes_nothing(
+    monkeypatch, capsys
+):
+    c = probed(monkeypatch)
+    s = Script(D, "", "", "n", 0)
+    wire(monkeypatch, s)
+    assert run(c, s, dry_run=True) is True
+    assert not any(call[0] in WRITES | {"cancel", "finalize"} for call in c.calls)
+    assert "cancel and book?" not in s.prompts
+    out = capsys.readouterr().out
+    assert REPLACE_LINE in out
+    assert out.rstrip().endswith(" ● dry run · nothing cancelled, nothing booked")
+
+
+def test_declining_a_replacement_cancels_nothing(monkeypatch, capsys):
+    c = probed(monkeypatch)
+    s = Script(D, "", "", "n", 0, False)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert not any(call[0] in WRITES | {"cancel", "finalize"} for call in c.calls)
+    assert capsys.readouterr().out.rstrip().endswith(" ● booking aborted, nothing was booked")
+
+
+@pytest.mark.parametrize(
+    ("field", "cause", "ending"),
+    [
+        ("cancel_error", " ! could not release the ticket: SJ said no\n", ""),
+        (
+            "finalize_error",
+            " ! cancellation started but not confirmed: gateway hiccup\n",
+            "",
+        ),
+    ],
+)
+def test_a_failed_release_of_the_outbound_books_nothing(monkeypatch, capsys, field, cause, ending):
+    c = probed(monkeypatch)
+    setattr(c, field, RuntimeError(cause.split(": ")[1].strip()))
+    s = Script(D, "", "", "n", 0, True)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert c.search_tp_ids == ["TP", None]  # no re-book without a release
+    assert not any(call[0] in WRITES for call in c.calls)
+    out = capsys.readouterr().out
+    assert cause in out
+    assert out.rstrip().endswith(" ● nothing was booked")
+
+
+def test_a_released_outbound_with_no_pass_offer_left_is_unticketed(monkeypatch, capsys):
+    # SJ sells the 06:30 (the probe passes), but the pass gets no 0-price offer on it
+    c = probed(monkeypatch, offers_by_dep={"o-early": NO_OFFER})
+    s = Script(D, "", "", "n", 0, True)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert [call[0] for call in c.calls if call[0] in ("cancel", "finalize")] == [
+        "cancel",
+        "finalize",
+    ]
+    assert not any(call[0] in WRITES for call in c.calls)
+    out = capsys.readouterr().out
+    assert " ! the travel pass has no offer left on this departure\n" in out
+    assert (
+        " ! no ticket for this leg: the old one is cancelled and nothing was booked back\n" in out
+    )
+    assert "recover: book it again with sj-cli --book-journey, or on sj.se\n" in out
+    assert out.rstrip().endswith(" ● nothing was booked · the outbound has no ticket")
+
+
+def in_probed(**kw):
+    """Roundtrip, the return overlapping a held Stockholm → Göteborg 17:22 ticket."""
+    c = FakeClient({"OUT": OUT, "IN": IN, PROBE_IN: list(IN)}, **kw)
+    c.bookings_list = [
+        held(
+            "HELDR",
+            D,
+            dep_time="17:22",
+            arr_time="21:53",
+            origin="Stockholm Central",
+            dest="Göteborg Central",
+        )
+    ]
+    return c
+
+
+def test_a_return_replacement_whose_release_fails_books_the_outbound_alone(monkeypatch, capsys):
+    c = in_probed()
+    c.cancel_error = RuntimeError("SJ said no")
+    s = Script(D, "", "", "y", D, "", 0, True)  # return: the 16:50, overlapping HELDR
+    wire(monkeypatch, s)
+    assert run(c, s) is True
+    _, rows, _, _ = s.lists[1]
+    assert rows[0].endswith("replaces HELDR · 17:22–21:53")
+    assert s.prompts[-1] == "cancel and book? [y/N]: "
+    assert [call[0] for call in c.calls if call[0] in ("cancel", "finalize", "add")] == ["cancel"]
+    out = capsys.readouterr().out
+    assert (
+        " ! return replaces booking HELDR · its 17:22 journey is cancelled first, "
+        "the pass offer on 16:50 is only known after that\n"
+    ) in out
+    assert " ! could not release the ticket: SJ said no\n" in out
+    assert " ! return leg not booked, booking outbound only\n" in out
+    assert out.rstrip().endswith(" ● booked NUM1")
+
+
+def test_a_released_return_with_no_pass_offer_left_is_unticketed_but_the_outbound_booked(
+    monkeypatch, capsys
+):
+    c = in_probed(offers_by_dep={"i-early": NO_OFFER})
+    s = Script(D, "", "", "y", D, "", 0, True)
+    wire(monkeypatch, s)
+    assert run(c, s) is False
+    assert [call[0] for call in c.calls if call[0] in ("cancel", "finalize", "add")] == [
+        "cancel",
+        "finalize",
+    ]
+    assert ("checkout", "UUID-1") in c.calls  # the outbound is still checked out
+    out = capsys.readouterr().out
+    assert (
+        " ! no ticket for this leg: the old one is cancelled and nothing was booked back\n" in out
+    )
+    assert out.rstrip().endswith(" ● booked NUM1 · the return has no ticket")

@@ -9,6 +9,9 @@ from typing import Any, Literal, NamedTuple
 from sj_cli.booking import (
     Cart,
     Leg,
+    _class_has_seats,
+    _match_departure,
+    _release_leg,
     booked_rows,
     booking_date_range,
     describe_departure,
@@ -44,6 +47,7 @@ from sj_cli.output import (
     spinner,
     week_headers,
 )
+from sj_cli.seats import COMFORT_CODES
 from sj_cli.stations import Station, StationIndex, parse_stations
 
 logger = logging.getLogger(__name__)
@@ -144,6 +148,10 @@ class _Held(NamedTuple):
     dep: datetime
     arr: datetime | None
     train: str
+    # What _release_leg needs to cancel exactly this journey and no other.
+    booking_id: str
+    journey: dict
+    segment: dict
 
 
 def _held_segments(
@@ -181,6 +189,9 @@ def _held_segments(
         if not is_active_booking(booking):
             continue
         number = booking.get("bookingNumber") or "—"
+        booking_id = str(
+            item.get("bookingId") or booking.get("bookingId") or booking.get("id") or ""
+        )
         for jrny in booking.get("journeys") or []:
             for seg in jrny.get("segments") or []:
                 try:
@@ -202,6 +213,9 @@ def _held_segments(
                         dep=dep,
                         arr=arr,
                         train=train_name(seg),
+                        booking_id=booking_id,
+                        journey=jrny,
+                        segment=seg,
                     )
                 )
     return held
@@ -262,22 +276,142 @@ def _match_held(
     return ("overlaps", hit) if hit is not None else None
 
 
+def _replaceable(departure: dict, route: str, held: Sequence[_Held]) -> _Held | None:
+    """
+    The held ticket on this list's own route that `departure` overlaps, if any.
+
+    Such a row is a change of train — the traveller wants this departure
+    instead of the one they hold — and may be picked once a pass-free probe
+    shows SJ sells a seat on it. An overlap with a ticket on another route
+    is almost always a mistake, never a change, and stays refused; so does a
+    row that *is* the held train (`_match_held`'s "booked").
+    """
+    match = _match_held(departure, route, held)
+    if match is None or match[0] != "overlaps":
+        return None
+    hit = match[1]
+    return hit if f"{hit.origin} → {hit.dest}" == route else None
+
+
+def _as_segment(departure: dict) -> dict:
+    """A search departure in the shape _match_departure reads a booked segment in."""
+    legs = departure.get("legs") or [{}]
+    return {
+        "departureDateTime": departure.get("departureDateTime"),
+        "publicServiceName": legs[0].get("publicServiceName"),
+    }
+
+
+def _sold_class(offer_response: dict, wanted: str, allow_fallback: bool) -> str | None:
+    """The first class of the config's chain SJ sells a seat in, or None for none."""
+    chain = [wanted] + (
+        [c for c in ("2 class calm", "2 class") if c != wanted] if allow_fallback else []
+    )
+    for class_ in chain:
+        if _class_has_seats(offer_response, COMFORT_CODES[class_]):
+            return class_
+    return None
+
+
+def _probe_replacements(
+    client: SJClient,
+    access_token: str,
+    params: dict,
+    origin_code: str,
+    dest_code: str,
+    date_str: str,
+    departures: list[dict],
+    route: str,
+    held: Sequence[_Held],
+) -> dict[str, str | None]:
+    """
+    What SJ really sells on the departures that could replace a held ticket.
+
+    The pass search that built the list hides availability on a departure
+    overlapping a ticket the account holds, so its class column cannot be
+    trusted there. This is --upgrade-class's probe applied to the list: one
+    search on the same route and date WITHOUT the pass, then each
+    replaceable departure re-found in it (`_match_departure`) and its offers
+    read. Returns {departureId: class SJ sells, or None for no seats}; a
+    departure the pass-free search did not show is left out — an unknown
+    answer, which must never release a ticket. A probe that fails is a note,
+    and every replaceable row stays refused as if nothing had been asked.
+    Proves only that SJ sells a seat: the pass's 0-price offer is a separate
+    quota, known only after the release.
+    """
+    candidates = [
+        (dep, hit) for dep in departures if (hit := _replaceable(dep, route, held)) is not None
+    ]
+    if not candidates:
+        return {}
+    numbers = sorted({hit.number for _, hit in candidates})
+    n = len(candidates)
+    label = (
+        f"checking seats on {n} departure{'' if n == 1 else 's'} overlapping {', '.join(numbers)}"
+    )
+    answers: dict[str, str | None] = {}
+    try:
+        with spinner(label):
+            found = search(
+                client,
+                access_token,
+                origin_code,
+                dest_code,
+                date_str,
+                None,
+                tp_product_id=None,
+                tp_token_id="",
+                service_types=params.get("service_types"),
+            )
+            if not found["out_id"]:
+                return {}
+            seen = poll_departures(client, access_token, found["out_id"])
+            for dep, _ in candidates:
+                sold = _match_departure(seen, _as_segment(dep))
+                dep_id = dep.get("departureId")
+                if sold is None or not sold.get("departureId") or not dep_id:
+                    continue
+                offer_response = client.get_offers(
+                    access_token, sold["departureId"], found["passenger_token"]
+                )
+                answers[dep_id] = _sold_class(
+                    offer_response,
+                    params["comfort_class"],
+                    params.get("allow_class_fallback", True),
+                )
+    except Exception as e:
+        logger.error(f"replacement probe failed: {e}")
+        pwarn(f"could not check those seats ({error_text(e)}) · the overlapping rows stay refused")
+        return {}
+    return answers
+
+
 def _departure_rows(
-    departures: list[dict], route: str, params: dict, held: Sequence[_Held] = ()
+    departures: list[dict],
+    route: str,
+    params: dict,
+    held: Sequence[_Held] = (),
+    probed: dict[str, str | None] | None = None,
 ) -> list[dict[str, Any]]:
     """
     One pick-list row per departure: describe_departure plus the class column.
 
     class_ is the class the pass would get on it (the configured one, a
     fallback, or None = no seats); the row is disabled when there is none.
-    A row the account already holds a ticket on says `already booked in NUM`,
-    one overlapping a held ticket says which one, with that ticket's route,
-    instead of "no seats"; both are disabled whatever class the search
-    reported, the class column keeps it, and `held_by` names that booking —
-    the caller says so when no row is left.
+    A row the account already holds a ticket on says `already booked in NUM`
+    and is refused whatever class the search reported. A row overlapping a
+    held ticket on this list's own route may replace it: with `probed`
+    (from _probe_replacements) naming the class SJ sells on it, the row
+    reads `replaces NUM · HH:MM–HH:MM` in that class, `replaces` carries the
+    held ticket, and it can be picked; a probed row without seats is a
+    plain refused `no seats`; one the probe did not answer for, and any
+    overlap with a ticket on another route, says `overlaps NUM · route
+    HH:MM–HH:MM` and is refused. `held_by` names the booking on every one of
+    those rows — the caller says so when no row is left.
     """
     wanted = params["comfort_class"]
     allow_fallback = params.get("allow_class_fallback", True)
+    probed = probed or {}
     rows: list[dict[str, Any]] = []
     for dep in departures:
         row: dict[str, Any] = dict(describe_departure(dep, route))
@@ -289,15 +423,28 @@ def _departure_rows(
         row["minutes"] = get_departure_time_minutes(dep)
         row["disabled"] = "" if class_ else f"no seats at {row['departure']} · pick another"
         row["held_by"] = ""
+        row["replaces"] = None
         match = _match_held(dep, route, held)
         if match is not None:
             kind, hit = match
             row["held_by"] = hit.number
+            span = f"{hit.dep:%H:%M}–{hit.arr:%H:%M}" if hit.arr else f"{hit.dep:%H:%M}"
+            dep_id = dep.get("departureId")
             if kind == "booked":
                 row["note"] = f"already booked in {hit.number}"
                 row["disabled"] = f"this journey is already booked in {hit.number} · pick another"
+            elif _replaceable(dep, route, held) is not None and dep_id in probed:
+                sold = probed[dep_id]
+                row["class_"] = sold
+                row["comfort_class"] = sold or "—"
+                if sold:
+                    row["note"] = f"replaces {hit.number} · {span}"
+                    row["disabled"] = ""
+                    row["replaces"] = hit
+                else:
+                    row["note"] = "no seats"
+                    row["disabled"] = f"no seats at {row['departure']} · pick another"
             else:
-                span = f"{hit.dep:%H:%M}–{hit.arr:%H:%M}" if hit.arr else f"{hit.dep:%H:%M}"
                 # In place of a "fallback" note: the fallback is said again
                 # after the pick, the held ticket only here. The route is named
                 # even when it is this list's own — the note reads as the
@@ -319,6 +466,17 @@ def _closest_enabled(rows: list[dict[str, Any]], hhmm: str) -> int:
     return min(candidates)[1] if candidates else 0
 
 
+class Pick(NamedTuple):
+    """A chosen departure: its leg, the departure itself, and the held journey it replaces."""
+
+    leg: Leg
+    dep: dict
+    # The held journey to release before this leg can be booked; None for a
+    # plain pick. A replacing leg carries no offer_id — the pass search has
+    # no offer on it until the release, so _add_pick resolves one then.
+    replaces: _Held | None
+
+
 def _choose_leg(
     client: SJClient,
     access_token: str,
@@ -331,7 +489,8 @@ def _choose_leg(
     target_time: str,
     departed: int = 0,
     held: Sequence[_Held] = (),
-) -> Leg | None:
+    probed: dict[str, str | None] | None = None,
+) -> Pick | None:
     """
     Let the user pick a departure and resolve its offer; None when they abort.
 
@@ -340,11 +499,15 @@ def _choose_leg(
     is how many of the day's departures were already gone: said under the
     day header, so a short list on a same-day run explains itself. `held`
     are the tickets the account already holds: a row that is one, or
-    that overlaps one, names it and cannot be picked — when that is every
-    row, the list still opens, so each refusal is visible, behind a line
-    saying the leg is a dead end.
+    that overlaps one, names it and cannot be picked — unless `probed` (see
+    _probe_replacements) says SJ sells a seat on a row overlapping a ticket
+    on this very route, which then reads `replaces NUM` and can be picked:
+    its offer is not read here (the pass search has none until the held
+    journey is released), so the pick carries the held journey instead.
+    When every row is refused, the list still opens, so each refusal is
+    visible, behind a line saying the leg is a dead end.
     """
-    rows = _departure_rows(departures, route, params, held)
+    rows = _departure_rows(departures, route, params, held, probed)
     for row, text in zip(rows, departure_choice_lines(rows), strict=True):
         row["text"] = text
     default = _closest_enabled(rows, target_time)
@@ -352,7 +515,7 @@ def _choose_leg(
     if departed:
         with indented():
             pdim(f"{departed} already departed")
-    if rows and all(row["held_by"] for row in rows):
+    if rows and all(row["held_by"] and row["disabled"] for row in rows):
         pwarn("every departure is held or overlaps a held ticket · Esc aborts")
     while True:
         picked = select_list(
@@ -372,6 +535,10 @@ def _choose_leg(
         class_: str | None = picked["class_"]
         if class_ is None:
             continue
+        if picked["replaces"] is not None:
+            facts = describe_departure(picked["dep"], route)
+            held_leg = Leg(**facts, comfort_class=class_, offer_id="", alternative=False)
+            return Pick(held_leg, picked["dep"], picked["replaces"])
         leg = resolve_offer(
             client, access_token, params, passenger_token, picked["dep"], route, class_, label
         )
@@ -380,7 +547,7 @@ def _choose_leg(
                 # Said here, not in resolve_offer: --book words the same
                 # fallback per day and _rebook_released_leg per released leg.
                 pwarn(f"{label} class fallback: {class_} → {leg['comfort_class']}")
-            return leg
+            return Pick(leg, picked["dep"], None)
         complaint = f"no 0-price offer at {picked['departure']} · pick another"
         pwarn(complaint)
         picked["disabled"] = complaint
@@ -392,24 +559,33 @@ def _choose_leg(
 # --- the cards ----------------------------------------------------------------------
 
 
-def _summary_rows(chosen: list[tuple[str, str, Leg]], flexibility: str) -> list[dict]:
-    """Card rows for the picked legs: (direction, date, leg) → the leg_lines shape."""
+def _summary_rows(chosen: list[tuple[str, str, Pick]], flexibility: str) -> list[dict]:
+    """Card rows for the picked legs: (direction, date, pick) → the leg_lines shape."""
     return [
         {
             "date": day,
             "direction": direction,
-            "departure": leg["departure"],
-            "arrival": leg["arrival"],
-            "duration": leg["duration"],
-            "train": leg["train"],
-            "route": leg["route"],
-            "comfort_class": leg["comfort_class"],
+            "departure": pick.leg["departure"],
+            "arrival": pick.leg["arrival"],
+            "duration": pick.leg["duration"],
+            "train": pick.leg["train"],
+            "route": pick.leg["route"],
+            "comfort_class": pick.leg["comfort_class"],
             "flexibility": flexibility,
-            "note": "",
+            "note": f"replaces {pick.replaces.number}" if pick.replaces else "",
             "has_offer": True,
         }
-        for direction, day, leg in chosen
+        for direction, day, pick in chosen
     ]
+
+
+def _replacement_line(label: str, pick: Pick) -> str:
+    """The `!` line under the cards for a leg that cancels a held journey first."""
+    assert pick.replaces is not None
+    return (
+        f"{label} replaces booking {pick.replaces.number} · its {pick.replaces.dep:%H:%M} journey "
+        f"is cancelled first, the pass offer on {pick.leg['departure']} is only known after that"
+    )
 
 
 def _print_cards(rows: list[dict]) -> None:
@@ -429,6 +605,107 @@ def _aborted() -> bool:
     blank()
     pstatus(False, "booking aborted, nothing was booked")
     return False
+
+
+# --- the write ----------------------------------------------------------------------
+
+
+def _unticketed() -> None:
+    """The lines for a leg whose held ticket is gone and nothing was booked back."""
+    pwarn("no ticket for this leg: the old one is cancelled and nothing was booked back")
+    pdim("recover: book it again with sj-cli --book-journey, or on sj.se")
+
+
+def _add_pick(
+    cart: Cart,
+    client: SJClient,
+    access_token: str,
+    params: dict,
+    pick: Pick,
+    label: str,
+    origin_code: str,
+    dest_code: str,
+    date_str: str,
+    tp_product_id: str,
+    tp_token_id: str,
+) -> str | None:
+    """
+    Put one pick into the cart, releasing the held journey first when it replaces one.
+
+    A plain pick is a Cart.add; its exceptions are the caller's, as before.
+    A replacing pick is --upgrade-class's step: _release_leg on the held
+    journey (one serviceIdentifier, the booking's other journeys kept),
+    then at once a pass search, the picked departure re-found in it
+    (_match_departure — never the closest to a config time), its offer
+    resolved and added. The pass cannot hold two overlapping tickets, so the
+    order is fixed: release, then book.
+
+    Returns:
+        None when the leg is in the cart; "cancel_failed" or "pending"
+        (from _release_leg: the held ticket is intact, or left in a pending
+        cancellation only the user can resolve — nothing was booked for
+        this leg); "lost" when the journey was released and nothing could
+        be booked back, said with _unticketed() — this leg now has no
+        ticket, and the caller must say so in its closing line and exit 1.
+
+    """
+    held = pick.replaces
+    if held is None:
+        cart.add(pick.leg, label)
+        return None
+    target = {
+        "booking_id": held.booking_id,
+        "booking_number": held.number,
+        "segment": held.segment,
+        "journey": held.journey,
+    }
+    failed = _release_leg(client, access_token, target)
+    if failed:
+        return failed
+    try:
+        with spinner("searching the same departure with the travel pass"):
+            found = search(
+                client,
+                access_token,
+                origin_code,
+                dest_code,
+                date_str,
+                None,
+                tp_product_id=tp_product_id,
+                tp_token_id=tp_token_id,
+                service_types=params.get("service_types"),
+            )
+            seen = poll_departures(client, access_token, found["out_id"]) if found["out_id"] else []
+            departure = _match_departure(seen, _as_segment(pick.dep))
+        if not departure or not departure.get("departureId"):
+            pwarn("the travel pass search no longer shows this departure")
+            _unticketed()
+            return "lost"
+        leg = resolve_offer(
+            client,
+            access_token,
+            params,
+            found["passenger_token"],
+            departure,
+            pick.leg["route"],
+            pick.leg["comfort_class"],
+            label,
+        )
+        if leg is None:
+            pwarn("the travel pass has no offer left on this departure")
+            _unticketed()
+            return "lost"
+        if leg["comfort_class"] != pick.leg["comfort_class"]:
+            pwarn(f"{label} class fallback: {pick.leg['comfort_class']} → {leg['comfort_class']}")
+        cart.add(leg, label)
+    except Exception as e:
+        # The held ticket is already gone: anything from here must end in a
+        # report about this leg, never in an unwound run that says nothing.
+        logger.error(f"{label}: re-booking after the release failed: {e}")
+        pwarn(f"re-booking failed: {error_text(e)}")
+        _unticketed()
+        return "lost"
+    return None
 
 
 # --- the mode -----------------------------------------------------------------------
@@ -544,6 +821,17 @@ def handle_book_journey(
 
     # The picks
     passenger_token = found["passenger_token"]
+    probed = _probe_replacements(
+        client,
+        access_token,
+        params,
+        origin["code"],
+        dest["code"],
+        date_str,
+        out_deps,
+        out_route,
+        held,
+    )
     outbound = _choose_leg(
         client,
         access_token,
@@ -556,11 +844,23 @@ def handle_book_journey(
         params["time_leave"],
         departed=out_gone,
         held=held,
+        probed=probed,
     )
     if outbound is None:
         return _aborted()
     inbound = None
     if return_str:
+        probed = _probe_replacements(
+            client,
+            access_token,
+            params,
+            dest["code"],
+            origin["code"],
+            return_str,
+            in_deps,
+            in_route,
+            held,
+        )
         inbound = _choose_leg(
             client,
             access_token,
@@ -573,6 +873,7 @@ def handle_book_journey(
             params.get("time_return", "17:00"),
             departed=in_gone,
             held=held,
+            probed=probed,
         )
         if inbound is None:
             return _aborted()
@@ -583,18 +884,39 @@ def handle_book_journey(
     if inbound is not None and return_str:
         chosen.append(("Return", return_str, inbound))
     _print_cards(_summary_rows(chosen, params.get("flexibility", "FULLFLEX")))
+    replacing = [(direction.lower(), pick) for direction, _, pick in chosen if pick.replaces]
+    for label, pick in replacing:
+        pwarn(_replacement_line(label, pick))
     blank()
     if dry_run:
-        pstatus(None, "dry run · nothing booked")
+        pstatus(
+            None,
+            "dry run · nothing cancelled, nothing booked"
+            if replacing
+            else "dry run · nothing booked",
+        )
         return True
-    if not confirm("book? [y/N]: "):
+    if not confirm("cancel and book? [y/N]: " if replacing else "book? [y/N]: "):
         return _aborted()
 
     # The write
     cart = Cart(client, access_token, cfg, passenger_token)
+    lost = ""
     try:
         try:
-            cart.add(outbound, "outbound")
+            failed = _add_pick(
+                cart,
+                client,
+                access_token,
+                params,
+                outbound,
+                "outbound",
+                origin["code"],
+                dest["code"],
+                date_str,
+                tp_product_id,
+                tp_token_id,
+            )
         except Exception as e:
             # The offer was resolved while the user browsed the lists, so it
             # may have gone stale; a failed first add leaves the cart empty
@@ -603,13 +925,37 @@ def handle_book_journey(
             blank()
             pstatus(False, f"could not create the booking ({error_text(e)}) · nothing was booked")
             return False
-        if inbound is not None:
+        if failed:
+            # The cause was said by _add_pick; the return is not attempted —
+            # a lone return was never what the traveller asked for.
+            blank()
+            tail = " · the outbound has no ticket" if failed == "lost" else ""
+            pstatus(False, f"nothing was booked{tail}")
+            return False
+        if inbound is not None and return_str:
             try:
-                cart.add(inbound, "return")
+                failed = _add_pick(
+                    cart,
+                    client,
+                    access_token,
+                    params,
+                    inbound,
+                    "return",
+                    dest["code"],
+                    origin["code"],
+                    return_str,
+                    tp_product_id,
+                    tp_token_id,
+                )
             except Exception as e:
                 # SPEC §8.2: the outbound is held — keep it rather than lose both.
                 logger.error(f"return leg failed: {e}")
                 pwarn(f"return leg failed ({error_text(e)}), booking outbound only")
+                failed = None
+            if failed == "lost":
+                lost = " · the return has no ticket"
+            elif failed:
+                pwarn("return leg not booked, booking outbound only")
         result = cart.finish()
     except KeyboardInterrupt:
         # main() prints "interrupted by user" and exits 130, which would say
@@ -632,8 +978,13 @@ def handle_book_journey(
         pstatus(
             False,
             f"booking {number} not checked out · provisional left, "
-            "SJ releases it or cancel it on sj.se",
+            f"SJ releases it or cancel it on sj.se{lost}",
         )
+        return False
+    if lost:
+        # A ticket was booked, but a leg this run released has none: exit 1,
+        # as --upgrade-class does for a leg it leaves unticketed.
+        pstatus(False, f"booked {number}{lost}")
         return False
     pstatus(True, f"booked {number}")
     return True

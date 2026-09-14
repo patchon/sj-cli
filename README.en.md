@@ -217,6 +217,16 @@ Use `--dry-run` to see what would happen: the flag previews `--book`,
 `--book-journey`, `--cancel-date`, `--cancel-booking`, `--change-seat-date`,
 `--change-seat-booking` and `--upgrade-class`.
 
+With `--book-journey` you book a single journey interactively: date, from, to
+and an optional return are asked (the configuration is the default), then you
+pick the train per leg from a list. A departure overlapping a ticket you
+already hold on the same route can be picked to change train — the tool first
+checks, without the travel pass, that SJ sells a seat on it, says what will be
+cancelled and asks once (`cancel and book?`). Only then is the old journey
+cancelled, immediately followed by the booking of the new one. Should the
+booking still fail after the cancellation, it is said plainly and the tool
+exits with an error code.
+
 Use `--seat-details` together with `--list-bookings` to get seat information.
 
 Use `--since <date>` together with `--list-bookings` to list bookings back to
