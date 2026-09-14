@@ -174,7 +174,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--since",
         metavar="DATE",
         help=(
-            "Modifier for --list-bookings: list from DATE instead of today. Takes a date "
+            "Modifier for --list-bookings and --list-claims: list from DATE instead of today "
+            "(bookings) or the pass start (claims). Takes a date "
             "(2026-06-01), an ISO week (W38, 2026-W38) or an offset back from today "
             "(90d, 6m)."
         ),
@@ -326,8 +327,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.seat_details and not args.list_bookings:
         parser.error("--seat-details only applies to --list-bookings")
 
-    if args.since is not None and not args.list_bookings:
-        parser.error("--since only applies to --list-bookings")
+    if args.since is not None and not (args.list_bookings or args.list_claims):
+        parser.error("--since only applies to --list-bookings and --list-claims")
 
     if args.show_cancelled and not args.list_bookings:
         parser.error("--show-cancelled only applies to --list-bookings")
@@ -935,9 +936,14 @@ def _run(args: argparse.Namespace, client: SJClient) -> None:
                 sys.exit(1)
 
         elif args.list_claims:
-            print_header_box([("operation", "listing claims"), *pass_rows])
+            header_rows = [("operation", "listing claims"), *pass_rows]
+            if args.since_date is not None:
+                header_rows.append(("since", args.since_date.isoformat()))
+            print_header_box(header_rows)
             blank()
-            if not handle_list_claims(client, access_token, active_pass, email):
+            if not handle_list_claims(
+                client, access_token, active_pass, email, since=args.since_date
+            ):
                 print()
                 sys.exit(1)
 

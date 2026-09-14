@@ -2,7 +2,7 @@
 
 import logging
 import sys
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -383,7 +383,14 @@ def _segments_by_ticket(booking: dict) -> dict[str, dict]:
     return found
 
 
-def handle_list_claims(client: SJClient, access_token: str, active_pass: dict, email: str) -> bool:
+def handle_list_claims(
+    client: SJClient,
+    access_token: str,
+    active_pass: dict,
+    email: str,
+    *,
+    since: date | None = None,
+) -> bool:
     """
     List the compensation claims SJ holds on the account's bookings (--list-claims).
 
@@ -392,8 +399,9 @@ def handle_list_claims(client: SJClient, access_token: str, active_pass: dict, e
     numbers — nothing about their state. So: every active booking in the
     pass window with a departed leg (a claim needs a finished trip) is
     looked up once, and each claimed ticket is shown as a leg row with its
-    claim number in a column after the booking number. Read-only: the
-    lookup creates nothing.
+    claim number in a column after the booking number. `since` (from
+    --since) starts the walk at that date instead of the pass start. Read-only:
+    the lookup creates nothing.
 
     Returns:
         True when the listing completed, even with no claims; False when the
@@ -402,7 +410,7 @@ def handle_list_claims(client: SJClient, access_token: str, active_pass: dict, e
     """
     now = sweden_now()
     first, _ = pass_validity(active_pass)
-    start = (first or (now.date() - timedelta(days=90))).isoformat()
+    start = (since or first or (now.date() - timedelta(days=90))).isoformat()
     try:
         items = fetch_bookings_with_spinner(
             client, access_token, start, now.date().isoformat(), label="fetching bookings"

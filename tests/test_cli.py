@@ -106,7 +106,9 @@ def test_since_rejected_for_modes_other_than_list_bookings(capsys):
         parse_args(["--book", "--since", "2026-06-01"])
     assert exc_info.value.code == 1
     err = capsys.readouterr().err
-    assert "● --since only applies to --list-bookings" in err
+    assert "● --since only applies to --list-bookings and --list-claims" in err
+    args = parse_args(["--list-claims", "--since", "2026-06-01"])
+    assert args.list_claims is True and args.since_date.isoformat() == "2026-06-01"
 
 
 def test_since_flag_validates_before_running(capsys):
@@ -811,6 +813,24 @@ def test_since_appears_in_the_header_box_only_with_the_flag(tmp_path, monkeypatc
     assert "since" in out
     assert "2026-06-01" in out
     cli._run(parse_args(["--list-bookings"]), _StubClient())
+    assert "since" not in capsys.readouterr().out
+
+
+def test_since_reaches_list_claims_and_its_header_box(tmp_path, monkeypatch, capsys):
+    cli = _logged_in_with_config(tmp_path, monkeypatch)
+    captured: dict = {}
+
+    def fake(client, access_token, active_pass, email, *, since=None):
+        captured["since"] = since
+        return True
+
+    monkeypatch.setattr(cli, "handle_list_claims", fake)
+    cli._run(parse_args(["--list-claims", "--since", "2026-06-01"]), _StubClient())
+    out = capsys.readouterr().out
+    assert captured["since"].isoformat() == "2026-06-01"
+    assert "since" in out and "2026-06-01" in out
+    cli._run(parse_args(["--list-claims"]), _StubClient())
+    assert captured["since"] is None
     assert "since" not in capsys.readouterr().out
 
 

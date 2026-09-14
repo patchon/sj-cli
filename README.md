@@ -265,7 +265,7 @@ personnummer om det inte står i `[compensation]`, visar allt det skickar och
 frågar en gång. Utbetalning sker via Swish till mobilnumret på ditt SJ-konto.
 Med `--dry-run` visas biljetterna och förseningarna, inget skickas. `--list-claims`
 listar de ärenden SJ har på dina bokningar, med ärendenummer — SJ lämnar ingen
-status, bara att ärendet finns.
+status, bara att ärendet finns; `--since` fungerar som för `--list-bookings`.
 
 Du kan också hoppa över kopieringen av konfigurationsfilen: kör `--login` i en
 terminal, så erbjuder sig verktyget att skapa konfigurationen åt dig och frågar

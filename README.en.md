@@ -260,7 +260,8 @@ for your personal identity number unless `[compensation]` has it, shows
 everything it sends and asks once. The payout is by Swish to the mobile number
 on your SJ account. With `--dry-run` the tickets and delays are shown, nothing
 is sent. `--list-claims` lists the claims SJ holds on your bookings, with their
-claim numbers — SJ gives no status, only that the claim exists.
+claim numbers — SJ gives no status, only that the claim exists; `--since` works
+as for `--list-bookings`.
 
 You can also skip copying the config file: run `--login` in a terminal and the
 tool offers to create the configuration for you, asking for your email and

@@ -461,6 +461,19 @@ def test_list_claims_asks_once_per_departed_booking_and_prints_the_claims(capsys
     assert out.rstrip().endswith(" ● 3 claim(s) on 1 booking(s)")
 
 
+def test_list_claims_fetches_from_the_pass_start_or_from_since():
+    from datetime import date
+
+    c = FakeClient()
+    assert list_claims(c) is True
+    start, end = c.calls[0][1], c.calls[0][2]
+    assert start == (sweden_now() - timedelta(days=10)).date().isoformat()  # the pass start
+    assert end == sweden_now().date().isoformat()
+    c = FakeClient()
+    assert compensation.handle_list_claims(c, "tok", PASS, "a@b.se", since=date(2026, 6, 1)) is True
+    assert c.calls[0][1] == "2026-06-01"
+
+
 def test_list_claims_with_nothing_claimed_says_so(capsys):
     c = FakeClient()
     c.bookings_list = [item("BBBB0002", segment("BBBB0002-001"))]
