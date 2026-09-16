@@ -1,4 +1,4 @@
-# sj-cli
+# 🚂 sj-cli 
 
 *Read this in [English](README.en.md).*
 
@@ -9,7 +9,7 @@ Bip bop, *vibe-kodat* av [Claude](https://claude.ai) 🤖 🚀
 
 ![demo av sj-cli](demo.gif)
 
-## Varför
+## 😱 Varför
 
 Ett periodkort från SJ ger inte rätt att kliva på vilket tåg som helst. Varje
 resa måste bokas, precis som med en vanlig biljett. Skillnaden är att bokningen
@@ -45,7 +45,7 @@ väldigt tråkigt att inte kunna resa med önskat tåg när man har betalat så 
 pengar för sitt periodkort - framförallt när tåget inte ens är fullt
 (vilket det aldrig är).
 
-## Lösningen?
+## 🔥 Lösningen?
 
 Det kan bara SJ lösa, men några tänkbara vägar skulle kunna vara:
 
@@ -61,7 +61,7 @@ av problemet. I det här fallet väljer jag ändå att sätta min egen pendling
 först *(förlåt till dig som inte fick biljett en dag jag hade bokat men inte
 åkte)*.
 
-## Verktyget
+## 🧰 Verktyget
 
 Det här verktyget löser inte SJ:s problem, men med det kan jag åtminstone boka
 alla resor jag tänkt göra, veckor och månader i förväg.
@@ -83,25 +83,25 @@ som webbappen på sj.se (reverse engineered, inget officiellt), så det kan
 logga in, söka, välja rätt avgång, hitta periodkortets erbjudande till 0 kr och
 slutföra bokningen.
 
-## Krav
+## 📋 Krav
 
 - Python 3.13+
 - `httpx` (det enda beroendet vid körning; `pytest`, `ruff` och `mypy` för utveckling)
 - Ett SJ-konto med periodkort, och en telefon för engångsverifieringen via SMS
 
-## Installation
+## 🖥️ Installation
 
 ```bash
-git clone https://github.com/patchon/sj-cli.git
-cd sj-cli
-python3 -m venv venv
-./venv/bin/pip install -e .
-source venv/bin/activate
-mkdir -p ~/.config/sj-cli
-cp src/sj_cli/config.example.toml ~/.config/sj-cli/config.toml
+$ > git clone https://github.com/patchon/sj-cli.git
+$ > cd sj-cli
+$ > python3 -m venv venv
+$ > ./venv/bin/pip install -e .
+$ > source venv/bin/activate
+$ > mkdir -p ~/.config/sj-cli
+$ > cp src/sj_cli/config.example.toml ~/.config/sj-cli/config.toml
 ```
 
-## Konfiguration
+## ⚙️ Konfiguration
 
 ```bash
 $EDITOR ~/.config/sj-cli/config.toml
@@ -129,9 +129,14 @@ skip_holidays = true
 service_types = ["SJ_HIGH"]
 seat_preference = ["avoid table", "single", "aisle", "window", "forward"]
 
-[delays]                          # valfritt, för --list-bookings --delays
-compensation_minutes = 60         # "claim compensation" från så här många minuter
-# trafikverket_key = "..."        # valfritt, gratis från data.trafikverket.se
+# valfritt, för --list-bookings --delays
+# [delays]
+# compensation_minutes = 60 
+# trafikverket_key = "..."
+
+# valfritt, för --request-compensation
+# [compensation]
+# personal_identity_number="..."
 ```
 
 Med konfigurationen ovan kommer verktyget att:
@@ -144,8 +149,10 @@ Med konfigurationen ovan kommer verktyget att:
 * boka bara ena hållet om tur och retur inte går att få
 * ta närmaste avgång om den angivna tiden inte går att boka
 * bara på SJ snabbtåg, med plats vald efter sätespreferensen
+* lista delays på dina tidigare avgångar när du listar dem
+* använda trafikverkets api för att slå upp tiderna
 
-## Exempel
+## 💡 Exempel
 
 ### Boka biljetter enligt konfiguration
 
@@ -216,11 +223,12 @@ $ > sj-cli --list-bookings
 
 ### Övrigt
 
-Använd `--dry-run` för att se vad som skulle hända, flaggan förhandsvisar
+* `--dry-run` används för att se vad som skulle hända, flaggan förhandsvisar
 `--book`, `--book-journey`, `--cancel-date`, `--cancel-booking`,
-`--change-seat-date`, `--change-seat-booking` samt `--upgrade-class`.
+`--change-seat-date`, `--change-seat-booking`, `--request-compensation` samt
+`--upgrade-class`.
 
-Med `--book-journey` bokar du en enskild resa interaktivt: datum, från, till
+* `--book-journey` bokar en enskild resa interaktivt: datum, från, till
 och eventuell återresa frågas (konfigurationen är förvalet), sedan väljer du
 tåg per sträcka i en lista. En avgång som överlappar en biljett du redan har
 på samma sträcka går att välja för att byta tåg — verktyget kontrollerar
@@ -230,19 +238,19 @@ gamla resan, omedelbart följt av bokningen av den nya. Skulle bokningen ändå
 misslyckas efter avbokningen sägs det tydligt, och verktyget avslutar med
 felkod.
 
-Använd `--seat-details` i kombination med `--list-bookings` för att få
+* `--seat-details` i kombination med `--list-bookings` för att få
 platsinformation.
 
-Använd `--since <datum>` i kombination med `--list-bookings` för att lista
+* `--since <datum>` i kombination med `--list-bookings` (eller `--list-claims`) för att lista
 bokningar bakåt i tiden i stället för från idag. Datumet kan vara ett datum
 (`2026-06-01`), en ISO-vecka (`W38`, `2026-W38`) eller en offset bakåt från
 idag (`90d`, `6m`).
 
-Använd `--show-cancelled` i kombination med `--list-bookings` för att även
+* `--show-cancelled` i kombination med `--list-bookings` för att även
 lista avbokade bokningar (markerade `cancelled`). Går att kombinera med
 `--since` för att nå längre bakåt än idag.
 
-Med `--delays` tillsammans med `--list-bookings` slår verktyget upp, direkt när
+* `--delays` tillsammans med `--list-bookings` slår verktyget upp, direkt när
 du kör, om varje tidigare resa kom fram i tid. `on time` betyder att tåget kom
 på utsatt minut, allt annat visas med tecken — `+11 min` för ett tåg som kom
 efter tiden, och `-1 min` för ett tåg som kom före utsatt tid. Om
@@ -250,22 +258,51 @@ efter tiden, och `-1 min` för ett tåg som kom före utsatt tid. Om
 texten `· claim compensation` till. Efter omdömet står källan inom parentes
 `+64 min · claim compensation (tagradar.nu)`. Texten färgas efter innebörd —
 grönt i tid, gult försenat samt orange för det som är värt att söka ersättning
-för. Uppgifterna hämtas från fem källor i tur och ordning: SJ:s trafikinfo,
-Trafikverkets öppna data (med egen api-nyckel, `[delays]`), Tågradar och
-Tågstatistiks två tjänster; exakt ankomst till din station finns i ungefär fyra
-dagar, därefter visas tågets slutstationstid som en indikation
-(`final stop +78 min · likely, verify`).
+för. Uppgifterna hämtas från fem källor i tur och ordning:
+  * SJ:s trafikinfo
+  * Trafikverkets öppna data (med egen api-nyckel under `[delays]`)
+  * Tågradar
+  * Tågstatistiks två tjänster; exakt ankomst till din station finns i ungefär fyra
+dagar, därefter visas tågets slutstationstid som en indikation (`final stop +78 min · likely, verify`).
 
-Med `--request-compensation <bokningsnummer>` begär du förseningsersättning för
+* `--request-compensation <bokningsnummer>` begär du förseningsersättning för
 en biljett på en bokning, samma väg som formuläret på sj.se. Verktyget slår upp
 vilka biljetter SJ anser berättigade, kontrollerar med samma uppslag som
 `--delays` om tåget kom fram sent och varnar om det inte verkar så (SJ avgör
 ändå), låter dig välja biljett om det finns flera, frågar efter ditt
 personnummer om det inte står i `[compensation]`, visar allt det skickar och
 frågar en gång. Utbetalning sker via Swish till mobilnumret på ditt SJ-konto.
-Med `--dry-run` visas biljetterna och förseningarna, inget skickas. `--list-claims`
-listar de ärenden SJ har på dina bokningar, med ärendenummer — SJ lämnar ingen
-status, bara att ärendet finns; `--since` fungerar som för `--list-bookings`.
+
+* `--list-claims` listar de ärenden SJ har på dina bokningar, med ärendenummer —
+SJ lämnar ingen status, bara att ärendet finns; `--since` fungerar som för
+`--list-bookings`.
+
+* `--cancel-date <datum>` avbokar den dagens resor på den konfigurerade
+sträckan; bokningens övriga dagar behålls. Tar ett datum, en ISO-vecka (`W43`),
+en kommalista och/eller intervall (`2026-01-20,2026-02-03..2026-02-05`).
+
+* `--cancel-booking <bokningsnummer>` avbokar hela bokningar, ett eller flera
+nummer kommaseparerade, oavsett sträcka.
+
+* `--change-seat-date <datum>` och `--change-seat-booking <bokningsnummer>` byter
+plats på redan bokade resor enligt `seat_preference` (som då måste vara en
+ordlista, inte `"ask"`). En plats byts bara om en bättre finns ledig.
+
+* `--upgrade-class <datum>` flyttar bokade sträckor från en reservklass till
+`comfort_class`. SJ har inget klassbyte, så varje biljett avbokas och samma
+avgång bokas om — en sträcka kan alltså i värsta fall bli utan biljett, vilket i
+så fall sägs tydligt. Frågar en gång innan något skrivs och kräver en terminal;
+med `--dry-run` kontrolleras bara vilka sträckor som skulle gå att flytta.
+
+* `--list-travelpasses` listar dina periodkort med giltighet, dagar kvar och pris.
+
+* `--login` loggar in och cachar token; `--login-status` avslutar med 0 om du är
+inloggad och 1 annars (för skript, behöver varken konfiguration eller nätverk);
+`--logout` beskrivs under *Inloggning* nedan.
+
+* Modifierare: `--dry-run` enligt ovan; `--seat-details`, `--show-cancelled` och
+`--delays` bara tillsammans med `--list-bookings`; `--since` tillsammans med
+`--list-bookings` eller `--list-claims`. Exakt en huvudflagga per körning.
 
 Du kan också hoppa över kopieringen av konfigurationsfilen: kör `--login` i en
 terminal, så erbjuder sig verktyget att skapa konfigurationen åt dig och frågar
@@ -289,13 +326,13 @@ förnyas automatiskt; SSO-kakor cachas bredvid, senare fullständiga inloggninga
 brukar slippa SMS-steget. `--logout` avslutar sessionen på sj.se och raderar
 båda cacharna - nästa inloggning kräver då SMS igen.
 
-## Utveckling
+## 🏗️ Utveckling
 
 ```bash
-./venv/bin/pip install -e . --group dev
-./venv/bin/pytest                                             # ~655 tester, <1 s, utan nätverk (skriptad fejkklient)
-./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatering
-./venv/bin/mypy                                               # typkontroll
+$ > ./venv/bin/pip install -e . --group dev
+$ > ./venv/bin/pytest                                             # ~820 tester, <1 s, utan nätverk (skriptad fejkklient)
+$ > ./venv/bin/ruff check . && ./venv/bin/ruff format --check .   # lint + formatering
+$ > ./venv/bin/mypy                                               # typkontroll
 ```
 
 Allt konfigureras i `pyproject.toml` (ruff väljer ALL med dokumenterade undantag).
@@ -311,7 +348,7 @@ sekvens av API-anrop och dess returkontrakt; kör den efter varje ändring i
 `booking.py`. Hemligheter (lösenord, token, autentiseringskoder) maskeras i
 loggarna på alla nivåer.
 
-## Ansvarsfriskrivning
+## 🤷‍♂️ Ansvarsfriskrivning
 
 Inofficiellt verktyg, utan koppling till eller godkännande från SJ. Det använder
 sj.se:s interna webb-API — samma som webbappen använder — vilket kan ändras utan
@@ -320,7 +357,7 @@ tillåter: att köra detta är ditt beslut och din risk, inklusive följderna f�
 ditt konto. Använd det bara för ditt eget konto och ditt eget kort; du
 ansvarar för vad det än bokar.
 
-## Licens
+## 📜 Licens
 
 [GNU AGPL v3 eller senare](LICENSE). Du får använda, studera, ändra och dela verktyget;
 distribuerar du en ändrad version — eller kör en som en nättjänst som andra använder — måste du
